@@ -1008,3 +1008,310 @@ Seed phase (first run, all ~1,450 images pulled once): approximately $300–400 
 **Preemption handling**: Preemptible VMs can be reclaimed with 30s notice. Cloud Tasks leases are 3600s. On preemption, the lease expires and the task is requeued automatically. No additional preemption handling is needed in the worker — the queue provides the retry guarantee.
 
 **Self-termination IAM**: The scanner service account has `compute.instanceAdmin.v1` scoped to the project. Restrict this to a specific label or instance name prefix in production to limit blast radius.
+
+
+## What Changes Architecturally
+
+The pipeline splits into two permanently separated phases:
+
+**Phase A — SBOM generation** (triggered by digest change, pulls the image once, never again)
+```
+digest changed → pull image → syft generate SBOM → store in GCS → delete image
+```
+
+**Phase B — Daily vulnerability scan** (no network, no pull, pure CPU)
+```
+daily cron → download SBOM from GCS → grype sbom:file.json → store findings in DB
+```
+
+Phase B runs completely offline. No registry contact, no rate limits, no egress cost, no Docker credentials needed. The only input is the SBOM file and the local vulnerability DB.
+
+---
+
+## SBOM Size Reality
+
+Syft SBOM size is a function of package count, not image size. A 15 GB NVCR CUDA image and a 50 MB Alpine image with the same number of installed packages produce SBOMs of similar size.
+
+Empirical ranges for CycloneDX JSON (the most compact machine-readable format):
+
+| Image type | Packages | SBOM size (CycloneDX JSON) | Gzipped |
+|---|---|---|---|
+| Alpine minimal (`alpine:3.19`) | ~20 | ~30 KB | ~8 KB |
+| Debian slim (`python:3.12-slim`) | ~100 | ~200 KB | ~45 KB |
+| Ubuntu full (`ubuntu:22.04`) | ~400 | ~700 KB | ~150 KB |
+| Node.js app image | ~600 | ~1.1 MB | ~220 KB |
+| CUDA base (`nvcr.io/nvidia/cuda:12.x`) | ~800 | ~1.5 MB | ~300 KB |
+| PyTorch full (`nvcr.io/nvidia/pytorch`) | ~1,200+ | ~2.5 MB | ~500 KB |
+
+Corpus-weighted average: roughly **600 KB uncompressed, ~130 KB gzipped** per SBOM. GCS stores objects compressed transparently when you use `gsutil -z json`.
+
+---
+
+## GCS Storage Cost
+
+### Seed corpus (1,450 images, one SBOM each)
+
+```
+1,450 images × 600 KB avg = 870 MB uncompressed
+                           ≈ 190 MB gzipped
+
+GCS Standard storage: $0.020/GB/month
+190 MB × $0.020 = $0.004/month — essentially free
+```
+
+### After 1 year of digest-change SBOMs
+
+Each image averages roughly one digest change per week for active images (nginx, postgres, python) and one per month for stable images (NVCR base images). Rough blended rate: ~2 digest changes/month per image.
+
+```
+1,450 images × 2 changes/month × 12 months = 34,800 SBOMs
+34,800 × 600 KB = ~20 GB uncompressed
+                 ≈ 4.4 GB gzipped
+
+4.4 GB × $0.020 = $0.09/month after year one
+```
+
+**GCS is a rounding error.** Store uncompressed for simplicity — even at 20 GB/year it's $0.40/month.
+
+---
+
+## Compute Cost: Daily SBOM Scan
+
+This is the key question. Scanning an SBOM with Grype is pure CPU — no I/O, no network. On an e2-standard-2 (2 vCPU, 8 GB):
+
+- Grype scan of a 600 KB SBOM: ~2–4 seconds
+- 1,450 images × 3 seconds = ~4,350 seconds = **72 minutes total**
+- One VM, fully serial: done in just over an hour
+
+You don't need a fleet for daily scans. One Cloud Run Job or one ephemeral VM handles the full corpus in a single run.
+
+```
+Option A: Cloud Run Job (recommended)
+  2 vCPU, 4 GB RAM
+  72 min × $0.000024/vCPU-second × 2 vCPU = ~$0.21/day = $6.30/month
+
+Option B: e2-standard-2 preemptible GCE
+  72 min × $0.017/hr = $0.020/day = $0.61/month
+```
+
+Cloud Run Jobs are cleaner here — no VM lifecycle management, no self-termination logic, scales to zero between runs.
+
+---
+
+## Vulnerability DB Download Cost
+
+Both Grype and Trivy need a fresh vulnerability DB daily. This is the one remaining external dependency in Phase B.
+
+- Grype DB: ~200–400 MB/day (incremental updates are smaller after first download)
+- Trivy DB: ~150–300 MB/day
+
+If you run both scanners daily: ~500 MB/day downloaded from GHCR/GitHub.
+
+```
+500 MB/day × 30 = 15 GB/month inbound
+GCP inbound: free
+```
+
+No cost. Pre-warm in the Cloud Run Job container image and update at job start with `grype db update`.
+
+---
+
+## PostgreSQL Schema and Size
+
+This is the most important sizing question. Let me work through it precisely.
+
+### Schema
+
+```sql
+-- One row per unique image tag ever seen in corpus
+CREATE TABLE images (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    image_ref   TEXT NOT NULL,                    -- docker.io/library/postgres:16
+    registry    TEXT NOT NULL,                    -- dockerhub|ghcr|nvcr|quay|k8s
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (image_ref)
+);
+
+-- One row per unique digest observed (immutable — never updated)
+CREATE TABLE image_digests (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    image_id    UUID NOT NULL REFERENCES images(id),
+    digest      TEXT NOT NULL,                    -- sha256:abc123...
+    sbom_gcs    TEXT NOT NULL,                    -- gs://bucket/sboms/...
+    first_seen  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (image_id, digest)
+);
+
+-- One row per scanner per digest per day
+-- This is the time-series core — append-only
+CREATE TABLE scan_runs (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    digest_id   UUID NOT NULL REFERENCES image_digests(id),
+    scanner     TEXT NOT NULL,                    -- grype|trivy
+    scanned_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    db_version  TEXT NOT NULL,                    -- scanner DB version used
+    finding_count INT NOT NULL,
+    critical_count INT NOT NULL,
+    high_count  INT NOT NULL,
+    medium_count INT NOT NULL,
+    low_count   INT NOT NULL
+);
+
+-- One row per CVE per scan_run — this is the bulk of the data
+CREATE TABLE findings (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    scan_run_id UUID NOT NULL REFERENCES scan_runs(id),
+    cve_id      TEXT NOT NULL,                    -- CVE-2024-1234
+    severity    TEXT NOT NULL,                    -- CRITICAL|HIGH|MEDIUM|LOW|NEGLIGIBLE
+    package     TEXT NOT NULL,
+    version     TEXT NOT NULL,
+    fixed_in    TEXT,                             -- NULL if no fix
+    cvss_score  NUMERIC(4,1),
+    INDEX (scan_run_id),
+    INDEX (cve_id),
+    INDEX (severity)
+);
+
+-- Pre-computed deltas between consecutive scans of same digest+scanner
+-- Written by result-ingestor, read by API and alert delivery
+CREATE TABLE scan_deltas (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    image_id        UUID NOT NULL REFERENCES images(id),
+    scanner         TEXT NOT NULL,
+    from_digest_id  UUID REFERENCES image_digests(id),  -- NULL for first scan
+    to_digest_id    UUID NOT NULL REFERENCES image_digests(id),
+    from_scan_id    UUID REFERENCES scan_runs(id),
+    to_scan_id      UUID NOT NULL REFERENCES scan_runs(id),
+    computed_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    added_count     INT NOT NULL DEFAULT 0,
+    removed_count   INT NOT NULL DEFAULT 0,
+    changed_count   INT NOT NULL DEFAULT 0,
+    net_delta       INT NOT NULL DEFAULT 0,       -- positive=worse, negative=better
+    added_json      JSONB,                        -- compact delta payload for alerts
+    removed_json    JSONB,
+    changed_json    JSONB
+);
+
+-- Partitioning: findings grows without bound, partition by month
+-- PostgreSQL native partitioning
+CREATE TABLE findings (
+    ...
+) PARTITION BY RANGE (scan_run_id);
+-- or more naturally, denormalize scanned_at into findings for partition key:
+
+-- Better: partition findings by month of scan
+CREATE TABLE findings (
+    id          UUID NOT NULL,
+    scan_run_id UUID NOT NULL,
+    scanned_at  TIMESTAMPTZ NOT NULL,  -- denormalized for partition key
+    cve_id      TEXT NOT NULL,
+    severity    TEXT NOT NULL,
+    package     TEXT NOT NULL,
+    version     TEXT NOT NULL,
+    fixed_in    TEXT,
+    cvss_score  NUMERIC(4,1)
+) PARTITION BY RANGE (scanned_at);
+
+CREATE TABLE findings_2026_04 PARTITION OF findings
+    FOR VALUES FROM ('2026-04-01') TO ('2026-05-01');
+-- add monthly via pg_partman or a cron job
+```
+
+### Row Volume Calculation
+
+The findings table dominates everything else by 2–3 orders of magnitude.
+
+**Findings per scan:**
+
+Average CVE count per image varies widely:
+- Alpine minimal: ~20–40 findings
+- Debian/Ubuntu based: ~80–200 findings
+- Node.js image (npm deps): ~150–400 findings
+- NVCR CUDA/PyTorch: ~300–600 findings
+
+Corpus-weighted average: ~**150 findings per image per scanner**.
+
+```
+Daily findings rows:
+  1,450 images × 2 scanners × 150 findings = 435,000 rows/day
+
+Monthly: 435,000 × 30 = 13,050,000 rows/month
+Annual:  435,000 × 365 = 158,775,000 rows/year (~159M rows)
+```
+
+**Row size in PostgreSQL:**
+
+Each findings row: UUID(16) + UUID(16) + TIMESTAMPTZ(8) + TEXT×4(avg 60 bytes) + TEXT(15) + NUMERIC(4) = ~140 bytes raw + ~30 bytes overhead = ~170 bytes/row.
+
+```
+Year 1 findings table:
+  159M rows × 170 bytes = ~27 GB raw data
+  + indexes (3 indexes × ~30% of table) = ~8 GB
+  Total findings: ~35 GB after year one
+
+scan_runs table:
+  1,450 × 2 × 365 = 1,058,500 rows/year × ~100 bytes = ~100 MB — negligible
+
+scan_deltas:
+  ~1,058,500 rows × ~500 bytes (with JSONB payloads) = ~500 MB/year
+
+images + image_digests:
+  1,450 images, maybe 10,000 unique digests over a year × ~200 bytes = ~2 MB — negligible
+
+Total DB at end of year one: ~36 GB
+Total DB at end of year two: ~70 GB (findings partitions allow dropping old data)
+Total DB at end of year three: ~100 GB (steady state with 2-year retention)
+```
+
+---
+
+## PostgreSQL Hosting Options on GCP
+
+### Cloud SQL for PostgreSQL
+
+| Tier | vCPU | RAM | Storage | Cost/month |
+|---|---|---|---|---|
+| `db-g1-small` | shared | 1.7 GB | 10 GB SSD | ~$25 |
+| `db-custom-1-3840` | 1 | 3.75 GB | 50 GB SSD | ~$65 |
+| `db-custom-2-7680` | 2 | 7.5 GB | 100 GB SSD | ~$130 |
+| `db-custom-2-7680` | 2 | 7.5 GB | 200 GB SSD | ~$155 |
+
+For vectr at year one (36 GB data):
+
+- **Launch through month 6**: `db-custom-1-3840` with 50 GB SSD ($65/mo) — adequate for write volume of 435K rows/day and read patterns of the API
+- **Month 6 through year 2**: `db-custom-2-7680` with 150 GB SSD ($145/mo) — as findings table grows and query complexity increases with the metrics layer
+- **Year 2+**: evaluate whether to stay on Cloud SQL or move findings to a time-series-optimized store (TimescaleDB on GCE, or partition pruning on Cloud SQL is usually sufficient)
+
+Storage autoscales on Cloud SQL — set a 50 GB floor, it will grow automatically.
+
+### Alternative: Neon (serverless Postgres)
+
+Worth considering for early stage. Scales to zero between the daily scan job and API queries. Free tier: 10 GB. Pro: $19/month for 50 GB. The branching feature is useful for testing schema migrations against production data. Weakness: cold start latency on the API matters for the admission controller path (Phase 3), but is fine for Phase 1–2.
+
+---
+
+## Revised Cost Model: SBOM Architecture
+
+| Item | Monthly cost |
+|---|---|
+| Docker Hub Team subscription (Phase A pulls only) | $15 |
+| GCE e2-standard-2 preemptible, Phase A (seed: ~10 hr; steady: ~2 hr/month) | ~$2 steady state |
+| GCS SBOM storage (20 GB/year → ~1.7 GB/month growth) | ~$0.50 |
+| GCS operations (reads for daily scan) | ~$0.05 |
+| Cloud Run Job, Phase B daily scan (72 min/day × 2 vCPU) | ~$6 |
+| Cloud SQL `db-custom-1-3840` + 50 GB SSD | ~$65 |
+| Grype/Trivy DB downloads (15 GB/month inbound) | $0 |
+| Cloud Scheduler + Cloud Tasks | <$1 |
+| **Total** | **~$90/month** |
+
+Compare to the original pull-every-day architecture: **~$137/month**. SBOM approach saves ~$47/month primarily from eliminated egress, and that gap grows as the corpus scales. At 5,000 images the pull-every-day model becomes untenable; the SBOM model scales linearly on compute only.
+
+---
+
+## One Important Caveat
+
+Scanning an SBOM is more flexible and performant for periodic review of image security over time. However there is one accuracy tradeoff worth naming explicitly: **Syft generates the SBOM from the image at a point in time**. If a CVE is later found in a package that Syft didn't catalog (e.g., a statically linked binary, a language runtime embedded without a package manifest), the SBOM will miss it and daily re-scans against it will also miss it. Direct image scanning catches some of these through deeper heuristics.
+
+For vectr's use case — tracking known CVE database changes against a fixed package inventory — this is acceptable. The SBOM is a faithful representation of what's in the image at pull time. New CVEs against known packages are caught correctly. The gap is only undiscovered packages in the original SBOM, which is a Syft accuracy question, not an architecture question.
+
+The practical mitigation: when a digest changes and you pull anyway to generate a new SBOM, you get a fresh catalog from the latest Syft version, which may catalog packages the previous version missed. Scanner version upgrades propagate naturally through the corpus.
