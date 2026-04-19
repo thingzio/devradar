@@ -1,4 +1,4 @@
-# vectr — Container Vulnerability Tracking Pipeline
+# DevRadar — Container Vulnerability Tracking Pipeline
 
 > Implementation reference (code samples, Packer, Terraform, SQL schema): [IMPLEMENTATION.md](IMPLEMENTATION.md)
 
