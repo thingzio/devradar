@@ -8,8 +8,11 @@
 | **URL** | https://devradar.thingz.io |
 | **Parent** | Thingz (https://thingz.io) |
 | **Category** | Container Security / Vulnerability Intelligence |
+| **Status** | Design phase — this repo currently holds the v1 design only; no application code yet |
 
 > Implementation reference (API, data model, SQL schema, scanner design): [IMPLEMENTATION.md](IMPLEMENTATION.md)
+
+This document is the high-level design for **v1**: authenticated SBOM submission, daily Grype + Trivy rescanning, event-log deltas, and per-tenant critical/high alerts. It describes the intended system; the code that implements it does not exist yet.
 
 ---
 
