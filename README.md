@@ -1,241 +1,244 @@
-# DevRadar — Container Vulnerability Tracking Pipeline
+# DevRadar — Product Brief
 
-> Implementation reference (code samples, Packer, Terraform, SQL schema): [IMPLEMENTATION.md](IMPLEMENTATION.md)
+## Info
 
-## Overview
+| Field | Value |
+|-------|-------|
+| **Name** | DevRadar |
+| **URL** | https://devradar.thingz.io |
+| **Parent** | Thingz (https://thingz.io) |
+| **Category** | Container Security / Vulnerability Intelligence |
 
-vectr scans public container images from five registries on a daily schedule, persists time-series vulnerability records, and computes CVE deltas between scans. The pipeline is designed around a single core insight: **most images don't change day-to-day**. A digest-check gate before every pull collapses actual pull volume by 80–90%, which eliminates rate-limit pressure, reduces egress cost, and removes ToS ambiguity with Docker Hub.
-
-The execution model uses ephemeral GCE VMs built from a custom Ubuntu image with all scanners pre-installed and vulnerability databases pre-warmed. VMs pull work from a Cloud Tasks queue, process up to 100 images, and self-terminate. VM count scales with queue depth, not corpus size.
-
----
-
-## Design Principles
-
-**Digest-check before every pull.** A HEAD request against the registry manifest API returns the current digest without counting as a pull. Compare against the stored digest; only queue a full pull when the digest has changed. At steady state this reduces pull volume from ~700/day to ~70–100/day.
-
-**Pull by digest, not by tag.** Tags are mutable — `postgres:16` can silently move to a new underlying image. Always pull and record by digest (`image@sha256:...`). A tag moving to a new digest is itself a detectable event.
-
-**Scanners and vulnerability DBs are baked into the VM image.** Scanner binaries and DB snapshots are embedded at image build time via Packer. Workers do not download scanner DBs at runtime. DB freshness is maintained by rebuilding the VM image nightly via Cloud Build.
-
-**Work is queue-driven, not baked into the VM.** VMs pull tasks from Cloud Tasks at runtime. This decouples corpus management from execution, allows retry on failure, and enables dynamic scaling based on actual queue depth.
-
-**VMs self-terminate after draining their work.** No long-running fleet. Each VM processes up to 100 images then deletes itself. Cost is proportional to actual work done.
+> Implementation reference (API, data model, SQL schema, scanner design): [IMPLEMENTATION.md](IMPLEMENTATION.md)
 
 ---
 
-## Registry Constraints
+## What
 
-| Registry | Pull Limit | Auth | Notes |
-|---|---|---|---|
-| Docker Hub (`registry-1.docker.io`) | 100/6h unauthenticated per IP | Paid Team ($15/mo) required at corpus scale | Behind Cloudflare ASN-level detection; ephemeral IPs detectable. One paid authenticated account is the only correct approach. Each arch counts as a separate pull — pin to `linux/amd64`. |
-| GHCR (`ghcr.io`) | No documented limit; ~44k req/min burst | Read-only PAT recommended | Free for public image egress; 30-day notice promised before any change. |
-| NVIDIA NGC (`nvcr.io`) | Undocumented, IP-based | NGC account + API key required | CUDA/PyTorch images are 4–15 GB each. Digest-check gate is non-negotiable; scan on change only, not daily. |
-| `registry.k8s.io` | No documented limit | No | CNCF project images may be spread across registries; resolve source at corpus-build time. |
-| Quay.io (`quay.io`) | Undocumented throttle on heavy automation | No for public images | Source registry must be stored in corpus metadata per image. |
+**1 sentence:**
+DevRadar tracks how the vulnerabilities in your container images change over time — you submit an SBOM, and DevRadar rescans it daily against the latest vulnerability data, alerting you the moment a new critical appears.
+
+**3 sentences:**
+DevRadar is a container vulnerability *tracking* service built around a single input: the SBOM. A tenant submits a Software Bill of Materials for a specific image digest; DevRadar rescans that frozen package inventory every day with multiple scanners and records every change as an event. It answers not "what vulnerabilities exist right now" — any scanner does that — but "what changed since yesterday, when, and is it getting better or worse."
+
+**Paragraph:**
+DevRadar is the vulnerability layer of the Thingz open source intelligence platform. Where DevPulse tracks whether a project is healthy and DevTrace evaluates whether a contributor is trustworthy, DevRadar answers the third question: are the container images you depend on accumulating unpatched vulnerabilities over time? Instead of pulling and scanning images itself, DevRadar consumes SBOMs that tenants submit through an authenticated API. Each SBOM is pinned to an image digest, content-addressed, and stored once. A daily job rescans every active SBOM with Grype and Trivy, normalizes the results into a scanner-agnostic schema, and appends a change event whenever a finding is added, fixed, re-rated, or resolved. Because the SBOM is a frozen inventory, the only variable across daily scans is the vulnerability database — which makes every change unambiguous and every alert meaningful. The architecture is pure compute (no image pulls, no registries, no VM fleet), which means DevRadar can track images from **private registries it could never access** — the SBOM crosses the trust boundary, not credentials.
 
 ---
 
-## Component Architecture
+## Who
+
+### Primary Personas
+
+**Security / Supply Chain Risk Analyst**
+Monitors the vulnerability posture of container images the organization ships or depends on. Uses DevRadar to track CVE deltas over time — a new critical CVE appearing in a base image triggers investigation, not a full re-audit. Combines DevRadar vulnerability data with DevTrace contributor trust scores and DevPulse project health metrics for a complete supply chain risk picture.
+
+**Platform / Infrastructure Engineer**
+Owns the CI pipeline that already produces SBOMs (via Syft, `docker sbom`, BuildKit, etc.). Wires SBOM submission into the build so every published image is tracked automatically. Cares about the distinction between "a new CVE was disclosed against a package I already ship" (DB-driven) and "my new image introduced a vulnerable package" (image-driven).
+
+**OSPO Lead / Open Source Program Manager**
+Oversees the organization's open source dependency strategy. Uses DevRadar alongside DevPulse to monitor both project health and artifact security. A project that's healthy (active contributors, fast reviews) but shipping images with unpatched criticals is a different risk profile than a declining project with clean images.
+
+---
+
+## Why
+
+### Short
+
+Vulnerability scanners tell you what's wrong right now. DevRadar tells you what changed, when it changed, and whether it's getting better or worse. Continuous rescanning of a fixed inventory turns point-in-time scanning into a trend line — the difference between a fire alarm and a smoke detector.
+
+### Long
+
+Most teams run a scanner in CI, get a report, and either fix things or don't. What they lack is the time dimension. Is this image accumulating vulnerabilities? Did today's scanner-DB update surface 12 new criticals, or did the image actually change? Is the maintainer patching, or are CVEs piling up?
+
+DevRadar provides that time dimension. By rescanning the same SBOM daily and recording every change as an event, it produces a vulnerability trend line for every image digest a tenant tracks. Because the SBOM is a frozen package inventory, the cause of every change is unambiguous:
+
+- **A new finding on an unchanged digest** → the vulnerability database learned something new (a CVE was disclosed, or an existing one was re-rated). The image didn't change; the world's knowledge of it did.
+- **A new finding on a new digest** → the image itself changed and introduced it.
+- **A finding disappears or gains a fix** → the exposure was resolved.
+
+This is only possible because DevRadar scans a stable inventory. A service that re-pulls and re-scans images conflates "the image changed" with "the scanner DB changed" and cannot cleanly separate them.
+
+For teams operating under NIST SSDF or EU Cyber Resilience Act requirements, continuous vulnerability monitoring of shipped artifacts — with a reproducible, timestamped audit trail — is becoming an expectation, not a nice-to-have. DevRadar generates that evidence as a side effect of its daily scan cycle.
+
+---
+
+## The Core Idea: Scan the SBOM, Not the Image
+
+DevRadar never pulls a container image. The tenant's CI already generates an SBOM; DevRadar consumes it. This single decision removes an entire category of problems and unlocks a capability competitors can't easily match.
+
+**What it removes:**
+
+- No registry authentication — no Docker Hub subscription, no PATs, no NGC keys, no Secret Manager for registry creds.
+- No rate limits, no Docker Hub ToS ambiguity, no Cloudflare ASN detection.
+- No image egress cost (the dominant line item in a pull-based design).
+- No VM fleet, no Cloud Tasks queue, no digest-checker, no self-termination logic. Daily scanning is one Cloud Run Job of pure CPU.
+
+**What it unlocks:**
+
+- **Private-registry coverage.** DevRadar can track images it could never pull — internal images behind a corporate registry, air-gapped artifacts, anything the tenant can generate an SBOM for. The SBOM crosses the boundary; credentials never leave the tenant. This is the headline capability, not a footnote.
+- **Determinism.** The same SBOM + the same scanner DB version always produces the same findings. "Show me this image's vulnerabilities as of DB version X" is reproducible forever — a compliance and audit primitive.
+
+### What DevRadar Guarantees (and What It Doesn't)
+
+DevRadar operates on a **trust-on-submission** model. It guarantees:
+
+- **Determinism / reproducibility** — identical SBOM + identical scanner DB → identical findings, always.
+- **Clean change causality** — every delta on a fixed SBOM is DB-driven; a new SBOM for the same image is image-driven. The digest boundary is explicit in the data.
+
+It does **not** guarantee **authenticity** — that a submitted SBOM faithfully represents the image digest it claims. DevRadar cannot verify this without pulling the image. If a tenant submits an SBOM with the wrong digest or a stale inventory, the results reflect what they attested to. Garbage in, garbage out — by design, and clearly bounded.
+
+Signed SBOM attestations (cosign / in-toto / SLSA), where DevRadar verifies the signature and that its subject digest matches, are a planned upgrade for tenants who need authenticity. The v1 schema carries a `verification_status` field so this slots in without migration.
+
+### Is Scanning an SBOM as Accurate as Scanning the Image?
+
+A common objection to SBOM-based scanning is that it's less accurate than scanning the image directly. For an **all-layers** SBOM this is far narrower than the objection implies, and the residual gap is manageable rather than structural. The key is to split scanning into two independent steps:
+
+- **Matching** (package list → CVEs) is **identical** either way. Grype/Trivy run the same matcher over the same packages against the same DB whether the input is an SBOM or an image. There is no accuracy difference in this step — and matching is where DevRadar's daily value lives.
+- **Cataloging** (image → package list) is the only place a gap can exist, and it's a property of the SBOM *generator*, not of "SBOM vs image" as categories.
+
+That reduces the whole question to: does the SBOM's catalog equal what the scanner would have cataloged itself?
+
+| Situation | Gap vs. direct image scan |
+|---|---|
+| All-layers SBOM, generated by the scanner's own cataloger family (e.g. Syft SBOM → Grype) | **None** — bit-for-bit the same operation |
+| All-layers SBOM, cross-tool (e.g. Syft SBOM → Trivy matcher) | **Small, bidirectional** — analyzer differences of a few percent; each tool catches things the other misses |
+| Statically-linked binaries, vendored deps without a manifest | **Real but shared** — direct image scanning is only marginally better; both are weak, because the identifying metadata simply isn't there |
+| A newer cataloger would find more, but the digest hasn't changed | **DevRadar-specific staleness** — affects cataloging only, not CVE matching; resolves automatically when a new digest yields a fresh SBOM |
+
+**Two practical takeaways, both reflected in the design:**
+
+1. **Faithfulness is highest when the SBOM comes from the scanner's own cataloger, all layers, deep binary classification enabled.** Grype is Syft-native, so a Syft-generated CycloneDX SBOM is the zero-gap path. Running Trivy as the second scanner is a deliberate cross-check — divergence between the two *is itself signal*, surfacing cataloger disagreement.
+2. **Cataloging is frozen per digest; matching stays live.** This is a feature, not a bug: it's exactly what gives DevRadar clean change causality. New CVEs against the existing inventory — the overwhelming majority of day-to-day change — are always caught. Newly-cataloged packages arrive with the next digest. DevRadar records the SBOM's generator tool and version at ingest so this boundary is auditable.
+
+The honest summary: for an all-layers SBOM, DevRadar's accuracy is a *generator-quality* question you can control, not an inherent penalty of not pulling the image.
+
+---
+
+## How It Works
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  Cloud Scheduler (nightly, 02:00 UTC)                   │
-└─────────────────────┬───────────────────────────────────┘
-                      │ triggers
-┌─────────────────────▼───────────────────────────────────┐
-│  Cloud Run Job: digest-checker                          │
-│  - reads corpus from database                           │
-│  - HEAD /v2/{image}/manifests/{tag} per image           │
-│  - compares digest against stored value                 │
-│  - enqueues changed images → Cloud Tasks                │
-│  - updates corpus last_checked timestamp                │
-└─────────────────────┬───────────────────────────────────┘
-                      │ enqueues tasks
-┌─────────────────────▼───────────────────────────────────┐
-│  Cloud Tasks: scan-queue                                │
-│  - one task per (image_ref, digest, scanners[])         │
-│  - 3600s lease duration                                 │
-│  - 3 retries with exponential backoff (30s–600s)        │
-└─────────────────────┬───────────────────────────────────┘
-                      │ triggers (queue depth > 0)
-┌─────────────────────▼───────────────────────────────────┐
-│  Cloud Function: vm-spawner                             │
-│  - reads queue depth                                    │
-│  - spawns ceil(depth / 100) GCE VMs                     │
-│  - uses instance template (Packer-built custom image)   │
-│  - passes queue, bucket, zone via instance metadata     │
-└─────────────────────┬───────────────────────────────────┘
-                      │ creates
-┌─────────────────────▼───────────────────────────────────┐
-│  GCE VM Fleet (ephemeral, e2-standard-2, preemptible)  │
-│  - authenticates to registries via Secret Manager       │
-│  - pulls tasks from Cloud Tasks (one at a time)         │
-│  - docker pull image@digest                             │
-│  - trivy scan → JSON                                    │
-│  - grype scan → JSON                                    │
-│  - upload results → GCS                                 │
-│  - docker rmi (free disk after each image)              │
-│  - self-terminate when queue empty or 100 pulls done    │
-└─────────────────────┬───────────────────────────────────┘
-                      │ writes raw results
-┌─────────────────────▼───────────────────────────────────┐
-│  GCS: vectr-scan-results/                               │
-│  - trivy/{image_slug}/{digest}.json                     │
-│  - grype/{image_slug}/{digest}.json                     │
-│  - raw scanner JSON retained 90 days then deleted       │
-└─────────────────────┬───────────────────────────────────┘
-                      │ triggers (object finalize)
-┌─────────────────────▼───────────────────────────────────┐
-│  Cloud Function: result-ingestor                        │
-│  - normalizes Trivy + Grype JSON into unified schema    │
-│  - writes ScanRecord rows to database                   │
-│  - computes delta against previous scan                 │
-│  - writes ScanDelta rows to database                    │
-│  - triggers alert delivery if delta is non-empty        │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  Tenant CI pipeline                                          │
+│  syft / docker sbom / buildkit  →  SBOM (CycloneDX or SPDX)  │
+└─────────────────────────┬────────────────────────────────────┘
+                          │ POST /v1/sboms  (authenticated)
+┌─────────────────────────▼────────────────────────────────────┐
+│  Ingest API (Cloud Run service)                              │
+│  - authenticate tenant, enforce quota                        │
+│  - validate + size-cap the SBOM (untrusted input)            │
+│  - extract subject image ref + digest from SBOM              │
+│  - content-address by sha256(bytes); dedupe                  │
+│  - store bytes in GCS; row in `sboms` (status: active)       │
+└─────────────────────────┬────────────────────────────────────┘
+                          │ (SBOM now in the active set)
+┌─────────────────────────▼────────────────────────────────────┐
+│  Daily Scan Job (Cloud Run Job, ~02:00 UTC, pure CPU)        │
+│  for each active SBOM:                                        │
+│    - grype  sbom:<file>   → normalize                        │
+│    - trivy  sbom  <file>  → normalize                        │
+│    - UPSERT current state into `findings`                    │
+│    - append `finding_events` ONLY where state changed        │
+│    - write one `scan_runs` summary row (with db_version)     │
+└─────────────────────────┬────────────────────────────────────┘
+                          │ new added/critical events
+┌─────────────────────────▼────────────────────────────────────┐
+│  Alerting                                                    │
+│  - notify the submitting tenant when an `added` event of     │
+│    severity CRITICAL/HIGH lands for one of their images      │
+└──────────────────────────────────────────────────────────────┘
 ```
+
+The scanner DB is baked into the Cloud Run Job image and refreshed at job start, so every daily run uses a DB less than 24 hours old. Scanning an SBOM is pure CPU — no network, no I/O beyond the SBOM file — so ~1,000 SBOMs complete in well under two hours on a single 2‑vCPU job. No fleet required.
 
 ---
 
-## Data Model
+## Data Model (Conceptual)
 
-Five tables. The `findings` table dominates storage and must be partitioned by month.
+The store is Cloud SQL PostgreSQL. Full DDL is in [IMPLEMENTATION.md](IMPLEMENTATION.md); the shape:
 
-| Table | Description | Growth rate |
+| Table | Role | Growth |
 |---|---|---|
-| `images` | One row per unique image tag in corpus | Static (~1,450 rows) |
-| `image_digests` | One row per unique digest observed; immutable; stores GCS SBOM path | ~10,000/year |
-| `scan_runs` | One row per scanner per digest per day; summary counts only | ~1M rows/year |
-| `findings` | One row per CVE per scan run; the bulk of all data | ~159M rows/year |
-| `scan_deltas` | Pre-computed deltas between consecutive scans; includes compact JSONB delta payloads for alert delivery | ~1M rows/year |
+| `tenants` | One row per tenant; owns SBOMs and alert routing | Static |
+| `sboms` | One row per unique submitted SBOM (content-addressed, digest-pinned, immutable) | Per submission |
+| `scan_runs` | One row per SBOM per scanner per day; summary counts + scanner `db_version` | Append-only |
+| `findings` | **Current** state: one row per unique finding per SBOM per scanner (UPSERT) | Bounded — latest state only |
+| `finding_events` | Append-only change log; a row **only when** a finding is added, fixed, re-rated, or resolved | Slow — zero rows on a quiet day |
 
-**Sizing at steady state (1,450-image corpus, 2 scanners, 150 findings/image average):**
+**Why an event log instead of daily snapshots.** A fixed SBOM has a frozen package inventory, so day-over-day findings are ~99% identical. Storing a full snapshot every day would write hundreds of millions of duplicate rows per year. Instead DevRadar keeps *current state* (`findings`, UPSERT) plus a *change log* (`finding_events`, append-only). The change log **is** the delta history — no nightly diff job, no snapshot table. Alerts fall directly out of new `added` events.
 
-| Horizon | findings rows | Total DB size |
-|---|---|---|
-| End of year 1 | ~159M | ~36 GB |
-| End of year 2 | ~318M | ~70 GB |
-| End of year 3 (2-year retention) | steady state | ~100 GB |
-
-Partitioning `findings` by month (on `scanned_at`) allows dropping old partitions without table rewrites.
+**Retention.** `finding_events` is retained **indefinitely** in v1 — the audit trail is the product, and events are cheap. The table is partitioned monthly by `occurred_at` from day one, so future retention tiers (per access plan) or roll-ups (detailed CVE data for the last N days, aggregated trend before that) are additive — a policy or a derived read-model, never a migration.
 
 ---
 
-## SBOM Architecture (Recommended Evolution)
+## Multi-Scanner by Design
 
-The pipeline splits into two permanently separated phases, eliminating daily image pulls entirely after the initial seed.
+DevRadar normalizes multiple scanners into one scanner-agnostic finding, so no single scanner's quirks define the data. v1 ships **Grype and Trivy** together — running two from the start prevents overfitting the schema to either one. Additional scanners register as converters without touching the rest of the pipeline.
 
-**Phase A — SBOM generation** (triggered only on digest change)
-```
-digest changed → pull image → syft generate SBOM → store in GCS → delete image
-```
-
-**Phase B — Daily vulnerability scan** (no network, no pull, pure CPU)
-```
-daily cron → download SBOM from GCS → grype sbom:file.json → store findings in DB
-```
-
-Phase B runs completely offline. No registry contact, no rate limits, no egress cost, no Docker credentials needed. The only input is the SBOM file and the local vulnerability DB.
-
-### SBOM Size
-
-SBOM size is a function of package count, not image size. A 15 GB NVCR CUDA image and a 50 MB Alpine image with similar package counts produce SBOMs of similar size.
-
-| Image type | Packages | SBOM size (CycloneDX JSON) | Gzipped |
-|---|---|---|---|
-| Alpine minimal | ~20 | ~30 KB | ~8 KB |
-| Debian slim | ~100 | ~200 KB | ~45 KB |
-| Ubuntu full | ~400 | ~700 KB | ~150 KB |
-| Node.js app image | ~600 | ~1.1 MB | ~220 KB |
-| NVCR CUDA base | ~800 | ~1.5 MB | ~300 KB |
-| NVCR PyTorch full | ~1,200+ | ~2.5 MB | ~500 KB |
-
-Corpus-weighted average: ~600 KB uncompressed, ~130 KB gzipped per SBOM. GCS storage is negligible (~$0.09/month after year one at 4.4 GB gzipped).
-
-### Scan Compute (Phase B)
-
-Grype scanning an SBOM is pure CPU — no I/O, no network. On a 2-vCPU Cloud Run Job:
-
-- ~3 seconds per SBOM
-- 1,450 images × 3s = ~72 minutes total per daily run
-- One Cloud Run Job handles the full corpus serially; no fleet needed
-
-### SBOM Accuracy Caveat
-
-Syft generates the SBOM from the image at a point in time. If a CVE is later found in a package that Syft didn't catalog (statically linked binaries, embedded language runtimes without package manifests), the SBOM will miss it. Direct image scanning catches some of these through deeper heuristics.
-
-For vectr's use case — tracking known CVE database changes against a fixed package inventory — this is acceptable. New CVEs against known packages are caught correctly. When a digest changes and a new SBOM is generated, a newer Syft version may catalog packages the previous version missed; scanner version upgrades propagate naturally through the corpus.
-
----
-
-## Infrastructure
-
-| Component | Technology | Notes |
-|---|---|---|
-| Nightly trigger | Cloud Scheduler | 02:00 UTC daily |
-| Digest checker | Cloud Run Job | Stateless; reads corpus, emits tasks |
-| Scan queue | Cloud Tasks | 3600s lease, 3 retries, 10 dispatches/s max |
-| VM spawner | Cloud Function | Spawns `ceil(depth/100)` VMs |
-| Scan workers | GCE `e2-standard-2` preemptible | Custom Packer image; self-terminate |
-| VM image build | Packer + Cloud Build | Rebuilt nightly; scanners and DBs baked in |
-| Raw results storage | GCS | 90-day TTL on raw JSON; SBOM storage permanent |
-| Normalized data | Cloud SQL PostgreSQL | See sizing above |
-| Registry credentials | Secret Manager | Per-registry secrets; accessed by workers at runtime |
-| IaC | Terraform | All resources managed; instance template references Packer image family |
-
-**VM fleet IAM**: Scanner service account holds `cloudtasks.enqueuer`, `storage.objectCreator`, `secretmanager.secretAccessor`, and `compute.instanceAdmin.v1` (for self-termination). In production, scope `compute.instanceAdmin.v1` to a specific instance name prefix to limit blast radius.
+This design (a `Scanner` interface that runs the tool, a `Converter` interface that normalizes its JSON, both behind a registry with format auto-detection) is adapted from [vimp](https://github.com/mchmarny/vimp), which already implements it for Grype, Trivy, Snyk, Clair, OSV, and Anchore. DevRadar reuses that model, changing the scanner input from an image reference to an SBOM file. See [IMPLEMENTATION.md](IMPLEMENTATION.md).
 
 ---
 
 ## Cost Model
 
-### Original Architecture (daily pull + scan)
+Pure compute, no egress, no VMs, no registry subscriptions. At ~1,000 tracked SBOMs:
 
 | Item | Monthly |
 |---|---|
-| Docker Hub Team subscription | $15 |
-| GCE preemptible VMs (~30 VM-hours/month) | ~$0.51 |
-| GCS storage, 90-day TTL | ~$1.00 |
-| Internet egress (3,000 pulls × 500 MB avg = 1.5 TB) | ~$120 |
-| Cloud Tasks, Cloud Run Job, Cloud Scheduler | <$1 |
-| **Total** | **~$137/month** |
-
-Seed phase (all ~1,450 images pulled once): ~$300–400 additional egress. NVCR images should be seeded separately on a weekly digest-check cadence rather than daily.
-
-### SBOM Architecture
-
-| Item | Monthly |
-|---|---|
-| Docker Hub Team subscription (Phase A pulls only) | $15 |
-| GCE preemptible, Phase A (seed ~10 hr; steady ~2 hr/month) | ~$2 |
-| GCS SBOM storage | ~$0.50 |
-| Cloud Run Job, Phase B daily scan (72 min/day × 2 vCPU) | ~$6 |
+| Ingest API (Cloud Run service, scales to zero) | ~$1–3 |
+| Daily Scan Job (Cloud Run Job, ~2 vCPU × ~90 min/day) | ~$8 |
+| GCS SBOM storage (content-addressed, ~130 KB gzipped avg) | <$1 |
 | Cloud SQL `db-custom-1-3840` + 50 GB SSD | ~$65 |
-| Vulnerability DB downloads (15 GB/month inbound) | $0 |
-| Cloud Scheduler + Cloud Tasks | <$1 |
-| **Total** | **~$90/month** |
+| Scanner DB downloads (inbound to GCP) | $0 |
+| Cloud Scheduler | <$1 |
+| **Total** | **~$75/month** |
 
-The SBOM architecture saves ~$47/month versus daily pulls, primarily from eliminated egress. The gap grows with corpus size — at 5,000 images the pull-every-day model becomes untenable; the SBOM model scales linearly on compute only.
-
-### Database Hosting
-
-| Option | Tier | Cost/month | Notes |
-|---|---|---|---|
-| Cloud SQL | `db-custom-1-3840` (1 vCPU, 3.75 GB, 50 GB SSD) | ~$65 | Recommended through month 6; storage autoscales |
-| Cloud SQL | `db-custom-2-7680` (2 vCPU, 7.5 GB, 150 GB SSD) | ~$145 | Upgrade path for year 1–2 as findings table grows |
-| Neon (serverless Postgres) | Pro (50 GB) | $19 | Good for early stage; scales to zero; schema branching useful for migrations; cold start matters for latency-sensitive paths |
+The dominant cost is the database, not the pipeline. There is no egress line item — the single largest cost in any pull-based scanning design — because DevRadar never pulls an image.
 
 ---
 
-## Operational Notes
+## Roadmap
 
-**Scanner version pinning.** Bake specific versions into the Packer image. Do not use `latest`. The Trivy CI compromise in February 2026 (PAT theft via aqua-bot) demonstrates that scanner supply chains are a real attack surface. Pin, verify checksums, and rebuild the VM image intentionally on upgrades.
+v1 is deliberately narrow: authenticated SBOM submission, daily Grype + Trivy rescan, event-log deltas, per-tenant critical/high alerts. Planned directions, each additive to the same scan/delta/alert core:
 
-**Trivy DB freshness.** Pre-warmed DBs age. Rebuild the VM image nightly via Cloud Build so workers always start with a DB less than 24 hours old. Workers use `--skip-db-update` to prevent runtime downloads.
+- **Signed SBOM attestations** — verify cosign/in-toto/SLSA signatures and subject-digest match; move a tenant from `unverified` to `attested`. Adds authenticity on top of determinism.
+- **SBOM source #2: service-generated for public images** — for public images a tenant can't or won't SBOM themselves, DevRadar pulls once, generates the SBOM with Syft, and feeds the identical core. This is the original public-catalog vision, reachable as a *source*, not a rewrite.
+- **More scanners** — register additional converters (Snyk, OSV, Clair) as corroborating sources per finding.
+- **Retention tiers & roll-ups** — per-plan history caps and aggregated long-range trend views derived from the event log.
 
-**Disk pressure.** GPU images from NVCR can be 10–15 GB. The `docker rmi` after each scan is mandatory. `e2-standard-2` with 100 GB pd-ssd gives headroom for ~6 large images simultaneously. For bulk NVCR scanning, consider `e2-standard-4` with 200 GB disk.
+---
 
-**Preemption handling.** Preemptible VMs can be reclaimed with 30s notice. Cloud Tasks leases are 3600s. On preemption, the lease expires and the task is requeued automatically — no additional preemption handling is required in the worker.
+## Thingz.io Service Family
 
-**Multi-arch.** Each architecture counts as a separate pull on Docker Hub. Pin to `linux/amd64` unless architecture comparison is a product feature.
+DevRadar is the third service in the Thingz open source intelligence platform. Each service covers a distinct dimension of supply chain risk:
+
+| Service | Question It Answers | Scope |
+|---------|-------------------|-------|
+| **[DevPulse](https://devpulse.thingz.io)** | Is this project healthy? | Project-level health analytics — contributor retention, bus factor, velocity, review culture, release cadence |
+| **[DevTrace](https://devtrace.thingz.io)** | Can we trust this contributor? | Per-contributor trust scoring — 23 signals across identity, engagement, community, and behavioral patterns |
+| **[DevRadar](https://devradar.thingz.io)** | Are these container images accumulating vulnerabilities? | Container vulnerability tracking — CVE time-series, scan deltas, SBOM-based daily rescanning |
+
+### How They Complement Each Other
+
+**DevPulse + DevRadar:** A project with strong health metrics but images accumulating unpatched criticals indicates a packaging or release pipeline problem — the project is alive but its artifacts aren't keeping up. Conversely, a declining project with clean images today is a *future* risk — when the maintainer leaves, vulnerability response time will spike.
+
+**DevTrace + DevRadar:** DevTrace flags contributors with suspicious behavioral patterns *before* code is merged. DevRadar detects the downstream effect — if a compromised contributor introduces a vulnerable dependency, DevRadar catches the CVE delta in the next scan cycle. Together they cover both the contributor trust vector (pre-merge) and the artifact integrity vector (post-publish).
+
+**All three together:** An OSPO or security team can build a complete risk profile for any open source dependency:
+1. **DevPulse** — Is the project well-maintained? Will vulnerabilities get patched?
+2. **DevTrace** — Are the people contributing to it trustworthy? Could this be another xz-utils?
+3. **DevRadar** — Are the published container images actually getting safer over time?
+
+### Shared Infrastructure
+
+All three services run on GCP in the `thingzio` project:
+- **Cloud SQL PostgreSQL** — shared instance, service-isolated via table prefixes and Row-Level Security
+- **Cloud Run** — each service has its own Cloud Run service/job
+- **Secret Manager** — centralized credential management (DevRadar uses it only for its own DB and API keys — never for registry credentials)
+- **AI** — DevPulse and DevTrace use Claude for insights and risk narratives; DevRadar's value is in the data pipeline, not AI generation
+
+### Key Talking Points
+
+- "We scan packages. We scan containers. We scan infrastructure. Almost nothing tracks whether the *projects* are healthy, the *contributors* are trustworthy, and the *images* are getting safer over time. Thingz covers all three."
+- "DevPulse tells you a project is declining. DevTrace flags a suspicious contributor. DevRadar shows the images are accumulating criticals. Each signal alone is a data point — together they're an actionable risk picture."
+- "You give us the SBOM, we give you the trend line — even for images we could never pull ourselves."
