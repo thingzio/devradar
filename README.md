@@ -204,6 +204,7 @@ The dominant cost is the database, not the pipeline. There is no egress line ite
 
 v1 is deliberately narrow: authenticated SBOM submission, daily Grype + Trivy rescan, event-log deltas, per-tenant critical/high alerts. Planned directions, each additive to the same scan/delta/alert core:
 
+- **AI-assisted OpenVEX stubbing (opt-in)** — a separate, opt-in endpoint that drafts an [OpenVEX](https://github.com/openvex) document for an image's findings. DevRadar already knows the subject digest, CVE, package/version, and fix state — the mechanical skeleton of a VEX statement. Claude turns each finding into a starting narrative and a candidate justification, but every statement defaults to `under_investigation` and is clearly marked AI-generated: **DevRadar stubs, the human decides.** It cannot determine true exploitability from an SBOM (that depends on how code is used), so it never asserts `not_affected` by default. The user expands the stub into a real VEX. See [IMPLEMENTATION.md](IMPLEMENTATION.md).
 - **Signed SBOM attestations** — verify cosign/in-toto/SLSA signatures and subject-digest match; move a tenant from `unverified` to `attested`. Adds authenticity on top of determinism.
 - **SBOM source #2: service-generated for public images** — for public images a tenant can't or won't SBOM themselves, DevRadar pulls once, generates the SBOM with Syft, and feeds the identical core. This is the original public-catalog vision, reachable as a *source*, not a rewrite.
 - **More scanners** — register additional converters (Snyk, OSV, Clair) as corroborating sources per finding.
@@ -234,11 +235,12 @@ DevRadar is the third service in the Thingz open source intelligence platform. E
 
 ### Shared Infrastructure
 
-All three services run on GCP in the `thingzio` project:
-- **Cloud SQL PostgreSQL** — shared instance, service-isolated via table prefixes and Row-Level Security
-- **Cloud Run** — each service has its own Cloud Run service/job
-- **Secret Manager** — centralized credential management (DevRadar uses it only for its own DB and API keys — never for registry credentials)
-- **AI** — DevPulse and DevTrace use Claude for insights and risk narratives; DevRadar's value is in the data pipeline, not AI generation
+All three services run on GCP in the `thingzio` project (`us-west1`) and follow one platform contract — DevRadar references shared resources and creates only its own (details in [IMPLEMENTATION.md](IMPLEMENTATION.md)):
+- **Cloud SQL PostgreSQL** — one shared instance (`thingzio-pg`) and database (`thingz`); each service connects as its own DB user and prefixes its tables (`devradar_*`). DevRadar isolates tenants at the application layer (`WHERE tenant_id = $1`), like DevTrace; DevPulse uses Row-Level Security.
+- **Cloud Run** — each service owns its service/job; DevRadar runs a serve service (`devradar-saas-serve`) and a daily scan job (`devradar-saas-scan`), built with `ko`/GoReleaser and deployed via Workload Identity Federation.
+- **Secret Manager** — centralized credentials; DevRadar uses it only for its DB URL, OAuth secret, and Anthropic key — **never for registry credentials** (it has none).
+- **Shared VPC, Artifact Registry, monitoring** — DevRadar attaches to the shared VPC, pushes to its own `devradar-saas-images` repo, and reuses the shared DB alert policies.
+- **AI** — like its siblings, DevRadar uses Claude, but narrowly: to turn a day's raw change events into a human-readable delta narrative on alerts (and, opt-in, to stub OpenVEX documents — see roadmap). The core value is still the deterministic data pipeline, not AI generation.
 
 ### Key Talking Points
 
