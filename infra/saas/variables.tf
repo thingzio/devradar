@@ -47,9 +47,9 @@ variable "notification_email" {
 }
 
 variable "email_from" {
-  description = "From address for outbound transactional email (magic-link)"
+  description = "From address for outbound transactional email (magic-link). Must sit under a Resend-verified domain — the root thingz.io is verified; subdomains are not."
   type        = string
-  default     = "DevRadar <no-reply@devradar.thingz.io>"
+  default     = "DevRadar <no-reply@thingz.io>"
 }
 
 variable "scan_schedule" {

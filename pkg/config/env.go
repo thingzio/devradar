@@ -95,7 +95,7 @@ func SendAPIKey() string {
 
 // EmailFrom returns the From address for outbound email.
 func EmailFrom() string {
-	return GetEnv("EMAIL_FROM", "DevRadar <no-reply@devradar.thingz.io>")
+	return GetEnv("EMAIL_FROM", "DevRadar <no-reply@thingz.io>")
 }
 
 // DebugEnabled reports whether debug-level logging is on (DEVRADAR_DEBUG).

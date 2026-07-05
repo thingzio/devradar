@@ -392,7 +392,7 @@ set the shared platform email secret before `make serve`:
 
 ```bash
 export SEND_API_KEY=...                      # Resend API key (shared: SEND_API_KEY)
-export EMAIL_FROM="DevRadar <no-reply@devradar.thingz.io>"   # optional; has a default
+export EMAIL_FROM="DevRadar <no-reply@thingz.io>"   # optional; has a default
 ```
 
 ### Common tasks

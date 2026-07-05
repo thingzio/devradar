@@ -30,7 +30,7 @@ type Sender interface {
 // ResendSender sends via the Resend API.
 type ResendSender struct {
 	APIKey string
-	From   string // e.g. "DevRadar <no-reply@devradar.thingz.io>"
+	From   string // e.g. "DevRadar <no-reply@thingz.io>"
 }
 
 // Send delivers one email.
