@@ -62,8 +62,11 @@ terraform -chdir=infra/saas output
 
 ### 2. Populate secret values
 
-Terraform creates the secret *containers* and assembles `devradar-saas-database-url`
-from the generated DB password, but the API-key values are set out-of-band:
+Terraform creates the secret *containers*, assembles `devradar-saas-database-url`
+from the generated DB password, and seeds a **placeholder** version for
+`devradar-saas-send-api-key` (so the serve service can deploy before you have a
+real key — with the placeholder, magic-link emails are logged, not sent). Add the
+real values out-of-band; `ignore_changes` keeps them from being reverted:
 
 ```bash
 # Resend key — required for magic-link sign-in
