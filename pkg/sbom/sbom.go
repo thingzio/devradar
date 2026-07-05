@@ -49,4 +49,10 @@ type Subject struct {
 	// GeneratedAt is the document's stated creation time. Zero if the document
 	// omitted it; callers fall back to ingest-receive time in that case.
 	GeneratedAt time.Time
+
+	// PackageCount is the number of catalogued packages/components in the SBOM.
+	// Recorded on the stored row and used by the scan job's zero-findings
+	// tripwire — a scanner returning nothing on a non-trivial inventory is a
+	// recorded failure, not a silent "all clear".
+	PackageCount int
 }

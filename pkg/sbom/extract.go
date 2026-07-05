@@ -96,6 +96,7 @@ func resolveCycloneDX(c *gabs.Container) (*Subject, error) {
 		GeneratedAt: parseTime(str(c, "metadata", "timestamp")),
 	}
 	s.Tool, s.ToolVersion = cyclonedxTool(c)
+	s.PackageCount = len(c.Search("components").Children())
 
 	name := str(c, "metadata", "component", "name")
 	version := str(c, "metadata", "component", "version")
@@ -155,6 +156,7 @@ func resolveSPDX(c *gabs.Container) (*Subject, error) {
 		GeneratedAt: parseTime(str(c, "creationInfo", "created")),
 	}
 	s.Tool, s.ToolVersion = spdxTool(c)
+	s.PackageCount = len(c.Search("packages").Children())
 
 	// Trivy SPDX: document .name is "repo@sha256:...".
 	if ref, d := splitRefDigest(str(c, "name")); d != "" {

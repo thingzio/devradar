@@ -68,6 +68,12 @@ func TestResolve_Fixtures(t *testing.T) {
 			if got.GeneratedAt.After(time.Now()) {
 				t.Errorf("generated-at %v is in the future", got.GeneratedAt)
 			}
+			// Package count must be populated — the scan job's zero-findings
+			// tripwire is gated on it, so a zero here silently disables the
+			// tripwire (regression that shipped once: ingest never set it).
+			if got.PackageCount <= 5 {
+				t.Errorf("package count = %d, want > 5 for a real image SBOM", got.PackageCount)
+			}
 		})
 	}
 }

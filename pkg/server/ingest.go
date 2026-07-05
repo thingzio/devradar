@@ -147,16 +147,17 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 	// The store keys on (tenant_id, digest, format): one SBOM per digest+format
 	// per tenant, first submission canonical.
 	effID, inserted, err := s.store.UpsertSBOM(ctx, &postgres.SBOM{
-		ID:          id,
-		TenantID:    tn.ID,
-		ImageRef:    imageRef,
-		Digest:      subj.Digest,
-		Format:      string(subj.Format),
-		SpecVersion: subj.SpecVersion,
-		Tool:        subj.Tool,
-		ToolVersion: subj.ToolVersion,
-		ObjectPath:  objectPath,
-		GeneratedAt: generatedAt,
+		ID:           id,
+		TenantID:     tn.ID,
+		ImageRef:     imageRef,
+		Digest:       subj.Digest,
+		Format:       string(subj.Format),
+		SpecVersion:  subj.SpecVersion,
+		Tool:         subj.Tool,
+		ToolVersion:  subj.ToolVersion,
+		PackageCount: subj.PackageCount,
+		ObjectPath:   objectPath,
+		GeneratedAt:  generatedAt,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to record SBOM")
