@@ -22,6 +22,13 @@ resource "google_project_service" "default" {
   for_each = toset(local.services)
   project  = var.project_id
   service  = each.value
+
+  # These APIs are shared across the platform (DevPulse/DevTrace enable most too).
+  # Enabling an already-enabled API is a no-op, but the default deletion behavior
+  # would DISABLE the API project-wide on `terraform destroy` — breaking the
+  # sibling services. Never disable on destroy; leave APIs as we found them.
+  disable_on_destroy         = false
+  disable_dependent_services = false
 }
 
 data "google_project" "default" {

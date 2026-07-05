@@ -192,6 +192,10 @@ gcloud run services update devradar-saas-serve --region us-west1   # pick up "la
 - **First apply is manual and privileged** — it touches the shared instance
   (creates the `devradar` SQL user). Routine app updates need only the WIF-scoped
   deployer (no shared-instance rights).
+- **Shared-project safety:** `google_project_service` is set `disable_on_destroy =
+  false`, so a future `terraform destroy` of DevRadar will **not** disable
+  project-wide APIs that DevPulse/DevTrace also use. Enabling an already-enabled
+  API on apply is a no-op.
 - **`terraform validate` passes**, but the first real `plan`/`apply` against the
   live project is the true test — review the plan carefully.
 - **Two images, two build paths:** serve is ko (pure Go); scan is a Dockerfile
