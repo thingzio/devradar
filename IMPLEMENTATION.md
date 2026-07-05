@@ -407,6 +407,7 @@ Read endpoints (session or token auth):
 | `DELETE` | `/v1/sboms/{id}` | Archive (stop tracking) an SBOM — drops from scan set + images; findings/events retained. Idempotent. |
 | `GET`  | `/v1/sboms/{id}/findings` | Current findings for one SBOM. |
 | `GET`  | `/v1/sboms/{id}/events` | Change events for one SBOM. |
+| `GET`  | `/v1/sboms/{id}/failures?limit=N` | Recent scan failures for one SBOM (newest first) — a scanner/stage that errored or returned nothing. Makes a silently-absent scanner visible (e.g. Trivy finding 0 CVEs on an EOL distro it has no advisories for). `/v1/images` also carries a `failures` count per image so a non-zero count is visible in the rollup. |
 
 ### Untrusted-input handling
 
@@ -779,11 +780,13 @@ CREATE TABLE devradar_scan_failure (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     sbom_id     TEXT NOT NULL,
     scanner     TEXT,
-    stage       TEXT NOT NULL,                         -- download|scan|parse|detect|convert|persist
+    stage       TEXT NOT NULL,  -- download|canonicalize|scan|parse|detect|convert|zero-findings|persist
     error       TEXT NOT NULL,
     occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
+
+**Scanner divergence is observable, not silent.** A scanner can legitimately return nothing where another finds CVEs — e.g. Trivy matches Alpine packages only against the Alpine `secdb` (no NVD/CPE fallback), so on an **EOL** release (no advisories) it reports 0 while Grype's `nvd:cpe` fallback still matches. The `zeroFindingFloor` tripwire turns "0 findings on a non-trivial SBOM" into a recorded `zero-findings` failure rather than a misleading "all clear", and the scan job **also logs a `slog.Warn`** at every failure so it surfaces in Cloud Run logs. Tenants read the rows via `GET /v1/sboms/{id}/failures`; `/v1/images` carries a per-image `failures` count. This is the mechanism behind "Grype/Trivy divergence = cataloger/matcher-disagreement signal" — the disagreement is captured, not dropped.
 
 Note the DDL is written **idempotent** (`CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` in the real files, elided here for readability) and applied by the embedded advisory-lock migration runner described in [Platform Alignment](#platform-alignment) — the same pattern both siblings use.
 
@@ -814,6 +817,7 @@ The read endpoints (tenant-scoped, `WHERE tenant_id = $1`):
 | `DELETE` | `/v1/sboms/{id}` | archive (stop tracking) — drops from scan set + images; findings/events retained; idempotent |
 | `GET` | `/v1/sboms/{id}/findings` | current findings for one SBOM |
 | `GET` | `/v1/sboms/{id}/events` | change events for one SBOM |
+| `GET` | `/v1/sboms/{id}/failures` | recent scan failures for one SBOM (a scanner/stage that errored or returned nothing) |
 
 **Severity threshold (a view/policy knob, not a write filter).** Findings are always *stored* at every severity; which ones a read *returns* is a tenant policy. Each tenant has a `min_severity` (default `medium`, in `devradar_tenant`). Every read endpoint filters at or above it, and accepts an independent `?min_severity=` per-request override — so `/findings` and `/events` can use different thresholds in the same session:
 

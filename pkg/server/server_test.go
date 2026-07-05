@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -225,6 +226,64 @@ func TestSBOMLifecycle(t *testing.T) {
 	// DELETE unknown → 404.
 	if rc := do(http.MethodDelete, "/v1/sboms/nope"); rc.Code != http.StatusNotFound {
 		t.Errorf("DELETE unknown sbom = %d, want 404", rc.Code)
+	}
+}
+
+// TestFailures covers GET /v1/sboms/{id}/failures: a recorded scan failure is
+// returned to the owner, the /v1/images rollup reflects it, and another tenant
+// gets 404. This is the observability path for a scanner that silently returns
+// nothing (e.g. Trivy on an EOL distro).
+func TestFailures(t *testing.T) {
+	srv, st := testServer(t)
+	_, tok := seedTenantToken(t, st)
+	_, tokB := seedTenantToken(t, st)
+	h := srv.Handler()
+	ctx := context.Background()
+
+	raw, err := os.ReadFile("../sbom/testdata/redis.syft.cdx.json")
+	if err != nil {
+		t.Skipf("fixture missing: %v", err)
+	}
+	body, _ := json.Marshal(map[string]string{"sbom": base64.StdEncoding.EncodeToString(raw)})
+	req := httptest.NewRequest(http.MethodPost, "/v1/sboms", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var sub struct {
+		SBOMID string `json:"sbom_id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &sub)
+
+	// Record a zero-findings failure the way the scan job would.
+	st.RecordScanFailure(ctx, sub.SBOMID, "trivy", "zero-findings",
+		errors.New("0 findings on sbom with 42 packages"))
+
+	do := func(tokenStr, method, path string) *httptest.ResponseRecorder {
+		rq := httptest.NewRequest(method, path, nil)
+		rq.Header.Set("Authorization", "Bearer "+tokenStr)
+		rc := httptest.NewRecorder()
+		h.ServeHTTP(rc, rq)
+		return rc
+	}
+
+	// Owner sees the failure with scanner + stage.
+	rc := do(tok, http.MethodGet, "/v1/sboms/"+sub.SBOMID+"/failures")
+	if rc.Code != http.StatusOK ||
+		!strings.Contains(rc.Body.String(), `"trivy"`) ||
+		!strings.Contains(rc.Body.String(), `"zero-findings"`) {
+		t.Errorf("GET failures = %d: %s", rc.Code, rc.Body.String())
+	}
+	// The images rollup surfaces a non-zero failure count.
+	if rc := do(tok, http.MethodGet, "/v1/images"); !strings.Contains(rc.Body.String(), `"failures":1`) {
+		t.Errorf("images should report failures:1, got: %s", rc.Body.String())
+	}
+	// Cross-tenant read → 404 (owner-scoped).
+	if rc := do(tokB, http.MethodGet, "/v1/sboms/"+sub.SBOMID+"/failures"); rc.Code != http.StatusNotFound {
+		t.Errorf("cross-tenant failures = %d, want 404", rc.Code)
+	}
+	// Unknown SBOM → 404.
+	if rc := do(tok, http.MethodGet, "/v1/sboms/nope/failures"); rc.Code != http.StatusNotFound {
+		t.Errorf("unknown sbom failures = %d, want 404", rc.Code)
 	}
 }
 

@@ -138,19 +138,19 @@ func (r *Runner) Execute(ctx context.Context) error {
 func (r *Runner) scanOne(ctx context.Context, sb *postgres.SBOM) {
 	raw, err := r.fetch.Fetch(ctx, sb.ObjectPath)
 	if err != nil {
-		r.store.RecordScanFailure(ctx, sb.ID, "", "download", err)
+		r.recordFailure(ctx, sb.ID, "", "download", err)
 		return
 	}
 
 	// Canonicalize to CycloneDX so every scanner sees a format it reads reliably.
 	cdx, err := r.canon.Canonicalize(ctx, raw, sbom.Format(sb.Format))
 	if err != nil {
-		r.store.RecordScanFailure(ctx, sb.ID, "", "canonicalize", err)
+		r.recordFailure(ctx, sb.ID, "", "canonicalize", err)
 		return
 	}
 	local, cleanup, err := writeTemp(sb.ID, cdx)
 	if err != nil {
-		r.store.RecordScanFailure(ctx, sb.ID, "", "canonicalize", err)
+		r.recordFailure(ctx, sb.ID, "", "canonicalize", err)
 		return
 	}
 	defer cleanup()
@@ -163,28 +163,28 @@ func (r *Runner) scanOne(ctx context.Context, sb *postgres.SBOM) {
 func (r *Runner) scanWith(ctx context.Context, sb *postgres.SBOM, sc scanner.Scanner, sbomPath string) {
 	out, cleanup, err := tempOut(sb.ID, sc.Name())
 	if err != nil {
-		r.store.RecordScanFailure(ctx, sb.ID, sc.Name(), "scan", err)
+		r.recordFailure(ctx, sb.ID, sc.Name(), "scan", err)
 		return
 	}
 	defer cleanup()
 
 	if err := sc.ScanSBOM(ctx, sbomPath, out); err != nil {
-		r.store.RecordScanFailure(ctx, sb.ID, sc.Name(), "scan", err)
+		r.recordFailure(ctx, sb.ID, sc.Name(), "scan", err)
 		return
 	}
 	doc, err := gabs.ParseJSONFile(out)
 	if err != nil {
-		r.store.RecordScanFailure(ctx, sb.ID, sc.Name(), "parse", err)
+		r.recordFailure(ctx, sb.ID, sc.Name(), "parse", err)
 		return
 	}
 	conv, err := r.convs.Detect(doc)
 	if err != nil {
-		r.store.RecordScanFailure(ctx, sb.ID, sc.Name(), "detect", err)
+		r.recordFailure(ctx, sb.ID, sc.Name(), "detect", err)
 		return
 	}
 	vulns, err := conv.Convert(ctx, doc)
 	if err != nil {
-		r.store.RecordScanFailure(ctx, sb.ID, sc.Name(), "convert", err)
+		r.recordFailure(ctx, sb.ID, sc.Name(), "convert", err)
 		return
 	}
 
@@ -192,7 +192,7 @@ func (r *Runner) scanWith(ctx context.Context, sb *postgres.SBOM, sc scanner.Sca
 	// regression (e.g. Trivy on un-canonicalized SPDX, or a missing DB), not a
 	// clean image. Record it rather than writing a misleading "all resolved".
 	if len(vulns) == 0 && sb.PackageCount > zeroFindingFloor {
-		r.store.RecordScanFailure(ctx, sb.ID, sc.Name(), "zero-findings",
+		r.recordFailure(ctx, sb.ID, sc.Name(), "zero-findings",
 			fmt.Errorf("0 findings on sbom with %d packages", sb.PackageCount))
 		return
 	}
@@ -203,8 +203,20 @@ func (r *Runner) scanWith(ctx context.Context, sb *postgres.SBOM, sc scanner.Sca
 		CanonicalizerVersion: r.canon.Version(),
 	}
 	if err := r.store.ApplyScan(ctx, sb, sc.Name(), ver, vulns); err != nil {
-		r.store.RecordScanFailure(ctx, sb.ID, sc.Name(), "persist", err)
+		r.recordFailure(ctx, sb.ID, sc.Name(), "persist", err)
 	}
+}
+
+// recordFailure persists a per-SBOM/per-scanner failure to the queryable failure
+// surface AND emits a warning to the job log. Failures are otherwise invisible
+// (no stdout, table-only), so a scanner silently returning nothing — e.g. Trivy
+// finding 0 CVEs on an EOL distro it has no advisories for — would vanish from
+// ops view. The log line makes it visible in Cloud Run; the table row makes it
+// queryable per-SBOM via GET /v1/sboms/{id}/failures.
+func (r *Runner) recordFailure(ctx context.Context, sbomID, scanner, stage string, cause error) {
+	slog.Warn("scan failure",
+		"sbom_id", sbomID, "scanner", scanner, "stage", stage, "error", cause)
+	r.store.RecordScanFailure(ctx, sbomID, scanner, stage, cause)
 }
 
 // writeTemp writes b to a temp file and returns its path + a cleanup func.

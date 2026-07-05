@@ -36,6 +36,10 @@ type Image struct {
 	Format      string         `json:"format"`
 	SubmittedAt time.Time      `json:"submitted_at"`
 	Counts      SeverityCounts `json:"counts"`
+	// Failures is the number of recorded scan failures for this SBOM. Non-zero
+	// means at least one scanner errored or returned nothing — the counts above
+	// may be from fewer scanners than configured. See GET /v1/sboms/{id}/failures.
+	Failures int `json:"failures,omitempty"`
 }
 
 // ListImages returns a tenant's active images. Every tracked image is returned
@@ -51,7 +55,8 @@ func (s *Store) ListImages(ctx context.Context, tenantID, minSeverity string) ([
 		       COUNT(*) FILTER (WHERE f.severity = 'low')        AS low,
 		       COUNT(*) FILTER (WHERE f.severity = 'negligible') AS neg,
 		       COUNT(*) FILTER (WHERE f.severity = 'unknown')    AS unk,
-		       COUNT(f.finding_id)                               AS total
+		       COUNT(f.finding_id)                               AS total,
+		       (SELECT COUNT(*) FROM devradar_scan_failure sf WHERE sf.sbom_id = sb.id) AS failures
 		FROM devradar_sbom sb
 		LEFT JOIN devradar_finding f ON f.sbom_id = sb.id
 		WHERE sb.tenant_id = $1 AND sb.status = 'active'
@@ -67,7 +72,7 @@ func (s *Store) ListImages(ctx context.Context, tenantID, minSeverity string) ([
 		var im Image
 		var c SeverityCounts
 		if err := rows.Scan(&im.SBOMID, &im.ImageRef, &im.Digest, &im.Format, &im.SubmittedAt,
-			&c.Critical, &c.High, &c.Medium, &c.Low, &c.Negligible, &c.Unknown, &c.Total); err != nil {
+			&c.Critical, &c.High, &c.Medium, &c.Low, &c.Negligible, &c.Unknown, &c.Total, &im.Failures); err != nil {
 			return nil, fmt.Errorf("scan image: %w", err)
 		}
 		im.Counts = applyThreshold(c, minSeverity)
@@ -333,4 +338,45 @@ func (s *Store) assertSBOMOwner(ctx context.Context, tenantID, sbomID string) er
 		return ErrNotFound
 	}
 	return nil
+}
+
+// Failure is a tenant-facing scan-failure row: a scanner/stage that errored or
+// returned nothing for one SBOM. Surfaced so a silent scanner (e.g. Trivy
+// finding 0 CVEs on an EOL distro it has no advisories for) is visible, not just
+// absent from the findings list.
+type Failure struct {
+	Scanner    string    `json:"scanner,omitempty"`
+	Stage      string    `json:"stage"`
+	Error      string    `json:"error"`
+	OccurredAt time.Time `json:"occurred_at"`
+}
+
+// FailuresBySBOM returns recent scan failures for one SBOM, newest first.
+// Tenant-scoped via ownership check; ErrNotFound if the SBOM isn't owned.
+func (s *Store) FailuresBySBOM(ctx context.Context, tenantID, sbomID string, limit int) ([]Failure, error) {
+	if err := s.assertSBOMOwner(ctx, tenantID, sbomID); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT scanner, stage, error, occurred_at
+		FROM devradar_scan_failure
+		WHERE sbom_id = $1
+		ORDER BY occurred_at DESC
+		LIMIT $2`, sbomID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failures: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []Failure
+	for rows.Next() {
+		var f Failure
+		var scanner sql.NullString
+		if err := rows.Scan(&scanner, &f.Stage, &f.Error, &f.OccurredAt); err != nil {
+			return nil, fmt.Errorf("scan failure: %w", err)
+		}
+		f.Scanner = scanner.String
+		out = append(out, f)
+	}
+	return out, rows.Err()
 }

@@ -164,6 +164,30 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"min_severity": min, "events": events})
 }
 
+// handleFailures returns recent scan failures for one of the tenant's SBOMs
+// (newest first). A failure is a scanner/stage that errored or returned nothing
+// — e.g. Trivy finding 0 CVEs on an EOL distro it has no advisories for — so a
+// silently-absent scanner is visible here rather than just missing from findings.
+func (s *Server) handleFailures(w http.ResponseWriter, r *http.Request) {
+	tn := middleware.TenantFromContext(r.Context())
+	if tn == nil {
+		writeError(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+	limit := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	failures, err := s.store.FailuresBySBOM(r.Context(), tn.ID, r.PathValue("id"), limit)
+	if err != nil {
+		writeReadErr(w, err, "failed to load failures")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"failures": failures})
+}
+
 // writeReadErr maps store errors to HTTP status. A not-found (which also covers
 // "not owned by this tenant") is 404 — indistinguishable by design.
 func writeReadErr(w http.ResponseWriter, err error, msg string) {
