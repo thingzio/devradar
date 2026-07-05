@@ -3,40 +3,36 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>DevRadar</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 4rem auto; padding: 0 1rem; color: #1a1a1a; }
-    h1 { margin-bottom: 0.25rem; }
-    .sub { color: #666; margin-top: 0; }
-    form { margin-top: 1.5rem; display: flex; gap: 0.5rem; }
-    input[type=email] { flex: 1; padding: 0.6rem; border: 1px solid #ccc; border-radius: 6px; }
-    .btn { background: #24292f; color: #fff; border: 0; padding: 0.6rem 1rem; border-radius: 6px; cursor: pointer; }
-    .err { color: #b00020; margin-top: 1rem; }
-    .ok { color: #0a7d33; margin-top: 1rem; }
-    .muted { color: #666; font-size: 0.9rem; margin-top: 1rem; }
-  </style>
+  <title>DevRadar — Container Vulnerability Tracking</title>
+  <meta name="description" content="Submit an SBOM, track how its vulnerabilities change over time.">
+  <link rel="stylesheet" href="/static/css/app.css">
 </head>
 <body>
-  <h1>DevRadar</h1>
-  <p class="sub">Container vulnerability tracking — submit an SBOM, track what changes over time.</p>
+  <main class="wrap">
+    <h1>Dev<span class="accent">Radar</span></h1>
+    <p class="sub">Container vulnerability tracking — submit an SBOM, track what changes over time.</p>
 
-  {{if .Error}}<p class="err">
-    {{if eq .Error "email"}}Please enter a valid email address.
-    {{else if eq .Error "link"}}That sign-in link is invalid or expired — request a new one.
-    {{else if eq .Error "suspended"}}This account is suspended.
-    {{else}}Something went wrong. Please try again.{{end}}
-  </p>{{end}}
+    {{if .Error}}<div class="msg err">
+      {{if eq .Error "email"}}Please enter a valid email address.
+      {{else if eq .Error "link"}}That sign-in link is invalid or expired — request a new one.
+      {{else if eq .Error "suspended"}}This account is suspended.
+      {{else}}Something went wrong. Please try again.{{end}}
+    </div>{{end}}
 
-  {{if .Sent}}
-  <p class="ok">Check your email — we sent you a sign-in link. It expires in 15 minutes.</p>
-  {{else}}
-  <p>Enter your email and we'll send you a one-time sign-in link — no password.</p>
-  <form method="post" action="/auth/login">
-    <input type="email" name="email" placeholder="you@example.com" required autofocus>
-    <button class="btn" type="submit">Send sign-in link</button>
-  </form>
-  {{end}}
+    {{if .Sent}}
+    <div class="msg ok">Check your email — we sent you a sign-in link. It expires in 15 minutes.</div>
+    {{else}}
+    <div class="card">
+      <p style="margin-top:0">Enter your email and we'll send you a one-time sign-in link — no password.</p>
+      <form class="row" method="post" action="/auth/login">
+        <input type="email" name="email" placeholder="you@example.com" required autofocus>
+        <button class="btn" type="submit">Send sign-in link</button>
+      </form>
+      <p class="muted" style="margin-bottom:0">Sign in to create API tokens for submitting SBOMs from your CI.</p>
+    </div>
+    {{end}}
 
-  <p class="muted">Sign in to create API tokens for submitting SBOMs from your CI.</p>
+    <div class="foot">VERSION {{if .Version}}{{.Version}}{{else}}DEV{{end}}</div>
+  </main>
 </body>
 </html>

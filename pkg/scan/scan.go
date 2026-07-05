@@ -13,9 +13,11 @@ import (
 	"time"
 
 	"github.com/Jeffail/gabs/v2"
+	"github.com/thingzio/devradar/pkg/config"
 	"github.com/thingzio/devradar/pkg/converter"
 	"github.com/thingzio/devradar/pkg/data"
 	"github.com/thingzio/devradar/pkg/data/postgres"
+	"github.com/thingzio/devradar/pkg/gcs"
 	"github.com/thingzio/devradar/pkg/sbom"
 	"github.com/thingzio/devradar/pkg/scanner"
 )
@@ -62,10 +64,46 @@ func NewRunner(store Store, fetch Fetcher, canon sbom.Canonicalizer, scanners []
 	return &Runner{store: store, fetch: fetch, canon: canon, scanners: scanners, convs: convs, opts: opts}
 }
 
-// Run executes one full pass over all active SBOMs. It returns an error only for
+// Run is the entry point for the scan binary: it wires the store, blob fetcher,
+// scanners, and canonicalizer from the environment, then executes one scan pass.
+// cmd/devradar-scan is a thin shell around this.
+func Run(ctx context.Context, opts Options) error {
+	store, err := postgres.New(ctx, config.DatabaseURL(), postgres.ScanPoolConfig())
+	if err != nil {
+		return fmt.Errorf("store: %w", err)
+	}
+	defer store.Close()
+
+	blobs, err := gcs.FromEnv(ctx)
+	if err != nil {
+		return fmt.Errorf("blob store: %w", err)
+	}
+	defer blobs.Close()
+
+	scanners := scanner.DefaultRegistry().Available()
+	if len(scanners) == 0 {
+		slog.Warn("no scanners available on PATH; nothing to do")
+		return nil
+	}
+
+	// Prefer the syft-backed canonicalizer (SPDX -> CycloneDX); fall back to
+	// pass-through (CycloneDX-only) if syft isn't installed.
+	var canon sbom.Canonicalizer
+	if sc, ok := sbom.NewSyftCanonicalizer(); ok {
+		slog.Info("canonicalizer ready", "backend", sc.Version())
+		canon = sc
+	} else {
+		slog.Warn("syft not found; canonicalizer is pass-through (SPDX SBOMs will fail to scan)")
+		canon = sbom.NewPassthroughCanonicalizer()
+	}
+
+	return NewRunner(store, blobs, canon, scanners, converter.DefaultRegistry(), opts).Execute(ctx)
+}
+
+// Execute runs one full pass over all active SBOMs. It returns an error only for
 // whole-run failures (DB prep, listing); per-SBOM and per-scanner failures are
 // recorded to the failure surface and do not abort the run.
-func (r *Runner) Run(ctx context.Context) error {
+func (r *Runner) Execute(ctx context.Context) error {
 	// Freeze each scanner's DB once, up front: refresh if stale, then every scan
 	// in this run shares that version — which is what keeps cause attribution
 	// honest (no DB drift mid-run).

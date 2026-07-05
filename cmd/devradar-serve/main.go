@@ -1,5 +1,6 @@
 // Command devradar-serve is the Cloud Run service: the SBOM ingest API, the
-// tenant-scoped read API, and a minimal GitHub-OAuth UI for minting API tokens.
+// tenant-scoped read API, and the magic-link UI for minting API tokens. It is a
+// thin entry point — all wiring and logic live in pkg/server.
 package main
 
 import (
@@ -9,11 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/thingzio/devradar/pkg/config"
-	"github.com/thingzio/devradar/pkg/data/postgres"
-	"github.com/thingzio/devradar/pkg/gcs"
 	"github.com/thingzio/devradar/pkg/logging"
-	drnet "github.com/thingzio/devradar/pkg/net"
 	"github.com/thingzio/devradar/pkg/server"
 )
 
@@ -27,57 +24,17 @@ var (
 func main() {
 	logging.Setup(version, "serve")
 	slog.Info("devradar-serve starting", "commit", commit, "date", date)
+	os.Exit(run())
+}
 
+func run() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx); err != nil {
+	if err := server.Run(ctx, server.Options{Version: version, Commit: commit, Date: date}); err != nil {
 		slog.Error("serve failed", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	slog.Info("devradar-serve stopped")
-}
-
-func run(ctx context.Context) error {
-	store, err := postgres.New(ctx, config.DatabaseURL(), postgres.DefaultPoolConfig())
-	if err != nil {
-		return err
-	}
-	defer store.Close()
-
-	blobs, closeBlobs, err := newBlobStore(ctx)
-	if err != nil {
-		return err
-	}
-	defer closeBlobs()
-
-	// Email sender for magic-link sign-in. Without SEND_API_KEY the server logs
-	// the magic link instead of emailing it (development).
-	var email drnet.Sender
-	if key := config.SendAPIKey(); key != "" {
-		email = drnet.ResendSender{APIKey: key, From: config.EmailFrom()}
-	} else {
-		slog.Warn("SEND_API_KEY not set; magic-link URLs will be logged, not emailed")
-	}
-
-	srv := server.New(store, blobs, email, server.Options{
-		Version: version, Commit: commit, Date: date,
-	})
-	return srv.Run(ctx)
-}
-
-// newBlobStore returns the SBOM byte store. Production uses GCS; setting
-// DEVRADAR_LOCAL_SBOMS=1 uses a local directory (DEVRADAR_LOCAL_SBOM_DIR, default
-// ./.sboms) for development against docker-compose Postgres.
-func newBlobStore(ctx context.Context) (server.BlobStore, func(), error) {
-	if config.GetEnvBool("DEVRADAR_LOCAL_SBOMS") {
-		dir := config.GetEnv("DEVRADAR_LOCAL_SBOM_DIR", ".sboms")
-		slog.Info("using local filesystem SBOM store", "dir", dir)
-		return gcs.LocalStore{Dir: dir}, func() {}, nil
-	}
-	c, err := gcs.New(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	return c, func() { _ = c.Close() }, nil
+	return 0
 }

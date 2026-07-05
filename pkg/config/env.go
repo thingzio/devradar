@@ -75,11 +75,22 @@ func BaseURL() string {
 	return GetEnv("BASE_URL", "http://localhost:8080")
 }
 
+// sendAPIKeyPlaceholder is the value Terraform seeds into the send-api-key
+// secret before a real key is set out-of-band. Treated as "not configured" so
+// the service degrades to logging magic links rather than failing to send with
+// a bogus key.
+const sendAPIKeyPlaceholder = "placeholder-set-real-value-out-of-band"
+
 // SendAPIKey returns the Resend API key for transactional email (magic-link
-// sign-in, later alerts). Empty disables real sending — the server then logs the
-// magic link instead (development). Shared platform secret name: SEND_API_KEY.
+// sign-in, later alerts), or "" if unset or still the Terraform placeholder.
+// Empty disables real sending — the server logs the magic link instead. Shared
+// platform secret name: SEND_API_KEY.
 func SendAPIKey() string {
-	return GetEnv("SEND_API_KEY", "")
+	k := GetEnv("SEND_API_KEY", "")
+	if k == sendAPIKeyPlaceholder {
+		return ""
+	}
+	return k
 }
 
 // EmailFrom returns the From address for outbound email.

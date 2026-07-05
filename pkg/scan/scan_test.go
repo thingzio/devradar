@@ -55,7 +55,7 @@ func TestRunner_ScansAndApplies(t *testing.T) {
 		sbom.NewPassthroughCanonicalizer(), []scanner.Scanner{sc},
 		converter.DefaultRegistry(), DefaultOptions())
 
-	if err := r.Run(context.Background()); err != nil {
+	if err := r.Execute(context.Background()); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if store.applied != 1 {
@@ -76,7 +76,7 @@ func TestRunner_ZeroFindingsTripwire(t *testing.T) {
 		sbom.NewPassthroughCanonicalizer(), []scanner.Scanner{sc},
 		converter.DefaultRegistry(), DefaultOptions())
 
-	if err := r.Run(context.Background()); err != nil {
+	if err := r.Execute(context.Background()); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if store.applied != 0 {
@@ -94,7 +94,7 @@ func TestRunner_FetchFailureRecorded(t *testing.T) {
 		sbom.NewPassthroughCanonicalizer(), []scanner.Scanner{sc},
 		converter.DefaultRegistry(), DefaultOptions())
 
-	if err := r.Run(context.Background()); err != nil {
+	if err := r.Execute(context.Background()); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if len(store.failures) != 1 || store.failures[0] != "download" {

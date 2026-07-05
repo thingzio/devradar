@@ -18,6 +18,9 @@ import (
 //go:embed templates/*.html
 var templateFS embed.FS
 
+//go:embed static
+var staticFS embed.FS
+
 var templates = template.Must(template.ParseFS(templateFS, "templates/*.html"))
 
 const (
@@ -31,6 +34,7 @@ const (
 // a session, then mint API tokens for CI. If no email sender is configured
 // (local dev), the magic link is logged instead of sent.
 func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
+	mux.Handle("GET /static/", http.FileServerFS(staticFS))
 	mux.HandleFunc("GET /", s.handleLanding)
 	mux.HandleFunc("POST /auth/login", s.handleRequestLink)
 	mux.HandleFunc("GET /auth/verify", s.handleVerify)
@@ -52,8 +56,9 @@ func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	render(w, "landing.html", map[string]any{
-		"Error": r.URL.Query().Get("error"),
-		"Sent":  r.URL.Query().Get("sent") == "1",
+		"Error":   r.URL.Query().Get("error"),
+		"Sent":    r.URL.Query().Get("sent") == "1",
+		"Version": s.opts.Version,
 	})
 }
 
@@ -138,6 +143,7 @@ func (s *Server) handleTokensPage(w http.ResponseWriter, r *http.Request) {
 		"NewToken":    r.URL.Query().Get("new"), // shown once after creation
 		"MinSeverity": defaultStr(tn.MinSeverity, data.DefaultMinSeverity),
 		"Severities":  []string{"critical", "high", "medium", "low", "negligible"},
+		"Version":     s.opts.Version,
 	})
 }
 

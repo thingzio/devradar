@@ -1,18 +1,41 @@
-// Package gcs provides SBOM byte retrieval for the scan job. It implements
-// scan.Fetcher over Google Cloud Storage, plus a local-filesystem fetcher for
-// development and tests.
+// Package gcs stores and retrieves SBOM bytes. It provides a GCS-backed store,
+// a local-filesystem store for development/tests, and a FromEnv selector so the
+// serve and scan binaries share one blob-store wiring.
 package gcs
 
 import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"cloud.google.com/go/storage"
+
+	"github.com/thingzio/devradar/pkg/config"
 )
+
+// Store reads and writes SBOM bytes. Both *Client (GCS) and LocalStore satisfy it.
+type Store interface {
+	Put(ctx context.Context, objectPath string, data []byte) error
+	Fetch(ctx context.Context, objectPath string) ([]byte, error)
+	Close() error
+}
+
+// FromEnv returns the blob store selected by env: a local-filesystem store when
+// DEVRADAR_LOCAL_SBOMS is set (dev — DEVRADAR_LOCAL_SBOM_DIR, default ./.sboms),
+// otherwise GCS. Both the serve and scan binaries use this so a local run shares
+// one on-disk store between submit (serve) and scan.
+func FromEnv(ctx context.Context) (Store, error) {
+	if config.GetEnvBool("DEVRADAR_LOCAL_SBOMS") {
+		dir := config.GetEnv("DEVRADAR_LOCAL_SBOM_DIR", ".sboms")
+		slog.Info("using local filesystem SBOM store", "dir", dir)
+		return LocalStore{Dir: dir}, nil
+	}
+	return New(ctx)
+}
 
 // Client fetches objects from GCS. object paths are full gs:// URIs
 // (gs://bucket/key), matching devradar_sbom.object_path.
@@ -99,6 +122,10 @@ func (l LocalStore) Put(_ context.Context, objectPath string, data []byte) error
 func (l LocalStore) Fetch(_ context.Context, objectPath string) ([]byte, error) {
 	return os.ReadFile(l.pathFor(objectPath))
 }
+
+// Close is a no-op; LocalStore holds no resources. Present so LocalStore
+// satisfies the Store interface.
+func (l LocalStore) Close() error { return nil }
 
 func (l LocalStore) pathFor(objectPath string) string {
 	safe := strings.NewReplacer("gs://", "", "/", "_", ":", "_").Replace(objectPath)

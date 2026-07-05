@@ -4,70 +4,65 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>API Tokens — DevRadar</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 48rem; margin: 3rem auto; padding: 0 1rem; color: #1a1a1a; }
-    header { display: flex; justify-content: space-between; align-items: baseline; }
-    .muted { color: #666; }
-    table { width: 100%; border-collapse: collapse; margin-top: 1.5rem; }
-    th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid #eee; font-size: 0.95rem; }
-    form.inline { display: inline; }
-    .btn { background: #24292f; color: #fff; border: 0; padding: 0.5rem 0.9rem; border-radius: 6px; cursor: pointer; }
-    .btn.danger { background: #b00020; padding: 0.3rem 0.6rem; font-size: 0.85rem; }
-    .new { background: #f0fff4; border: 1px solid #b7ebc6; padding: 1rem; border-radius: 6px; margin-top: 1.5rem; }
-    code { background: #f6f8fa; padding: 0.15rem 0.35rem; border-radius: 4px; word-break: break-all; }
-    .create { margin-top: 2rem; display: flex; gap: 0.5rem; }
-    input[type=text] { padding: 0.5rem; border: 1px solid #ccc; border-radius: 6px; flex: 1; }
-  </style>
+  <link rel="stylesheet" href="/static/css/app.css">
 </head>
 <body>
-  <header>
-    <h1>API Tokens</h1>
-    <span class="muted">{{.Email}} &nbsp;
-      <form class="inline" method="post" action="/auth/logout"><button class="btn">Sign out</button></form>
-    </span>
-  </header>
+  <main class="wrap">
+    <header class="bar">
+      <h1>Dev<span class="accent">Radar</span></h1>
+      <span class="who">
+        {{.Email}}
+        <form class="inline" method="post" action="/auth/logout"><button class="btn secondary">Sign out</button></form>
+      </span>
+    </header>
+    <p class="sub">API tokens &amp; settings</p>
 
-  {{if .NewToken}}
-  <div class="new">
-    <strong>New token created — copy it now, it won't be shown again:</strong>
-    <p><code>{{.NewToken}}</code></p>
-    <p class="muted">Use it as <code>Authorization: Bearer &lt;token&gt;</code> when calling <code>POST /v1/sboms</code>.</p>
-  </div>
-  {{end}}
+    {{if .NewToken}}
+    <div class="msg ok">
+      <strong>New token created — copy it now, it won't be shown again:</strong>
+      <p><code>{{.NewToken}}</code></p>
+      <p class="muted" style="margin-bottom:0">Use it as <code>Authorization: Bearer &lt;token&gt;</code> when calling <code>POST /v1/sboms</code>.</p>
+    </div>
+    {{end}}
 
-  <form class="create" method="post" action="/tokens">
-    <input type="text" name="name" placeholder="Token name (e.g. ci-prod)" maxlength="80">
-    <button class="btn" type="submit">Create token</button>
-  </form>
+    <div class="card">
+      <h2 style="margin-top:0;font-size:1.1rem">API tokens</h2>
+      <p class="muted">For submitting SBOMs from CI.</p>
+      <form class="row" method="post" action="/tokens">
+        <input type="text" name="name" placeholder="Token name (e.g. ci-prod)" maxlength="80">
+        <button class="btn" type="submit">Create token</button>
+      </form>
 
-  <form class="create" method="post" action="/settings/min-severity">
-    <label class="muted" style="align-self:center">Minimum severity of interest (default filter):</label>
-    <select name="min_severity">
-      {{$cur := .MinSeverity}}
-      {{range .Severities}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}
-    </select>
-    <button class="btn" type="submit">Save</button>
-  </form>
-  <p class="muted">Unrated (<code>unknown</code>) findings are always shown, regardless of this setting.</p>
+      <table>
+        <thead><tr><th>Name</th><th>Created</th><th>Last used</th><th></th></tr></thead>
+        <tbody>
+          {{range .Tokens}}
+          <tr>
+            <td>{{.Name}}</td>
+            <td>{{.CreatedAt.Format "2006-01-02"}}</td>
+            <td>{{if .LastUsed}}{{.LastUsed.Format "2006-01-02"}}{{else}}<span class="muted">never</span>{{end}}</td>
+            <td><form class="inline" method="post" action="/tokens/{{.ID}}/revoke"><button class="btn danger" type="submit">Revoke</button></form></td>
+          </tr>
+          {{else}}
+          <tr><td colspan="4" class="muted">No tokens yet.</td></tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
 
-  <table>
-    <thead><tr><th>Name</th><th>Created</th><th>Last used</th><th></th></tr></thead>
-    <tbody>
-      {{range .Tokens}}
-      <tr>
-        <td>{{.Name}}</td>
-        <td>{{.CreatedAt.Format "2006-01-02"}}</td>
-        <td>{{if .LastUsed}}{{.LastUsed.Format "2006-01-02"}}{{else}}<span class="muted">never</span>{{end}}</td>
-        <td>
-          <form class="inline" method="post" action="/tokens/{{.ID}}/revoke">
-            <button class="btn danger" type="submit">Revoke</button>
-          </form>
-        </td>
-      </tr>
-      {{else}}
-      <tr><td colspan="4" class="muted">No tokens yet.</td></tr>
-      {{end}}
-    </tbody>
-  </table>
+    <div class="card">
+      <h2 style="margin-top:0;font-size:1.1rem">Severity threshold</h2>
+      <p class="muted">Default minimum severity for the read API. Unrated (<code>unknown</code>) findings are always shown.</p>
+      <form class="row" method="post" action="/settings/min-severity">
+        <select name="min_severity">
+          {{$cur := .MinSeverity}}
+          {{range .Severities}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}
+        </select>
+        <button class="btn secondary" type="submit">Save</button>
+      </form>
+    </div>
+
+    <div class="foot">VERSION {{if .Version}}{{.Version}}{{else}}DEV{{end}}</div>
+  </main>
 </body>
 </html>

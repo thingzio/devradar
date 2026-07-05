@@ -7,6 +7,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
@@ -45,6 +46,33 @@ func New(store *postgres.Store, blobs BlobStore, email drnet.Sender, opts Option
 	return &Server{store: store, blobs: blobs, email: email, opts: opts}
 }
 
+// Run is the entry point for the serve binary: it wires the store, blob store,
+// and email sender from the environment, then serves until ctx is cancelled.
+// cmd/devradar-serve is a thin shell around this.
+func Run(ctx context.Context, opts Options) error {
+	store, err := postgres.New(ctx, config.DatabaseURL(), postgres.DefaultPoolConfig())
+	if err != nil {
+		return fmt.Errorf("store: %w", err)
+	}
+	defer store.Close()
+
+	blobs, err := gcs.FromEnv(ctx)
+	if err != nil {
+		return fmt.Errorf("blob store: %w", err)
+	}
+	defer blobs.Close()
+
+	// Magic-link email sender. Without SEND_API_KEY the link is logged, not sent.
+	var email drnet.Sender
+	if key := config.SendAPIKey(); key != "" {
+		email = drnet.ResendSender{APIKey: key, From: config.EmailFrom()}
+	} else {
+		slog.Warn("SEND_API_KEY not set; magic-link URLs will be logged, not emailed")
+	}
+
+	return New(store, blobs, email, opts).Serve(ctx)
+}
+
 // Handler builds the routed, middleware-wrapped http.Handler.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -72,9 +100,9 @@ func (s *Server) Handler() http.Handler {
 	return recoverPanics(securityHeaders(mux))
 }
 
-// Run starts the HTTP server and blocks until ctx is cancelled, then shuts down
-// gracefully.
-func (s *Server) Run(ctx context.Context) error {
+// Serve starts the HTTP server and blocks until ctx is cancelled, then shuts
+// down gracefully.
+func (s *Server) Serve(ctx context.Context) error {
 	srv := &http.Server{
 		Addr:              ":" + config.GetEnv("PORT", "8080"),
 		Handler:           s.Handler(),
