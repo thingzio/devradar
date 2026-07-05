@@ -1,10 +1,12 @@
 // Command sbom-submit posts an SBOM file to a running devradar-serve instance.
-// It base64-encodes the file into the JSON body, avoiding the shell arg-length
-// limits you hit passing a large SBOM to curl directly. Development only.
+// It reads the file and base64-encodes it into the JSON body, avoiding the shell
+// ARG_MAX limit you hit passing a multi-MB SBOM to `curl -d` directly. This is
+// the simplest submission path for CI and local use alike.
 //
 // Usage:
 //
-//	export DR_TOKEN=dr_...            # from 'make seed'
+//	export DR_TOKEN=dr_...            # from 'make seed' (local) or the UI (prod)
+//	export DR_BASE_URL=https://devradar.thingz.io   # defaults to localhost:8080
 //	go run ./tools/sbom-submit <sbom-file> [image_ref@sha256:...]
 //
 // The optional second argument is an image_ref override, needed when the SBOM
