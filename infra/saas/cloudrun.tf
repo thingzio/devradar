@@ -160,8 +160,12 @@ resource "google_cloud_run_v2_job" "scan" {
 
         resources {
           limits = {
-            cpu    = "2000m"
-            memory = "2Gi"
+            cpu = "2000m"
+            # Both scanners load a full vuln DB into memory: Grype's stays
+            # resident while Trivy downloads + decompresses its own (~1GB+),
+            # so peak usage exceeds 2Gi and the job was OOM-killed. 4Gi covers
+            # both DBs plus the working set for a single SBOM scan.
+            memory = "4Gi"
           }
         }
 
