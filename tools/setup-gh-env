@@ -21,15 +21,13 @@ TF_DIR="infra/saas"
 command -v gh >/dev/null 2>&1 || { echo "error: gh CLI not found" >&2; exit 1; }
 command -v terraform >/dev/null 2>&1 || { echo "error: terraform not found" >&2; exit 1; }
 
-# WIF_PROVIDER and DEPLOYER_SA contain generated IDs → read from Terraform state.
-# REGION and PROJECT_ID are static platform constants (overridable via env) → no
-# dependency on a fresh `terraform output`, so this works against any applied state.
-REGION="${REGION:-us-west1}"
-PROJECT_ID="${PROJECT_ID:-thingzio}"
-
+# All four come from Terraform outputs — single source of truth, no hardcoded
+# defaults to drift from the infra config.
 echo "==> Reading Terraform outputs from ${TF_DIR}..."
 WIF_PROVIDER=$(terraform -chdir="$TF_DIR" output -raw wif_provider)
 DEPLOYER_SA=$(terraform -chdir="$TF_DIR" output -raw deployer_sa)
+REGION=$(terraform -chdir="$TF_DIR" output -raw region)
+PROJECT_ID=$(terraform -chdir="$TF_DIR" output -raw project_id)
 
 # Ensure the environment exists (idempotent). gh has no dedicated "create env"
 # command, so use the REST API; ignore the response body.
