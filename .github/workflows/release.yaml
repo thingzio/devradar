@@ -10,8 +10,16 @@ permissions:
   id-token: write   # Workload Identity Federation (keyless GCP auth)
 
 jobs:
+  # Re-qualify from scratch on the tagged commit — the release does not assume
+  # main was green. Same reusable flow the push/PR `test` workflow runs.
+  test:
+    uses: ./.github/workflows/test-on-call.yaml
+    permissions:
+      contents: read
+
   release:
     runs-on: ubuntu-latest
+    needs: test
     environment: saas
     steps:
       - uses: actions/checkout@v4

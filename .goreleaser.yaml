@@ -19,7 +19,6 @@ builds:
       - linux
     goarch:
       - amd64
-      - arm64
 
   - id: devradar-scan
     binary: devradar-scan
@@ -37,7 +36,6 @@ builds:
       - linux
     goarch:
       - amd64
-      - arm64
 
 release:
   github:

@@ -1,0 +1,80 @@
+name: test-on-call
+
+# Reusable qualify workflow: build, vet, lint, and the full test suite (incl.
+# Postgres integration + live scanner tests). Called by both the push/PR `test`
+# workflow and the tagged `release` workflow, so a release re-qualifies from
+# scratch rather than trusting that main was green.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: devradar
+          POSTGRES_USER: devradar
+          POSTGRES_PASSWORD: devradar
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U devradar"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read Go version
+        id: gover
+        run: echo "go=$(yq -r '.languages.go' .settings.yaml)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "${{ steps.gover.outputs.go }}"
+
+      # syft/grype/trivy so the scanner, converter, and canonicalizer live tests
+      # actually run in CI (they skip when the binaries are absent).
+      - name: Install scanners
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh  | sh -s -- -b /usr/local/bin
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test (unit + integration)
+        env:
+          DATABASE_URL: postgres://devradar:devradar@localhost:5432/devradar?sslmode=disable
+        run: go test -count=1 -race -covermode=atomic -coverprofile=cover.out ./...
+
+      - name: Coverage
+        run: go tool cover -func=cover.out | grep total
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read versions
+        id: v
+        run: |
+          echo "go=$(yq -r '.languages.go' .settings.yaml)" >> "$GITHUB_OUTPUT"
+          echo "golangci=$(yq -r '.linting.golangci_lint' .settings.yaml)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "${{ steps.v.outputs.go }}"
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: "${{ steps.v.outputs.golangci }}"
