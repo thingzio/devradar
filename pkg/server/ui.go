@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/thingzio/devradar/pkg/config"
+	"github.com/thingzio/devradar/pkg/data"
 	"github.com/thingzio/devradar/pkg/middleware"
 	"github.com/thingzio/devradar/pkg/oauth"
 	"github.com/thingzio/devradar/pkg/tenant"
@@ -67,6 +68,7 @@ func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
 	mux.Handle("GET /tokens", authed(http.HandlerFunc(s.handleTokensPage)))
 	mux.Handle("POST /tokens", authed(http.HandlerFunc(s.handleCreateToken)))
 	mux.Handle("POST /tokens/{id}/revoke", authed(http.HandlerFunc(s.handleRevokeToken)))
+	mux.Handle("POST /settings/min-severity", authed(http.HandlerFunc(s.handleSetMinSeverity)))
 }
 
 func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
@@ -136,10 +138,33 @@ func (s *Server) handleTokensPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	render(w, "tokens.html", map[string]any{
-		"Username": tn.Username,
-		"Tokens":   tokens,
-		"NewToken": r.URL.Query().Get("new"), // shown once after creation
+		"Username":    tn.Username,
+		"Tokens":      tokens,
+		"NewToken":    r.URL.Query().Get("new"), // shown once after creation
+		"MinSeverity": defaultStr(tn.MinSeverity, data.DefaultMinSeverity),
+		"Severities":  []string{"critical", "high", "medium", "low", "negligible"},
 	})
+}
+
+func (s *Server) handleSetMinSeverity(w http.ResponseWriter, r *http.Request) {
+	tn := middleware.TenantFromContext(r.Context())
+	sev := r.FormValue("min_severity")
+	if !data.ValidMinSeverity(sev) {
+		http.Error(w, "invalid min_severity", http.StatusBadRequest)
+		return
+	}
+	if err := tenant.SetMinSeverity(r.Context(), s.store.DB(), tn.ID, sev); err != nil {
+		http.Error(w, "failed to update setting", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/tokens", http.StatusSeeOther)
+}
+
+func defaultStr(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
 }
 
 func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {

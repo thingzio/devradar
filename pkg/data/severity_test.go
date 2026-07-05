@@ -1,0 +1,57 @@
+package data
+
+import (
+	"slices"
+	"testing"
+)
+
+func TestMeetsThreshold(t *testing.T) {
+	cases := []struct {
+		sev, min string
+		want     bool
+	}{
+		{SeverityCritical, SeverityMedium, true},
+		{SeverityHigh, SeverityMedium, true},
+		{SeverityMedium, SeverityMedium, true},
+		{SeverityLow, SeverityMedium, false},
+		{SeverityNegligible, SeverityMedium, false},
+		{SeverityUnknown, SeverityMedium, true},   // unknown always surfaces
+		{SeverityUnknown, SeverityCritical, true}, // even at the strictest threshold
+		{SeverityLow, SeverityLow, true},
+		{SeverityNegligible, SeverityNegligible, true},
+		{"garbage", SeverityCritical, true}, // unrecognized → surface, don't hide
+	}
+	for _, c := range cases {
+		if got := MeetsThreshold(c.sev, c.min); got != c.want {
+			t.Errorf("MeetsThreshold(%q,%q) = %v, want %v", c.sev, c.min, got, c.want)
+		}
+	}
+}
+
+func TestAllowedSeverities(t *testing.T) {
+	got := AllowedSeverities(SeverityHigh)
+	// high threshold → critical, high, and always unknown; not medium/low/neg.
+	for _, want := range []string{SeverityCritical, SeverityHigh, SeverityUnknown} {
+		if !slices.Contains(got, want) {
+			t.Errorf("AllowedSeverities(high) missing %q: %v", want, got)
+		}
+	}
+	for _, notWant := range []string{SeverityMedium, SeverityLow, SeverityNegligible} {
+		if slices.Contains(got, notWant) {
+			t.Errorf("AllowedSeverities(high) should not contain %q: %v", notWant, got)
+		}
+	}
+}
+
+func TestValidMinSeverity(t *testing.T) {
+	for _, ok := range []string{"critical", "high", "medium", "low", "negligible"} {
+		if !ValidMinSeverity(ok) {
+			t.Errorf("ValidMinSeverity(%q) = false, want true", ok)
+		}
+	}
+	for _, bad := range []string{"unknown", "", "HIGH", "nope"} {
+		if ValidMinSeverity(bad) {
+			t.Errorf("ValidMinSeverity(%q) = true, want false", bad)
+		}
+	}
+}

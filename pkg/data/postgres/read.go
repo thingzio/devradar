@@ -4,29 +4,48 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/lib/pq"
+	"github.com/thingzio/devradar/pkg/data"
 )
 
-// Image is a tenant-facing summary of one tracked image (one SBOM), with its
-// latest finding counts across scanners.
-type Image struct {
-	SBOMID       string
-	ImageRef     string
-	Digest       string
-	Format       string
-	SubmittedAt  time.Time
-	FindingCount int
-	Critical     int
-	High         int
+// SeverityCounts is the full per-severity breakdown for an image. All levels are
+// always returned; callers/UI decide what to emphasize. Relevant is the count at
+// or above a supplied threshold (unknown always included).
+type SeverityCounts struct {
+	Critical   int `json:"critical"`
+	High       int `json:"high"`
+	Medium     int `json:"medium"`
+	Low        int `json:"low"`
+	Negligible int `json:"negligible"`
+	Unknown    int `json:"unknown"`
+	Total      int `json:"total"`
+	Relevant   int `json:"relevant"` // >= min_severity (or unknown)
 }
 
-// ListImages returns a tenant's active images with current finding counts.
-// Tenant-scoped: the WHERE tenant_id predicate is the isolation boundary.
-func (s *Store) ListImages(ctx context.Context, tenantID string) ([]Image, error) {
+// Image is a tenant-facing summary of one tracked image (one SBOM).
+type Image struct {
+	SBOMID      string         `json:"sbom_id"`
+	ImageRef    string         `json:"image_ref"`
+	Digest      string         `json:"digest"`
+	Format      string         `json:"format"`
+	SubmittedAt time.Time      `json:"submitted_at"`
+	Counts      SeverityCounts `json:"counts"`
+}
+
+// ListImages returns a tenant's active images with the full severity breakdown.
+// minSeverity sets which levels count toward Counts.Relevant (unknown always
+// counts); it does not hide any level from the breakdown. Tenant-scoped.
+func (s *Store) ListImages(ctx context.Context, tenantID, minSeverity string) ([]Image, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT sb.id, sb.image_ref, sb.digest, sb.format, sb.submitted_at,
-		       COUNT(f.finding_id) AS findings,
-		       COUNT(*) FILTER (WHERE f.severity = 'critical') AS crit,
-		       COUNT(*) FILTER (WHERE f.severity = 'high')     AS high
+		       COUNT(*) FILTER (WHERE f.severity = 'critical')   AS crit,
+		       COUNT(*) FILTER (WHERE f.severity = 'high')       AS high,
+		       COUNT(*) FILTER (WHERE f.severity = 'medium')     AS med,
+		       COUNT(*) FILTER (WHERE f.severity = 'low')        AS low,
+		       COUNT(*) FILTER (WHERE f.severity = 'negligible') AS neg,
+		       COUNT(*) FILTER (WHERE f.severity = 'unknown')    AS unk,
+		       COUNT(f.finding_id)                               AS total
 		FROM devradar_sbom sb
 		LEFT JOIN devradar_finding f ON f.sbom_id = sb.id
 		WHERE sb.tenant_id = $1 AND sb.status = 'active'
@@ -40,38 +59,61 @@ func (s *Store) ListImages(ctx context.Context, tenantID string) ([]Image, error
 	var out []Image
 	for rows.Next() {
 		var im Image
+		var c SeverityCounts
 		if err := rows.Scan(&im.SBOMID, &im.ImageRef, &im.Digest, &im.Format, &im.SubmittedAt,
-			&im.FindingCount, &im.Critical, &im.High); err != nil {
+			&c.Critical, &c.High, &c.Medium, &c.Low, &c.Negligible, &c.Unknown, &c.Total); err != nil {
 			return nil, fmt.Errorf("scan image: %w", err)
 		}
+		c.Relevant = relevantCount(c, minSeverity)
+		im.Counts = c
 		out = append(out, im)
 	}
 	return out, rows.Err()
 }
 
-// Finding is a tenant-facing current finding row.
-type Finding struct {
-	Scanner  string
-	Exposure string
-	Package  string
-	Version  string
-	Severity string
-	Score    float32
-	IsFixed  bool
+// relevantCount sums the per-severity counts that meet the threshold (unknown
+// always included), using the shared ordering so it can't drift from the filter.
+func relevantCount(c SeverityCounts, min string) int {
+	n := c.Unknown
+	for sev, cnt := range map[string]int{
+		data.SeverityCritical:   c.Critical,
+		data.SeverityHigh:       c.High,
+		data.SeverityMedium:     c.Medium,
+		data.SeverityLow:        c.Low,
+		data.SeverityNegligible: c.Negligible,
+	} {
+		if data.MeetsThreshold(sev, min) {
+			n += cnt
+		}
+	}
+	return n
 }
 
-// FindingsBySBOM returns current findings for one SBOM, tenant-scoped (the SBOM
-// must belong to the tenant). Returns ErrNotFound if the SBOM isn't theirs.
-func (s *Store) FindingsBySBOM(ctx context.Context, tenantID, sbomID string) ([]Finding, error) {
+// Finding is a tenant-facing current finding row.
+type Finding struct {
+	Scanner  string  `json:"scanner"`
+	Exposure string  `json:"exposure"`
+	Package  string  `json:"package"`
+	Version  string  `json:"version"`
+	Severity string  `json:"severity"`
+	Score    float32 `json:"score"`
+	IsFixed  bool    `json:"is_fixed"`
+}
+
+// FindingsBySBOM returns current findings for one SBOM at or above minSeverity
+// (unknown always included). Tenant-scoped; ErrNotFound if not owned.
+func (s *Store) FindingsBySBOM(ctx context.Context, tenantID, sbomID, minSeverity string) ([]Finding, error) {
 	if err := s.assertSBOMOwner(ctx, tenantID, sbomID); err != nil {
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT scanner, exposure, package, version, severity, score, is_fixed
-		FROM devradar_finding WHERE sbom_id = $1
+		FROM devradar_finding
+		WHERE sbom_id = $1 AND severity = ANY($2)
 		ORDER BY CASE severity
 			WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2
-			WHEN 'low' THEN 3 WHEN 'negligible' THEN 4 ELSE 5 END, exposure`, sbomID)
+			WHEN 'low' THEN 3 WHEN 'negligible' THEN 4 ELSE 5 END, exposure`,
+		sbomID, pq.Array(data.AllowedSeverities(minSeverity)))
 	if err != nil {
 		return nil, fmt.Errorf("findings: %w", err)
 	}
@@ -90,18 +132,19 @@ func (s *Store) FindingsBySBOM(ctx context.Context, tenantID, sbomID string) ([]
 
 // Event is a tenant-facing change-log row.
 type Event struct {
-	Scanner    string
-	EventType  string
-	Exposure   string
-	Package    string
-	Severity   string
-	Score      float32
-	Cause      string
-	OccurredAt time.Time
+	Scanner    string    `json:"scanner"`
+	EventType  string    `json:"event_type"`
+	Exposure   string    `json:"exposure"`
+	Package    string    `json:"package"`
+	Severity   string    `json:"severity"`
+	Score      float32   `json:"score"`
+	Cause      string    `json:"cause"`
+	OccurredAt time.Time `json:"occurred_at"`
 }
 
-// EventsBySBOM returns the change history for one SBOM, newest first, tenant-scoped.
-func (s *Store) EventsBySBOM(ctx context.Context, tenantID, sbomID string, limit int) ([]Event, error) {
+// EventsBySBOM returns change history for one SBOM at or above minSeverity
+// (unknown always included), newest first. Tenant-scoped.
+func (s *Store) EventsBySBOM(ctx context.Context, tenantID, sbomID, minSeverity string, limit int) ([]Event, error) {
 	if err := s.assertSBOMOwner(ctx, tenantID, sbomID); err != nil {
 		return nil, err
 	}
@@ -110,8 +153,10 @@ func (s *Store) EventsBySBOM(ctx context.Context, tenantID, sbomID string, limit
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT scanner, event_type, exposure, package, severity, score, cause, occurred_at
-		FROM devradar_finding_event WHERE sbom_id = $1
-		ORDER BY occurred_at DESC LIMIT $2`, sbomID, limit)
+		FROM devradar_finding_event
+		WHERE sbom_id = $1 AND severity = ANY($2)
+		ORDER BY occurred_at DESC LIMIT $3`,
+		sbomID, pq.Array(data.AllowedSeverities(minSeverity)), limit)
 	if err != nil {
 		return nil, fmt.Errorf("events: %w", err)
 	}
@@ -130,7 +175,7 @@ func (s *Store) EventsBySBOM(ctx context.Context, tenantID, sbomID string, limit
 }
 
 // ErrNotFound is returned when a tenant-scoped resource doesn't exist or isn't
-// owned by the tenant (the two are deliberately indistinguishable to callers).
+// owned by the tenant (indistinguishable by design).
 var ErrNotFound = errNotFound{}
 
 type errNotFound struct{}

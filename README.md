@@ -297,13 +297,25 @@ curl -s -X POST http://localhost:8080/v1/sboms \
 ```bash
 make scan                            # runs grype + trivy over all active SBOMs once
 
-# list tracked images with finding counts
+# list tracked images with the full severity breakdown
 curl -s http://localhost:8080/v1/images -H "Authorization: Bearer $DR_TOKEN"
 
 # current findings and change history for one SBOM (use sbom_id from step 4)
 curl -s http://localhost:8080/v1/sboms/<sbom_id>/findings -H "Authorization: Bearer $DR_TOKEN"
 curl -s http://localhost:8080/v1/sboms/<sbom_id>/events   -H "Authorization: Bearer $DR_TOKEN"
 ```
+
+**Severity threshold.** Every read endpoint filters by a minimum severity —
+`medium` by default, set per tenant (in the UI, or `min_severity` on the tenant
+row). Override per request, independently on each endpoint, with `?min_severity=`:
+
+```bash
+curl -s "http://localhost:8080/v1/sboms/<sbom_id>/findings?min_severity=critical" -H "Authorization: Bearer $DR_TOKEN"
+```
+
+`/v1/images` always returns the *full* per-severity breakdown plus a `relevant`
+count at the threshold. Unrated (`unknown`) findings are always included,
+regardless of the threshold — an unrated CVE could be anything.
 
 Re-run `make scan` after the vulnerability DB updates (or a scanner upgrade) to
 see change events accumulate — an unchanged SBOM against an unchanged DB produces

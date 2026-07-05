@@ -29,6 +29,7 @@ type Tenant struct {
 	AvatarURL     string
 	Plan          string
 	Status        string
+	MinSeverity   string // minimum severity of interest for the read API/alerts
 	TOSAcceptedAt *time.Time
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
@@ -43,7 +44,7 @@ func scanTenant(s scanner) (*Tenant, error) {
 	var t Tenant
 	var tos sql.NullTime
 	err := s.Scan(&t.ID, &t.GitHubID, &t.Username, &t.Email, &t.AvatarURL,
-		&t.Plan, &t.Status, &tos, &t.CreatedAt, &t.UpdatedAt)
+		&t.Plan, &t.Status, &t.MinSeverity, &tos, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +55,7 @@ func scanTenant(s scanner) (*Tenant, error) {
 }
 
 const tenantColumns = `id, github_id, username, COALESCE(email,''), COALESCE(avatar_url,''),
-	plan, status, tos_accepted_at, created_at, updated_at`
+	plan, status, min_severity, tos_accepted_at, created_at, updated_at`
 
 // UpsertTenant creates or updates a tenant from a GitHub identity (called on
 // OAuth login), keyed on github_id. Returns the current row.
@@ -87,6 +88,17 @@ func GetTenant(ctx context.Context, db *sql.DB, id string) (*Tenant, error) {
 		return nil, fmt.Errorf("get tenant: %w", err)
 	}
 	return t, nil
+}
+
+// SetMinSeverity updates a tenant's minimum severity of interest. The caller
+// validates minSeverity (data.ValidMinSeverity) before calling.
+func SetMinSeverity(ctx context.Context, db *sql.DB, tenantID, minSeverity string) error {
+	if _, err := db.ExecContext(ctx,
+		`UPDATE devradar_tenant SET min_severity = $2, updated_at = now() WHERE id = $1`,
+		tenantID, minSeverity); err != nil {
+		return fmt.Errorf("set min_severity: %w", err)
+	}
+	return nil
 }
 
 // ErrNotFound is returned when a tenant does not exist.

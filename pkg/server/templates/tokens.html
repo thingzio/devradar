@@ -40,6 +40,16 @@
     <button class="btn" type="submit">Create token</button>
   </form>
 
+  <form class="create" method="post" action="/settings/min-severity">
+    <label class="muted" style="align-self:center">Minimum severity of interest (default filter):</label>
+    <select name="min_severity">
+      {{$cur := .MinSeverity}}
+      {{range .Severities}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}
+    </select>
+    <button class="btn" type="submit">Save</button>
+  </form>
+  <p class="muted">Unrated (<code>unknown</code>) findings are always shown, regardless of this setting.</p>
+
   <table>
     <thead><tr><th>Name</th><th>Created</th><th>Last used</th><th></th></tr></thead>
     <tbody>

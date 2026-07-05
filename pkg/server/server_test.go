@@ -173,3 +173,67 @@ func TestRead_TenantIsolation(t *testing.T) {
 		t.Errorf("cross-tenant read = %d, want 404", rec2.Code)
 	}
 }
+
+// TestFindings_SeverityThreshold seeds findings at each level and checks that
+// ?min_severity filters correctly, that unknown is always included, and that an
+// invalid value is rejected.
+func TestFindings_SeverityThreshold(t *testing.T) {
+	srv, st := testServer(t)
+	tenantID, tok := seedTenantToken(t, st)
+	h := srv.Handler()
+	ctx := context.Background()
+
+	// Seed an SBOM row + one finding per severity directly.
+	sbomID := "thr-" + tenantID
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_sbom (id, tenant_id, image_ref, digest, format, object_path)
+		VALUES ($1,$2,'img','sha256:x','cyclonedx','gs://x')`, sbomID, tenantID); err != nil {
+		t.Fatalf("seed sbom: %v", err)
+	}
+	for _, sev := range []string{"critical", "high", "medium", "low", "negligible", "unknown"} {
+		if _, err := st.DB().ExecContext(ctx, `
+			INSERT INTO devradar_finding (sbom_id, scanner, finding_id, exposure, package, version, severity, score, is_fixed)
+			VALUES ($1,'grype',$2,$3,'pkg','1.0',$4,1.0,false)`,
+			sbomID, "f-"+sev, "CVE-"+sev, sev); err != nil {
+			t.Fatalf("seed finding %s: %v", sev, err)
+		}
+	}
+
+	count := func(query string) int {
+		req := httptest.NewRequest(http.MethodGet, "/v1/sboms/"+sbomID+"/findings"+query, nil)
+		req.Header.Set("Authorization", "Bearer "+tok)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("findings%s: status %d (%s)", query, rec.Code, rec.Body.String())
+		}
+		var body struct {
+			Findings []struct {
+				Severity string `json:"severity"`
+			} `json:"findings"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		return len(body.Findings)
+	}
+
+	// Default (medium): critical, high, medium, + unknown = 4.
+	if n := count(""); n != 4 {
+		t.Errorf("default threshold: %d findings, want 4 (crit/high/med/unknown)", n)
+	}
+	// critical: critical + unknown = 2.
+	if n := count("?min_severity=critical"); n != 2 {
+		t.Errorf("critical threshold: %d findings, want 2 (crit/unknown)", n)
+	}
+	// negligible: everything = 6.
+	if n := count("?min_severity=negligible"); n != 6 {
+		t.Errorf("negligible threshold: %d findings, want 6 (all)", n)
+	}
+	// invalid → 400.
+	req := httptest.NewRequest(http.MethodGet, "/v1/sboms/"+sbomID+"/findings?min_severity=nope", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("invalid min_severity: status %d, want 400", rec.Code)
+	}
+}

@@ -639,6 +639,7 @@ CREATE TABLE devradar_tenant (
     avatar_url    TEXT,
     plan          TEXT NOT NULL DEFAULT 'free',
     status        TEXT NOT NULL DEFAULT 'active',      -- active | suspended
+    min_severity  TEXT NOT NULL DEFAULT 'medium',      -- read-API default severity filter
     tos_accepted_at TIMESTAMPTZ,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -797,6 +798,8 @@ The read endpoints (tenant-scoped, `WHERE tenant_id = $1`):
 | `GET` | `/v1/images/{ref}/timeline` | change events for an image ref across digests |
 | `GET` | `/v1/sboms/{id}/findings` | current findings for one SBOM |
 | `GET` | `/v1/sboms/{id}/events` | change events for one SBOM |
+
+**Severity threshold (a view/policy knob, not a write filter).** Findings are always *stored* at every severity; which ones a read *returns* is a tenant policy. Each tenant has a `min_severity` (default `medium`, in `devradar_tenant`). Every read endpoint filters at or above it, and accepts an independent `?min_severity=` per-request override — so `/findings` and `/events` can use different thresholds in the same session. `/v1/images` always returns the **full** per-severity breakdown (critical…negligible + unknown + total) plus a `relevant` count at the threshold, so the UI can render everything without re-querying. **`unknown` is always included**, at any threshold — an unrated CVE could be anything, so it is never hidden. The ordering lives in one place (`data.SeverityRank` / `AllowedSeverities` / `MeetsThreshold`) so the SQL filter and the `relevant` count can't drift. `unknown` is not a valid *threshold* value (it's a floor of "everything ranked", not a rank).
 
 The core query — recent actionable changes for a tenant — is the same one a future alerter will use; in v1 it backs the "what changed" view. `cause IN ('image','db')` filters out tooling-driven deltas so a grype/trivy upgrade never shows up as a real change (and, later, never pages anyone):
 
