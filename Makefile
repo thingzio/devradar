@@ -127,6 +127,18 @@ release: ## Runs a snapshot release (goreleaser: serve via ko, scan via Dockerfi
 scan-image: ## Builds the scan-job container locally (scanners baked in)
 	docker build -f Dockerfile.scan -t devradar-scan:local .
 
+.PHONY: bump-major
+bump-major: ## Tags + pushes the next major version (v1.2.3 -> v2.0.0), triggering release
+	tools/bump major
+
+.PHONY: bump-minor
+bump-minor: ## Tags + pushes the next minor version (v1.2.3 -> v1.3.0), triggering release
+	tools/bump minor
+
+.PHONY: bump-patch
+bump-patch: ## Tags + pushes the next patch version (v1.2.3 -> v1.2.4), triggering release
+	tools/bump patch
+
 # =============================================================================
 # Infrastructure (Terraform) — see infra/saas
 # =============================================================================

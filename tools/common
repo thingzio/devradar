@@ -1,0 +1,28 @@
+#!/bin/bash
+# Shared helpers for tools/ scripts (source, don't execute). Mirrors the
+# DevPulse/DevTrace convention.
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+err() {
+	printf "${RED}[ERR]${NC} %s\n" "$1" >&2
+	exit 1
+}
+
+msg() {
+	printf "${GREEN}[MSG]${NC} %s\n" "$1" >&2
+}
+
+has_tools() {
+	local tools=("$@")
+	for tool in "${tools[@]}"; do
+		if ! command -v "$tool" &>/dev/null; then
+			err "Required tool ($tool) is not installed."
+		fi
+	done
+}

@@ -146,11 +146,15 @@ Once the deploy is confirmed, set `deletion_protection = true` on both
 
 ### Ship new application code
 
-Tag a semver release — that's the whole flow:
+Bump the semver tag — that's the whole flow (the tag triggers the release
+workflow):
 
 ```bash
-git tag vX.Y.Z && git push origin vX.Y.Z
+make bump-patch     # v0.1.0 -> v0.1.1   (also: bump-minor, bump-major)
 ```
+
+`bump` refuses if the tree is dirty or has unpushed commits, then creates a
+signed tag and pushes it. Equivalent by hand: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 
 CI builds + pushes both images tagged `vX.Y.Z` and updates the running service +
 job to that tag. **DB migrations run automatically** on startup (the advisory-lock
