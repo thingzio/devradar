@@ -10,18 +10,20 @@ import (
 )
 
 // SeverityCounts is the per-severity breakdown for an image. Levels below the
-// requested threshold are zeroed (unknown is always kept), so the visible
-// buckets sum to Relevant. Total is the overall finding count regardless of
-// threshold, so callers can still see that lower-severity findings exist.
+// requested threshold are zeroed (unknown is always kept). The per-severity
+// buckets use omitempty, so only severities that are at/above the threshold AND
+// non-zero appear in the response — a level with nothing to show is dropped
+// rather than rendered as 0. Total (all findings) and Relevant (sum of visible
+// buckets) are always present, including when Relevant is 0.
 type SeverityCounts struct {
-	Critical   int `json:"critical"`
-	High       int `json:"high"`
-	Medium     int `json:"medium"`
-	Low        int `json:"low"`
-	Negligible int `json:"negligible"`
-	Unknown    int `json:"unknown"`
-	Total      int `json:"total"`    // all findings, regardless of threshold
-	Relevant   int `json:"relevant"` // >= min_severity (or unknown) — sums the visible buckets
+	Critical   int `json:"critical,omitempty"`
+	High       int `json:"high,omitempty"`
+	Medium     int `json:"medium,omitempty"`
+	Low        int `json:"low,omitempty"`
+	Negligible int `json:"negligible,omitempty"`
+	Unknown    int `json:"unknown,omitempty"`
+	Total      int `json:"total"`
+	Relevant   int `json:"relevant"`
 }
 
 // Image is a tenant-facing summary of one tracked image (one SBOM).

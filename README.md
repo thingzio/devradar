@@ -315,10 +315,11 @@ curl -s "http://localhost:8080/v1/sboms/<sbom_id>/findings?min_severity=critical
 
 `/v1/images` always lists every tracked image (the list is an inventory —
 images never disappear). The threshold trims each image's `counts` breakdown to
-levels at or above it (`relevant` sums the visible buckets); `total` still
-reflects *all* findings, so you can tell lower-severity findings exist. Unrated
-(`unknown`) findings are always kept, regardless of the threshold — an unrated
-CVE could be anything.
+levels at or above it — sub-threshold buckets are omitted from the response
+rather than shown as `0`. `relevant` (sum of the shown buckets) and `total`
+(*all* findings) are always present, so you can tell lower-severity findings
+exist. Unrated (`unknown`) findings are always kept, regardless of the
+threshold — an unrated CVE could be anything.
 
 Re-run `make scan` after the vulnerability DB updates (or a scanner upgrade) to
 see change events accumulate — an unchanged SBOM against an unchanged DB produces
