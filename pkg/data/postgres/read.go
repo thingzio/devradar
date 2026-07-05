@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -239,6 +240,77 @@ func (s *Store) ImageTimeline(ctx context.Context, tenantID, imageRef, minSeveri
 		out = append(out, t)
 	}
 	return out, rows.Err()
+}
+
+// SBOMDetail is a tenant-facing view of one SBOM's metadata.
+type SBOMDetail struct {
+	SBOMID      string         `json:"sbom_id"`
+	ImageRef    string         `json:"image_ref"`
+	Digest      string         `json:"digest"`
+	Format      string         `json:"format"`
+	SpecVersion string         `json:"spec_version,omitempty"`
+	Tool        string         `json:"tool,omitempty"`
+	ToolVersion string         `json:"tool_version,omitempty"`
+	Status      string         `json:"status"`
+	SubmittedAt time.Time      `json:"submitted_at"`
+	GeneratedAt *time.Time     `json:"generated_at,omitempty"`
+	Counts      SeverityCounts `json:"counts"`
+}
+
+// GetSBOM returns one SBOM's metadata + full severity breakdown, tenant-scoped.
+// minSeverity trims the breakdown as in ListImages. ErrNotFound if not owned.
+func (s *Store) GetSBOM(ctx context.Context, tenantID, sbomID, minSeverity string) (*SBOMDetail, error) {
+	var d SBOMDetail
+	var c SeverityCounts
+	var tool, toolVer, spec sql.NullString
+	var gen sql.NullTime
+	err := s.db.QueryRowContext(ctx, `
+		SELECT sb.id, sb.image_ref, sb.digest, sb.format, sb.spec_version, sb.tool, sb.tool_version,
+		       sb.status, sb.submitted_at, sb.generated_at,
+		       COUNT(*) FILTER (WHERE f.severity='critical'),
+		       COUNT(*) FILTER (WHERE f.severity='high'),
+		       COUNT(*) FILTER (WHERE f.severity='medium'),
+		       COUNT(*) FILTER (WHERE f.severity='low'),
+		       COUNT(*) FILTER (WHERE f.severity='negligible'),
+		       COUNT(*) FILTER (WHERE f.severity='unknown'),
+		       COUNT(f.finding_id)
+		FROM devradar_sbom sb
+		LEFT JOIN devradar_finding f ON f.sbom_id = sb.id
+		WHERE sb.id = $1 AND sb.tenant_id = $2
+		GROUP BY sb.id`, sbomID, tenantID).Scan(
+		&d.SBOMID, &d.ImageRef, &d.Digest, &d.Format, &spec, &tool, &toolVer,
+		&d.Status, &d.SubmittedAt, &gen,
+		&c.Critical, &c.High, &c.Medium, &c.Low, &c.Negligible, &c.Unknown, &c.Total)
+	if err == sql.ErrNoRows {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get sbom: %w", err)
+	}
+	d.SpecVersion, d.Tool, d.ToolVersion = spec.String, tool.String, toolVer.String
+	if gen.Valid {
+		d.GeneratedAt = &gen.Time
+	}
+	d.Counts = applyThreshold(c, minSeverity)
+	return &d, nil
+}
+
+// ArchiveSBOM marks a tenant's SBOM archived: it drops out of the scan set
+// (ListActiveSBOMs) and the images list, and stops accruing findings. Findings
+// and event history are retained. Idempotent. ErrNotFound if not owned.
+func (s *Store) ArchiveSBOM(ctx context.Context, tenantID, sbomID string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE devradar_sbom SET status='archived'
+		 WHERE id=$1 AND tenant_id=$2 AND status<>'archived'`, sbomID, tenantID)
+	if err != nil {
+		return fmt.Errorf("archive sbom: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		// Either not owned/absent, or already archived. Distinguish so a repeat
+		// archive is idempotent (200) but an unknown id is 404.
+		return s.assertSBOMOwner(ctx, tenantID, sbomID)
+	}
+	return nil
 }
 
 // ErrNotFound is returned when a tenant-scoped resource doesn't exist or isn't

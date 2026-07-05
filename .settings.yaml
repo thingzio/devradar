@@ -19,6 +19,7 @@ linting:
 scanners:
   grype: 'v0.115.0'
   trivy: 'v0.72.0'
+  syft: 'v1.46.0'   # SPDX -> CycloneDX canonicalization in the scan job
 
 # Quality thresholds
 quality:

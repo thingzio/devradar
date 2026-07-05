@@ -330,13 +330,22 @@ make scan                            # runs grype + trivy over all active SBOMs 
 # list tracked images with their severity breakdown
 curl -s http://localhost:8080/v1/images -H "Authorization: Bearer $DR_TOKEN"
 
-# current findings and change history for one SBOM (use sbom_id from step 4)
+# one SBOM's metadata + severity breakdown (use sbom_id from step 4)
+curl -s http://localhost:8080/v1/sboms/<sbom_id>          -H "Authorization: Bearer $DR_TOKEN"
+
+# current findings and change history for one SBOM
 curl -s http://localhost:8080/v1/sboms/<sbom_id>/findings -H "Authorization: Bearer $DR_TOKEN"
 curl -s http://localhost:8080/v1/sboms/<sbom_id>/events   -H "Authorization: Bearer $DR_TOKEN"
 
 # change history for an image ACROSS digests (ref is a query param — refs have slashes)
 curl -s "http://localhost:8080/v1/images/timeline?ref=alpine" -H "Authorization: Bearer $DR_TOKEN"
+
+# stop tracking an image (archive — drops from scans + images; history kept)
+curl -s -X DELETE http://localhost:8080/v1/sboms/<sbom_id> -H "Authorization: Bearer $DR_TOKEN"
 ```
+
+SBOMs may also be submitted **gzip-compressed** (base64 the gzip bytes); the
+server detects and decompresses them, with a decompression-bomb guard.
 
 **Severity threshold.** Every read endpoint filters by a minimum severity —
 `medium` by default, set per tenant (in the UI, or `min_severity` on the tenant

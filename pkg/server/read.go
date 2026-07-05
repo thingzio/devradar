@@ -81,6 +81,41 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"image_ref": ref, "min_severity": min, "timeline": events})
 }
 
+// handleGetSBOM returns one SBOM's metadata + severity breakdown.
+func (s *Server) handleGetSBOM(w http.ResponseWriter, r *http.Request) {
+	tn := middleware.TenantFromContext(r.Context())
+	if tn == nil {
+		writeError(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+	min, ok := minSeverity(r, tn)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid min_severity")
+		return
+	}
+	sb, err := s.store.GetSBOM(r.Context(), tn.ID, r.PathValue("id"), min)
+	if err != nil {
+		writeReadErr(w, err, "failed to load sbom")
+		return
+	}
+	writeJSON(w, http.StatusOK, sb)
+}
+
+// handleArchiveSBOM stops tracking an SBOM (status='archived'): it drops from
+// the scan set and the images list; findings/events are retained. Idempotent.
+func (s *Server) handleArchiveSBOM(w http.ResponseWriter, r *http.Request) {
+	tn := middleware.TenantFromContext(r.Context())
+	if tn == nil {
+		writeError(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+	if err := s.store.ArchiveSBOM(r.Context(), tn.ID, r.PathValue("id")); err != nil {
+		writeReadErr(w, err, "failed to archive sbom")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // handleFindings returns current findings for one of the tenant's SBOMs,
 // filtered to ?min_severity (or the tenant default); unknown always included.
 func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {

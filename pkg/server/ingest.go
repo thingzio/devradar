@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -16,8 +18,30 @@ import (
 	"github.com/thingzio/devradar/pkg/sbom"
 )
 
-// maxSBOMBytes caps the decoded SBOM size (untrusted input).
+// maxSBOMBytes caps the decoded (and decompressed) SBOM size — untrusted input.
 const maxSBOMBytes = 20 << 20 // 20 MiB
+
+// maybeGunzip returns b unchanged unless it starts with the gzip magic bytes, in
+// which case it decompresses through a reader bounded to limit+1 so a
+// decompression bomb is rejected rather than exhausting memory.
+func maybeGunzip(b []byte, limit int) ([]byte, error) {
+	if len(b) < 2 || b[0] != 0x1f || b[1] != 0x8b {
+		return b, nil // not gzip
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(b))
+	if err != nil {
+		return nil, fmt.Errorf("sbom gzip is invalid")
+	}
+	defer zr.Close()
+	out, err := io.ReadAll(io.LimitReader(zr, int64(limit)+1))
+	if err != nil {
+		return nil, fmt.Errorf("sbom gzip is corrupt")
+	}
+	if len(out) > limit {
+		return nil, fmt.Errorf("sbom exceeds size limit after decompression")
+	}
+	return out, nil
+}
 
 // submitRequest is the POST /v1/sboms body. Only `sbom` is required; the rest
 // are overrides for when the SBOM's self-reporting is weak.
@@ -61,13 +85,24 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, err := base64.StdEncoding.DecodeString(req.SBOM)
+	decoded, err := base64.StdEncoding.DecodeString(req.SBOM)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "sbom is not valid base64")
 		return
 	}
+	// Accept gzip-compressed SBOMs, but decompress through a bounded reader so a
+	// small compressed payload can't expand into a memory-exhausting bomb.
+	raw, err := maybeGunzip(decoded, maxSBOMBytes)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if len(raw) > maxSBOMBytes {
 		writeError(w, http.StatusRequestEntityTooLarge, "sbom exceeds size limit")
+		return
+	}
+	if !json.Valid(raw) {
+		writeError(w, http.StatusBadRequest, "sbom is not valid JSON (expected CycloneDX or SPDX)")
 		return
 	}
 

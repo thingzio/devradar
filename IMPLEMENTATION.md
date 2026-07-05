@@ -90,7 +90,7 @@ Because scanning is not format-neutral, every SBOM is converted to **CycloneDX**
 - **Convert in the scan job, not at ingest.** Ingest stays thin and only *extracts* (digest/timestamp, proven to work on raw SPDX with no conversion). Conversion — potentially slow, and via a tool Syft flags experimental — runs in the retriable batch, where a failure is a recorded `devradar_scan_failure`, never a rejected submission.
 - **Store original bytes + canonical form.** The tenant's original artifact is what's content-addressed and audited (`devradar_sbom.id = sha256(tenant_id + raw)`, per-tenant); the canonical CDX is a derived scanning input.
 - **Record the converter version** (`Canonicalizer.Version()`) alongside `db_version` on each scan, for the same reproducibility reason.
-- **Backend is a seam, not yet chosen.** `pkg/sbom.Canonicalizer` is an interface. Candidates: shell out to `syft convert` (spike-proven, but experimental) or the CycloneDX/SPDX Go libraries in-process (needs its own fidelity check). A `passthrough` implementation (CycloneDX-only) ships first so the pipeline runs end-to-end on CDX before the SPDX backend lands.
+- **Backend: `syft convert` (shelled out), behind a seam.** `pkg/sbom.Canonicalizer` is an interface; the v1 implementation (`SyftCanonicalizer`) shells out to the pinned `syft convert` binary — spike-proven lossless (OS metadata, package set, digest all survive). CycloneDX input is validated and passed through; SPDX is converted. If `syft` isn't on PATH the scan job falls back to `passthrough` (CycloneDX-only) and logs a warning. `Version()` reports `syft-<ver>`, recorded per scan for reproducibility.
 
 ```go
 // pkg/sbom/canonicalize.go
@@ -402,16 +402,18 @@ Read endpoints (session or token auth):
 |---|---|---|
 | `GET`  | `/v1/images` | List the tenant's tracked images (latest state per digest). |
 | `GET`  | `/v1/images/timeline?ref=<image_ref>` | Event history for an image ref across digests. `ref` is a query param, not a path segment (image refs contain slashes). |
+| `GET`  | `/v1/sboms/{id}` | One SBOM's metadata + severity breakdown. |
+| `DELETE` | `/v1/sboms/{id}` | Archive (stop tracking) an SBOM — drops from scan set + images; findings/events retained. Idempotent. |
 | `GET`  | `/v1/sboms/{id}/findings` | Current findings for one SBOM. |
 | `GET`  | `/v1/sboms/{id}/events` | Change events for one SBOM. |
 
 ### Untrusted-input handling
 
-The SBOM is attacker-controllable. The handler enforces, before any parsing:
+The SBOM is attacker-controllable. The handler enforces, before storing:
 
-- **Size cap** on the request body (e.g. 20 MB) via `http.MaxBytesReader`.
-- **Decompression cap** if the body is gzipped — bounded reader on the decompressed stream to prevent decompression bombs.
-- **Format detection** — must be recognizable CycloneDX or SPDX; reject otherwise (`ErrUnknownFormat`).
+- **Size cap** — the request body is read through a bounded reader sized to the base64-inflated limit; the decoded SBOM is re-checked against `maxSBOMBytes` (20 MiB).
+- **Decompression-bomb guard** — a gzip-magic-byte-prefixed payload is decompressed through an `io.LimitReader` bounded to the size cap +1; a small compressed input that expands past the cap is rejected (`400`/`413`), never allowed to exhaust memory.
+- **JSON + format validation** — the decoded bytes must be valid JSON and detect as CycloneDX or SPDX; reject otherwise (`ErrUnknownFormat` / `400`).
 - **Subject resolution** — the digest must be extractable from the SBOM *or* supplied via `image_ref`; fail closed otherwise (`ErrNoDigest`). DevRadar refuses to store an SBOM it can't pin to a digest.
 
 ### Subject digest extraction (spike-validated)
@@ -807,6 +809,8 @@ The read endpoints (tenant-scoped, `WHERE tenant_id = $1`):
 |---|---|---|
 | `GET` | `/v1/images` | tracked images (latest state per digest) |
 | `GET` | `/v1/images/timeline?ref=<image_ref>` | change events for an image ref across digests (ref is a query param — refs contain slashes) |
+| `GET` | `/v1/sboms/{id}` | one SBOM's metadata + severity breakdown |
+| `DELETE` | `/v1/sboms/{id}` | archive (stop tracking) — drops from scan set + images; findings/events retained; idempotent |
 | `GET` | `/v1/sboms/{id}/findings` | current findings for one SBOM |
 | `GET` | `/v1/sboms/{id}/events` | change events for one SBOM |
 

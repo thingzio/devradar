@@ -59,12 +59,21 @@ func run(ctx context.Context) error {
 		return nil
 	}
 
+	// Prefer the syft-backed canonicalizer (handles SPDX -> CycloneDX); fall
+	// back to pass-through (CycloneDX-only) if syft isn't installed.
+	var canon sbom.Canonicalizer
+	if sc, ok := sbom.NewSyftCanonicalizer(); ok {
+		slog.Info("canonicalizer ready", "backend", sc.Version())
+		canon = sc
+	} else {
+		slog.Warn("syft not found; canonicalizer is pass-through (SPDX SBOMs will fail to scan)")
+		canon = sbom.NewPassthroughCanonicalizer()
+	}
+
 	runner := scan.NewRunner(
 		store,
 		fetcher,
-		// v1 canonicalizer is pass-through (CycloneDX-only). The SPDX->CDX
-		// backend replaces this without touching the loop.
-		sbom.NewPassthroughCanonicalizer(),
+		canon,
 		scanners,
 		converter.DefaultRegistry(),
 		scan.DefaultOptions(),

@@ -1,6 +1,8 @@
 package server_test
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -167,6 +169,103 @@ func TestRead_TenantIsolation(t *testing.T) {
 	h.ServeHTTP(rec2, req2)
 	if rec2.Code != http.StatusNotFound {
 		t.Errorf("cross-tenant read = %d, want 404", rec2.Code)
+	}
+}
+
+// TestSBOMLifecycle covers GET /v1/sboms/{id}, DELETE (archive), and that an
+// archived SBOM drops from the images list.
+func TestSBOMLifecycle(t *testing.T) {
+	srv, st := testServer(t)
+	_, tok := seedTenantToken(t, st)
+	h := srv.Handler()
+
+	raw, err := os.ReadFile("../sbom/testdata/redis.syft.cdx.json")
+	if err != nil {
+		t.Skipf("fixture missing: %v", err)
+	}
+	body, _ := json.Marshal(map[string]string{"sbom": base64.StdEncoding.EncodeToString(raw)})
+	req := httptest.NewRequest(http.MethodPost, "/v1/sboms", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var sub struct {
+		SBOMID string `json:"sbom_id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &sub)
+
+	do := func(method, path string) *httptest.ResponseRecorder {
+		rq := httptest.NewRequest(method, path, nil)
+		rq.Header.Set("Authorization", "Bearer "+tok)
+		rc := httptest.NewRecorder()
+		h.ServeHTTP(rc, rq)
+		return rc
+	}
+
+	// GET metadata.
+	if rc := do(http.MethodGet, "/v1/sboms/"+sub.SBOMID); rc.Code != http.StatusOK ||
+		!strings.Contains(rc.Body.String(), `"digest"`) {
+		t.Errorf("GET sbom = %d: %s", rc.Code, rc.Body.String())
+	}
+	// GET unknown → 404.
+	if rc := do(http.MethodGet, "/v1/sboms/nope"); rc.Code != http.StatusNotFound {
+		t.Errorf("GET unknown sbom = %d, want 404", rc.Code)
+	}
+	// Archive → 204.
+	if rc := do(http.MethodDelete, "/v1/sboms/"+sub.SBOMID); rc.Code != http.StatusNoContent {
+		t.Errorf("DELETE sbom = %d, want 204", rc.Code)
+	}
+	// Archive again → still 204 (idempotent).
+	if rc := do(http.MethodDelete, "/v1/sboms/"+sub.SBOMID); rc.Code != http.StatusNoContent {
+		t.Errorf("DELETE sbom (repeat) = %d, want 204", rc.Code)
+	}
+	// Archived SBOM no longer in images.
+	if rc := do(http.MethodGet, "/v1/images"); strings.Contains(rc.Body.String(), sub.SBOMID) {
+		t.Errorf("archived sbom should not appear in /v1/images")
+	}
+	// DELETE unknown → 404.
+	if rc := do(http.MethodDelete, "/v1/sboms/nope"); rc.Code != http.StatusNotFound {
+		t.Errorf("DELETE unknown sbom = %d, want 404", rc.Code)
+	}
+}
+
+// TestIngest_GzipAndBomb checks gzip SBOM acceptance and decompression-bomb
+// rejection.
+func TestIngest_GzipAndBomb(t *testing.T) {
+	srv, st := testServer(t)
+	_, tok := seedTenantToken(t, st)
+	h := srv.Handler()
+
+	raw, err := os.ReadFile("../sbom/testdata/redis.syft.cdx.json")
+	if err != nil {
+		t.Skipf("fixture missing: %v", err)
+	}
+
+	submit := func(payload []byte) int {
+		body, _ := json.Marshal(map[string]string{"sbom": base64.StdEncoding.EncodeToString(payload)})
+		rq := httptest.NewRequest(http.MethodPost, "/v1/sboms", strings.NewReader(string(body)))
+		rq.Header.Set("Authorization", "Bearer "+tok)
+		rc := httptest.NewRecorder()
+		h.ServeHTTP(rc, rq)
+		return rc.Code
+	}
+
+	// A gzip-compressed valid SBOM is accepted.
+	var gzbuf bytes.Buffer
+	zw := gzip.NewWriter(&gzbuf)
+	_, _ = zw.Write(raw)
+	_ = zw.Close()
+	if code := submit(gzbuf.Bytes()); code != http.StatusAccepted {
+		t.Errorf("gzip sbom = %d, want 202", code)
+	}
+
+	// A decompression bomb (tiny gzip, huge output) is rejected, not OOM.
+	var bomb bytes.Buffer
+	bw := gzip.NewWriter(&bomb)
+	huge := bytes.Repeat([]byte("A"), (20<<20)+1024) // > maxSBOMBytes
+	_, _ = bw.Write(huge)
+	_ = bw.Close()
+	if code := submit(bomb.Bytes()); code != http.StatusBadRequest && code != http.StatusRequestEntityTooLarge {
+		t.Errorf("decompression bomb = %d, want 400/413", code)
 	}
 }
 
