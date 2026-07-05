@@ -2,12 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+_Last updated: 2026-07-05._
+
 ## Repository Status
 
 **v1 implemented and runnable.** The full pipeline works end-to-end locally (ingest → scan → read API) and the deploy layer (Terraform + CI) exists but has not had its first `terraform apply`.
 
 - `README.md` — high-level design (HLD) + a "Run It Locally" guide.
-- `IMPLEMENTATION.md` — implementation reference: API, data model + DDL, scanner/converter design, deployment + first-apply runbook. (Some inline code samples predate the code; the code under `pkg/`/`cmd/` is the source of truth where they differ.)
+- `IMPLEMENTATION.md` — implementation reference: API, data model + DDL, scanner/converter design, infra contract. (Some inline code samples predate the code; the code under `pkg/`/`cmd/` is the source of truth where they differ.)
+- `DEPLOYMENT.md` — initial GCP setup runbook (manual first apply) + routine update flow.
 
 Layout: `pkg/`-only (no `internal/`), binaries `cmd/devradar-serve` (ingest API + magic-link UI) and `cmd/devradar-scan` (daily job). Deps are **vendored** (`vendor/`); build with the module's default mode. Infra in `infra/saas/` (validated; not yet applied).
 

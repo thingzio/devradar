@@ -1,6 +1,7 @@
 # DevRadar — Implementation Reference
 
-> High-level design: see [README.md](README.md)
+> High-level design: see [README.md](README.md) · Deployment: see [DEPLOYMENT.md](DEPLOYMENT.md)
+> _Last updated: 2026-07-05 — reflects the implemented v1 (code under `pkg/`/`cmd/` is authoritative where inline samples differ)._
 
 ## Overview
 

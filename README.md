@@ -9,8 +9,10 @@
 | **Parent** | Thingz (https://thingz.io) |
 | **Category** | Container Security / Vulnerability Intelligence |
 | **Status** | v1 implemented — ingest + scan + read API run end-to-end locally; infra (Terraform/CI) written, awaiting first deploy |
+| **Updated** | 2026-07-05 |
 
 > Implementation reference (API, data model, SQL schema, scanner design): [IMPLEMENTATION.md](IMPLEMENTATION.md)
+> Deployment: initial setup and updates in [DEPLOYMENT.md](DEPLOYMENT.md)
 > Jump to: [Run It Locally](#run-it-locally)
 
 This document is the high-level design for **v1**: authenticated SBOM submission, daily Grype + Trivy rescanning, event-log deltas, and a read API/UI to retrieve findings and changes. v1 is **pull-based** — push alerts (email/webhook) and Claude narratives are post-MVP; the event log that powers them is built from day one.
