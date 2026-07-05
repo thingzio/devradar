@@ -2,34 +2,49 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 )
 
-// UpsertSBOM inserts a submitted SBOM, or no-ops if it already exists. SBOMs are
-// content-addressed and immutable, so resubmission of identical bytes is a
-// deliberate no-op (ON CONFLICT DO NOTHING) — this is what makes ingest
-// idempotent. Returns true if a new row was inserted.
-func (s *Store) UpsertSBOM(ctx context.Context, sb *SBOM) (inserted bool, err error) {
+// UpsertSBOM inserts a submitted SBOM, or returns the existing one. The natural
+// identity is (tenant_id, digest, format): an image digest is an immutable
+// package inventory, so there is one SBOM per digest+format per tenant. Both
+// exact re-submission and a *different* SBOM for the same digest+format (e.g.
+// by-tag vs by-digest generation, or a newer generator) resolve to the existing
+// row — the first submission is canonical.
+//
+// Returns the effective row id (which may differ from sb.ID on conflict) and
+// whether a new row was inserted (false ⇒ the caller may skip writing bytes).
+func (s *Store) UpsertSBOM(ctx context.Context, sb *SBOM) (id string, inserted bool, err error) {
 	var generatedAt any
 	if !sb.GeneratedAt.IsZero() {
 		generatedAt = sb.GeneratedAt.UTC()
 	}
-	res, err := s.db.ExecContext(ctx, `
+	err = s.db.QueryRowContext(ctx, `
 		INSERT INTO devradar_sbom
 			(id, tenant_id, image_ref, digest, format, spec_version, tool, tool_version,
 			 package_count, object_path, verification_status, status, generated_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-		ON CONFLICT (id) DO NOTHING`,
+		ON CONFLICT (tenant_id, digest, format) DO NOTHING
+		RETURNING id`,
 		sb.ID, sb.TenantID, sb.ImageRef, sb.Digest, sb.Format, sb.SpecVersion,
 		nullStr(sb.Tool), nullStr(sb.ToolVersion), sb.PackageCount, sb.ObjectPath,
 		defaultStr(sb.VerificationStatus, "unverified"), defaultStr(sb.Status, "active"),
 		generatedAt,
-	)
-	if err != nil {
-		return false, fmt.Errorf("upsert sbom: %w", err)
+	).Scan(&id)
+	if err == nil {
+		return id, true, nil
 	}
-	n, _ := res.RowsAffected()
-	return n > 0, nil
+	if err != sql.ErrNoRows {
+		return "", false, fmt.Errorf("upsert sbom: %w", err)
+	}
+	// Conflict on (tenant_id, digest, format): return the existing row's id.
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT id FROM devradar_sbom WHERE tenant_id=$1 AND digest=$2 AND format=$3`,
+		sb.TenantID, sb.Digest, sb.Format).Scan(&id); err != nil {
+		return "", false, fmt.Errorf("upsert sbom (lookup existing): %w", err)
+	}
+	return id, false, nil
 }
 
 // ListActiveSBOMs returns all active SBOMs across all tenants — the scan job's

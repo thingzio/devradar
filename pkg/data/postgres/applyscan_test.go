@@ -57,7 +57,7 @@ func seedTenantAndSBOM(t *testing.T, st *postgres.Store) (tenantID string, sb *p
 		PackageCount: 100,
 		ObjectPath:   "gs://test/" + tenantID,
 	}
-	if _, err := st.UpsertSBOM(ctx, sb); err != nil {
+	if _, _, err := st.UpsertSBOM(ctx, sb); err != nil {
 		t.Fatalf("seed sbom: %v", err)
 	}
 	return tenantID, sb

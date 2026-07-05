@@ -1,0 +1,66 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - '.claude/**'
+      - 'LICENSE'
+      - '.gitignore'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - '.claude/**'
+      - 'LICENSE'
+      - '.gitignore'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: devradar
+          POSTGRES_USER: devradar
+          POSTGRES_PASSWORD: devradar
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U devradar"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read Go version
+        id: gover
+        run: echo "go=$(yq -r '.languages.go' .settings.yaml)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "${{ steps.gover.outputs.go }}"
+
+      # grype + trivy so the scanner/converter live tests run in CI.
+      - name: Install scanners
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Test
+        env:
+          DATABASE_URL: postgres://devradar:devradar@localhost:5432/devradar?sslmode=disable
+        run: go test -count=1 -race -covermode=atomic -coverprofile=cover.out ./...
+
+      - name: Coverage
+        run: go tool cover -func=cover.out | grep total

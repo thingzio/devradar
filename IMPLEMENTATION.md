@@ -378,7 +378,9 @@ func getScore(cvss *gabs.Container, sources ...string) float32 {
 
 ## Ingest API (Cloud Run service)
 
-Accepts an authenticated SBOM submission, treats the body as untrusted, extracts the subject digest, content-addresses the bytes **per tenant**, and stores. Idempotent by construction: the same bytes from the same tenant produce the same id, so resubmission dedupes (and two tenants submitting the same public SBOM get distinct rows). Ingest is deliberately **thin** — it does **not** scan and does **not** convert formats; all heavy/fallible work is deferred to the scan job (see [Ingest vs. scan-job split](#ingest-vs-scan-job-split)).
+Accepts an authenticated SBOM submission, treats the body as untrusted, extracts the subject digest, content-addresses the bytes **per tenant**, and stores. Idempotent by construction on two levels: the row's natural identity is `(tenant_id, digest, format)` — one SBOM per image digest+format per tenant (an image digest is an immutable inventory) — and the object id is `sha256(tenant_id + bytes)`. Re-submitting the same bytes, or a *different* SBOM for the same digest+format (e.g. by-tag vs by-digest generation, or a newer generator), both resolve to the canonical first row and return `existing: true`; two tenants submitting the same public SBOM get distinct rows. Ingest is deliberately **thin** — it does **not** scan and does **not** convert formats; all heavy/fallible work is deferred to the scan job (see [Ingest vs. scan-job split](#ingest-vs-scan-job-split)).
+
+**Digest resolution.** The digest is extracted from the SBOM (`sbom.Resolve`). SBOMs generated *by tag* often omit the image manifest digest (generators record only the tag and layer digests), so the request may supply an `image_ref` with an `@sha256:` digest as a fallback (`sbom.ResolveWithRef`). Ingest fails closed only when no digest can be found in either place — the README instructs generating SBOMs by digest to avoid needing the override.
 
 ### Request contract
 
@@ -478,7 +480,8 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Idempotent: ON CONFLICT (id) DO NOTHING. Resubmission is a no-op.
+	// Idempotent on (tenant_id, digest, format): returns the canonical row's id
+	// and inserted=false on conflict. Bytes are written only when inserted.
 	if err := s.store.UpsertSBOM(ctx, &store.SBOM{
 		ID: id, TenantID: tenant.ID,
 		ImageRef: subj.ImageRef, Digest: subj.Digest,

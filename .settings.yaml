@@ -1,0 +1,28 @@
+# Single source of truth for tool versions and quality thresholds.
+# Consumed by the Makefile and CI workflows via yq.
+
+# Language version
+languages:
+  go: '1.26'
+
+# Build tools
+build_tools:
+  goreleaser: 'v2.15.4'
+  ko: 'v0.18.1'
+
+# Linting
+linting:
+  golangci_lint: 'v2.12.1'
+
+# Pinned scanner binaries (baked into the scan-job image; the vuln DB is
+# refreshed lazily at job start, not pinned here). Recorded per scan run.
+scanners:
+  grype: 'v0.115.0'
+  trivy: 'v0.72.0'
+
+# Quality thresholds
+quality:
+  coverage_threshold: '45'
+  lint_timeout: '5m'
+  test_timeout: '10m'
+  build_timeout: '10m0s'

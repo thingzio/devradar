@@ -1,0 +1,99 @@
+version: 2
+
+project_name: devradar
+
+builds:
+  - id: devradar-serve
+    binary: devradar-serve
+    dir: ./cmd/devradar-serve
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+        -X main.version={{.Version}}
+        -X main.commit={{.ShortCommit}}
+        -X main.date={{.CommitDate}}
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+  - id: devradar-scan
+    binary: devradar-scan
+    dir: ./cmd/devradar-scan
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+        -X main.version={{.Version}}
+        -X main.commit={{.ShortCommit}}
+        -X main.date={{.CommitDate}}
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+release:
+  github:
+    owner: thingzio
+    name: devradar
+  prerelease: auto
+  draft: true
+
+# Container images via ko (no Dockerfile). The scan-job image also needs the
+# grype and trivy binaries; ko builds a Go-only image, so the scanner binaries
+# are layered in via the Cloud Run base image / build step (tracked separately).
+kos:
+  - id: devradar-serve
+    build: devradar-serve
+    repositories:
+      - us-west1-docker.pkg.dev/thingzio/devradar-saas-images/devradar-serve
+    platforms:
+      - linux/amd64
+    tags:
+      - latest
+      - "{{.Tag}}"
+    preserve_import_paths: false
+    bare: true
+
+  - id: devradar-scan
+    build: devradar-scan
+    repositories:
+      - us-west1-docker.pkg.dev/thingzio/devradar-saas-images/devradar-scan
+    platforms:
+      - linux/amd64
+    tags:
+      - latest
+      - "{{.Tag}}"
+    preserve_import_paths: false
+    bare: true
+
+report_sizes: true
+
+snapshot:
+  version_template: "{{.Tag}}-next"
+
+changelog:
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Bug Fixes
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Other
+      order: 999
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - typo
