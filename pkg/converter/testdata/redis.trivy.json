@@ -1,0 +1,3273 @@
+{
+  "SchemaVersion": 2,
+  "Trivy": {
+    "Version": "0.72.0"
+  },
+  "ReportID": "019f3233-74eb-723a-9d6b-276e11f19503",
+  "CreatedAt": "2026-07-05T05:14:20.907147-07:00",
+  "ArtifactName": "pkg/sbom/testdata/redis.syft.cdx.json",
+  "ArtifactType": "cyclonedx",
+  "Metadata": {
+    "OS": {
+      "Family": "debian",
+      "Name": "12"
+    }
+  },
+  "Results": [
+    {
+      "Target": "pkg/sbom/testdata/redis.syft.cdx.json (debian 12)",
+      "Class": "os-pkgs",
+      "Type": "debian",
+      "Packages": [
+        {
+          "ID": "adduser@3.134",
+          "Name": "adduser",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/adduser@3.134?arch=all\u0026distro=debian-12",
+            "UID": "4663fa27b81480aa",
+            "BOMRef": "pkg:deb/debian/adduser@3.134?arch=all\u0026distro=debian-12\u0026package-id=c02171bf930643dd"
+          },
+          "Version": "3.134",
+          "Arch": "all",
+          "SrcName": "adduser",
+          "SrcVersion": "3.134",
+          "Licenses": [
+            "GPL-2.0-only",
+            "GPL-2.0-or-later"
+          ],
+          "DependsOn": [
+            "passwd@1:4.13+dfsg1-1+deb12u2"
+          ]
+        },
+        {
+          "ID": "apt@2.6.1",
+          "Name": "apt",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/apt@2.6.1?arch=arm64\u0026distro=debian-12",
+            "UID": "333f18efe75e1045",
+            "BOMRef": "pkg:deb/debian/apt@2.6.1?arch=arm64\u0026distro=debian-12\u0026package-id=001f65ccfdc16db7"
+          },
+          "Version": "2.6.1",
+          "Arch": "arm64",
+          "SrcName": "apt",
+          "SrcVersion": "2.6.1",
+          "Licenses": [
+            "BSD-3-Clause",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "Expat"
+          ],
+          "DependsOn": [
+            "adduser@3.134",
+            "debian-archive-keyring@2023.3+deb12u2",
+            "gpgv@2.2.40-1.1+deb12u2",
+            "libapt-pkg6.0@2.6.1",
+            "libc6@2.36-9+deb12u14",
+            "libgcc-s1@12.2.0-14+deb12u1",
+            "libgnutls30@3.7.9-2+deb12u7",
+            "libseccomp2@2.5.4-1+deb12u1",
+            "libstdc++6@12.2.0-14+deb12u1",
+            "libsystemd0@252.39-1~deb12u2"
+          ]
+        },
+        {
+          "ID": "base-files@12.4+deb12u14",
+          "Name": "base-files",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/base-files@12.4%2Bdeb12u14?arch=arm64\u0026distro=debian-12",
+            "UID": "80197bd4b776187b",
+            "BOMRef": "pkg:deb/debian/base-files@12.4%2Bdeb12u14?arch=arm64\u0026distro=debian-12\u0026package-id=3dc24111377a1ec0"
+          },
+          "Version": "12.4+deb12u14",
+          "Arch": "arm64",
+          "SrcName": "base-files",
+          "SrcVersion": "12.4+deb12u14",
+          "Licenses": [
+            "sha256:fd7e4aae7e7b05f217bcf2d02322825c360e66c52c4c2f1b28d784d6297a1c23"
+          ],
+          "DependsOn": [
+            "mawk@1.3.4.20200120-3.1"
+          ]
+        },
+        {
+          "ID": "base-passwd@3.6.1",
+          "Name": "base-passwd",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/base-passwd@3.6.1?arch=arm64\u0026distro=debian-12",
+            "UID": "4be46e40336110cc",
+            "BOMRef": "pkg:deb/debian/base-passwd@3.6.1?arch=arm64\u0026distro=debian-12\u0026package-id=8340925ddc11d744"
+          },
+          "Version": "3.6.1",
+          "Arch": "arm64",
+          "SrcName": "base-passwd",
+          "SrcVersion": "3.6.1",
+          "Licenses": [
+            "GPL-2.0-only",
+            "public-domain"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14",
+            "libdebconfclient0@0.270",
+            "libselinux1@3.4-1+b6"
+          ]
+        },
+        {
+          "ID": "bash@5.2.15-2+b13",
+          "Name": "bash",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/bash@5.2.15-2%2Bb13?arch=arm64\u0026distro=debian-12\u0026upstream=bash%405.2.15-2",
+            "UID": "b4eb2c971ada848d",
+            "BOMRef": "pkg:deb/debian/bash@5.2.15-2%2Bb13?arch=arm64\u0026distro=debian-12\u0026package-id=23da876c33ee972d\u0026upstream=bash%405.2.15-2"
+          },
+          "Version": "5.2.15-2+b13",
+          "Arch": "arm64",
+          "SrcName": "bash",
+          "SrcVersion": "5.2.15-2+b13",
+          "Licenses": [
+            "BSD-4-Clause-UC",
+            "GFDL-1.3-only",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "GPL-3.0-only",
+            "GPL-3.0-or-later",
+            "Latex2e",
+            "GFDL-NIV-1.3",
+            "MIT-like",
+            "permissive"
+          ],
+          "DependsOn": [
+            "base-files@12.4+deb12u14",
+            "debianutils@5.7-0.5~deb12u1",
+            "libc6@2.36-9+deb12u14",
+            "libtinfo6@6.4-4"
+          ]
+        },
+        {
+          "ID": "bsdutils@1:2.38.1-5+deb12u3",
+          "Name": "bsdutils",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/bsdutils@1:2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12\u0026upstream=util-linux%402.38.1-5%2Bdeb12u3",
+            "UID": "5c90bdfbd33b1461",
+            "BOMRef": "pkg:deb/debian/bsdutils@1%3A2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12\u0026package-id=f44b1347ff7bb429\u0026upstream=util-linux%402.38.1-5%2Bdeb12u3"
+          },
+          "Version": "1:2.38.1-5+deb12u3",
+          "Arch": "arm64",
+          "SrcName": "bsdutils",
+          "SrcVersion": "1:2.38.1-5+deb12u3",
+          "Licenses": [
+            "BSD-3-Clause",
+            "BSD-4-Clause",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "GPL-3.0-only",
+            "GPL-3.0-or-later",
+            "LGPL-2.0-only",
+            "LGPL-2.0-or-later",
+            "LGPL-2.1-only",
+            "LGPL-2.1-or-later",
+            "LGPL-3.0-only",
+            "LGPL-3.0-or-later",
+            "MIT",
+            "BSLA",
+            "LGPL",
+            "public-domain"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14",
+            "libsystemd0@252.39-1~deb12u2"
+          ]
+        },
+        {
+          "ID": "coreutils@9.1-1",
+          "Name": "coreutils",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/coreutils@9.1-1?arch=arm64\u0026distro=debian-12",
+            "UID": "229971c82256f8e3",
+            "BOMRef": "pkg:deb/debian/coreutils@9.1-1?arch=arm64\u0026distro=debian-12\u0026package-id=cb34fd2c7a5fbf72"
+          },
+          "Version": "9.1-1",
+          "Arch": "arm64",
+          "SrcName": "coreutils",
+          "SrcVersion": "9.1-1",
+          "Licenses": [
+            "BSD-4-Clause-UC",
+            "FSFULLR",
+            "GFDL-1.3-only",
+            "GPL-3.0-only",
+            "GPL-3.0-or-later",
+            "ISC",
+            "GFDL-NIV-1.3"
+          ],
+          "DependsOn": [
+            "libacl1@2.3.1-3",
+            "libattr1@1:2.5.1-4",
+            "libc6@2.36-9+deb12u14",
+            "libgmp10@2:6.2.1+dfsg1-1.1",
+            "libselinux1@3.4-1+b6"
+          ]
+        },
+        {
+          "ID": "dash@0.5.12-2",
+          "Name": "dash",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/dash@0.5.12-2?arch=arm64\u0026distro=debian-12",
+            "UID": "de54000b3737df17",
+            "BOMRef": "pkg:deb/debian/dash@0.5.12-2?arch=arm64\u0026distro=debian-12\u0026package-id=aea477295fe4de99"
+          },
+          "Version": "0.5.12-2",
+          "Arch": "arm64",
+          "SrcName": "dash",
+          "SrcVersion": "0.5.12-2",
+          "Licenses": [
+            "BSD-3-Clause",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "public-domain"
+          ],
+          "DependsOn": [
+            "debianutils@5.7-0.5~deb12u1",
+            "dpkg@1.21.23",
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "debconf@1.5.82",
+          "Name": "debconf",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/debconf@1.5.82?arch=all\u0026distro=debian-12",
+            "UID": "97123a1acb6b7f89",
+            "BOMRef": "pkg:deb/debian/debconf@1.5.82?arch=all\u0026distro=debian-12\u0026package-id=242708e27fd24140"
+          },
+          "Version": "1.5.82",
+          "Arch": "all",
+          "SrcName": "debconf",
+          "SrcVersion": "1.5.82",
+          "Licenses": [
+            "BSD-2-Clause"
+          ]
+        },
+        {
+          "ID": "debian-archive-keyring@2023.3+deb12u2",
+          "Name": "debian-archive-keyring",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/debian-archive-keyring@2023.3%2Bdeb12u2?arch=all\u0026distro=debian-12",
+            "UID": "cbdf737afe7fb3a",
+            "BOMRef": "pkg:deb/debian/debian-archive-keyring@2023.3%2Bdeb12u2?arch=all\u0026distro=debian-12\u0026package-id=13c7b506427f3aee"
+          },
+          "Version": "2023.3+deb12u2",
+          "Arch": "all",
+          "SrcName": "debian-archive-keyring",
+          "SrcVersion": "2023.3+deb12u2",
+          "Licenses": [
+            "sha256:b32aecaae84643700a33bc9ee83fa9b36938d35aa7b61b5042092eca77ddb732"
+          ]
+        },
+        {
+          "ID": "debianutils@5.7-0.5~deb12u1",
+          "Name": "debianutils",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/debianutils@5.7-0.5~deb12u1?arch=arm64\u0026distro=debian-12",
+            "UID": "a532dfe05abf5019",
+            "BOMRef": "pkg:deb/debian/debianutils@5.7-0.5~deb12u1?arch=arm64\u0026distro=debian-12\u0026package-id=85cfca95d8d17efc"
+          },
+          "Version": "5.7-0.5~deb12u1",
+          "Arch": "arm64",
+          "SrcName": "debianutils",
+          "SrcVersion": "5.7-0.5~deb12u1",
+          "Licenses": [
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "SMAIL-GPL",
+            "public-domain"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "diffutils@1:3.8-4",
+          "Name": "diffutils",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/diffutils@1:3.8-4?arch=arm64\u0026distro=debian-12",
+            "UID": "d4fa7de076257448",
+            "BOMRef": "pkg:deb/debian/diffutils@1%3A3.8-4?arch=arm64\u0026distro=debian-12\u0026package-id=5f43927954cce9c1"
+          },
+          "Version": "1:3.8-4",
+          "Arch": "arm64",
+          "SrcName": "diffutils",
+          "SrcVersion": "1:3.8-4",
+          "Licenses": [
+            "FSFAP",
+            "FSFULLR",
+            "GFDL-1.3-only",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "GPL-3.0-only",
+            "GPL-3.0-or-later",
+            "LGPL-2.0-only",
+            "LGPL-2.0-or-later",
+            "LGPL-2.1-only",
+            "LGPL-2.1-or-later",
+            "LGPL-3.0-only",
+            "LGPL-3.0-or-later",
+            "X11",
+            "GFDL-NIV-1.3",
+            "public-domain"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "dpkg@1.21.23",
+          "Name": "dpkg",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/dpkg@1.21.23?arch=arm64\u0026distro=debian-12",
+            "UID": "55251b36c2b30b4e",
+            "BOMRef": "pkg:deb/debian/dpkg@1.21.23?arch=arm64\u0026distro=debian-12\u0026package-id=168b57fdc798f48e"
+          },
+          "Version": "1.21.23",
+          "Arch": "arm64",
+          "SrcName": "dpkg",
+          "SrcVersion": "1.21.23",
+          "Licenses": [
+            "BSD-2-Clause",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "public-domain-s-s-d"
+          ],
+          "DependsOn": [
+            "libbz2-1.0@1.0.8-5+b1",
+            "libc6@2.36-9+deb12u14",
+            "liblzma5@5.4.1-1",
+            "libmd0@1.0.4-2",
+            "libselinux1@3.4-1+b6",
+            "libzstd1@1.5.4+dfsg2-5",
+            "tar@1.34+dfsg-1.2+deb12u1",
+            "zlib1g@1:1.2.13.dfsg-1"
+          ]
+        },
+        {
+          "ID": "e2fsprogs@1.47.0-2+b2",
+          "Name": "e2fsprogs",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/e2fsprogs@1.47.0-2%2Bb2?arch=arm64\u0026distro=debian-12\u0026upstream=e2fsprogs%401.47.0-2",
+            "UID": "fa97df3d02e4fc8d",
+            "BOMRef": "pkg:deb/debian/e2fsprogs@1.47.0-2%2Bb2?arch=arm64\u0026distro=debian-12\u0026package-id=c99811c73a5c3ef7\u0026upstream=e2fsprogs%401.47.0-2"
+          },
+          "Version": "1.47.0-2+b2",
+          "Arch": "arm64",
+          "SrcName": "e2fsprogs",
+          "SrcVersion": "1.47.0-2+b2",
+          "Licenses": [
+            "Apache-2.0",
+            "BSD-3-Clause",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "ISC",
+            "Kazlib",
+            "LGPL-2.0-only",
+            "Latex2e",
+            "GPL"
+          ],
+          "DependsOn": [
+            "libblkid1@2.38.1-5+deb12u3",
+            "libc6@2.36-9+deb12u14",
+            "libcom-err2@1.47.0-2+b2",
+            "libext2fs2@1.47.0-2+b2",
+            "libss2@1.47.0-2+b2",
+            "libuuid1@2.38.1-5+deb12u3",
+            "logsave@1.47.0-2+b2"
+          ]
+        },
+        {
+          "ID": "findutils@4.9.0-4",
+          "Name": "findutils",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/findutils@4.9.0-4?arch=arm64\u0026distro=debian-12",
+            "UID": "a3bc8708aea295ed",
+            "BOMRef": "pkg:deb/debian/findutils@4.9.0-4?arch=arm64\u0026distro=debian-12\u0026package-id=75994fca90778b24"
+          },
+          "Version": "4.9.0-4",
+          "Arch": "arm64",
+          "SrcName": "findutils",
+          "SrcVersion": "4.9.0-4",
+          "Licenses": [
+            "BSD-3-Clause",
+            "FSFAP",
+            "FSFULLR",
+            "GFDL-1.3-only",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "GPL-3.0-only",
+            "GPL-3.0-or-later",
+            "ISC",
+            "LGPL-2.0-only",
+            "LGPL-2.0-or-later",
+            "LGPL-2.1-only",
+            "LGPL-2.1-or-later",
+            "LGPL-3.0-only",
+            "LGPL-3.0-or-later",
+            "X11",
+            "GFDL-NIV-1.3+",
+            "GPL",
+            "public-domain"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14",
+            "libselinux1@3.4-1+b6"
+          ]
+        },
+        {
+          "ID": "gcc-12-base@12.2.0-14+deb12u1",
+          "Name": "gcc-12-base",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/gcc-12-base@12.2.0-14%2Bdeb12u1?arch=arm64\u0026distro=debian-12\u0026upstream=gcc-12",
+            "UID": "d42fbdc07df4ec93",
+            "BOMRef": "pkg:deb/debian/gcc-12-base@12.2.0-14%2Bdeb12u1?arch=arm64\u0026distro=debian-12\u0026package-id=fd3ec3e01f2c6237\u0026upstream=gcc-12"
+          },
+          "Version": "12.2.0-14+deb12u1",
+          "Arch": "arm64",
+          "SrcName": "gcc-12-base",
+          "SrcVersion": "12.2.0-14+deb12u1",
+          "Licenses": [
+            "sha256:da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3"
+          ]
+        },
+        {
+          "ID": "gpgv@2.2.40-1.1+deb12u2",
+          "Name": "gpgv",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/gpgv@2.2.40-1.1%2Bdeb12u2?arch=arm64\u0026distro=debian-12\u0026upstream=gnupg2",
+            "UID": "109ae4d50ee2e8a3",
+            "BOMRef": "pkg:deb/debian/gpgv@2.2.40-1.1%2Bdeb12u2?arch=arm64\u0026distro=debian-12\u0026package-id=3edb70364e05520d\u0026upstream=gnupg2"
+          },
+          "Version": "2.2.40-1.1+deb12u2",
+          "Arch": "arm64",
+          "SrcName": "gpgv",
+          "SrcVersion": "2.2.40-1.1+deb12u2",
+          "Licenses": [
+            "BSD-3-Clause",
+            "CC0-1.0",
+            "GPL-3.0-only",
+            "GPL-3.0-or-later",
+            "LGPL-2.1-only",
+            "LGPL-2.1-or-later",
+            "LGPL-3.0-only",
+            "LGPL-3.0-or-later",
+            "Expat",
+            "RFC-Reference",
+            "TinySCHEME",
+            "permissive"
+          ],
+          "DependsOn": [
+            "libbz2-1.0@1.0.8-5+b1",
+            "libc6@2.36-9+deb12u14",
+            "libgcrypt20@1.10.1-3+deb12u1",
+            "libgpg-error0@1.46-1",
+            "zlib1g@1:1.2.13.dfsg-1"
+          ]
+        },
+        {
+          "ID": "grep@3.8-5",
+          "Name": "grep",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/grep@3.8-5?arch=arm64\u0026distro=debian-12",
+            "UID": "1d67da42ac65cd48",
+            "BOMRef": "pkg:deb/debian/grep@3.8-5?arch=arm64\u0026distro=debian-12\u0026package-id=424b7515df466f76"
+          },
+          "Version": "3.8-5",
+          "Arch": "arm64",
+          "SrcName": "grep",
+          "SrcVersion": "3.8-5",
+          "Licenses": [
+            "GPL-3.0-only",
+            "GPL-3.0-or-later"
+          ],
+          "DependsOn": [
+            "dpkg@1.21.23",
+            "libc6@2.36-9+deb12u14",
+            "libpcre2-8-0@10.42-1"
+          ]
+        },
+        {
+          "ID": "gzip@1.12-1",
+          "Name": "gzip",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/gzip@1.12-1?arch=arm64\u0026distro=debian-12",
+            "UID": "38666c7bd7b7f9c3",
+            "BOMRef": "pkg:deb/debian/gzip@1.12-1?arch=arm64\u0026distro=debian-12\u0026package-id=44e60b7e3873a328"
+          },
+          "Version": "1.12-1",
+          "Arch": "arm64",
+          "SrcName": "gzip",
+          "SrcVersion": "1.12-1",
+          "Licenses": [
+            "GPL-3.0-only",
+            "GPL-3.0-or-later",
+            "FSF-manpages",
+            "GFDL-1.3+-no-invariant",
+            "GFDL-3"
+          ],
+          "DependsOn": [
+            "dpkg@1.21.23",
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "hostname@3.23+nmu1",
+          "Name": "hostname",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/hostname@3.23%2Bnmu1?arch=arm64\u0026distro=debian-12",
+            "UID": "322315ae39723b7e",
+            "BOMRef": "pkg:deb/debian/hostname@3.23%2Bnmu1?arch=arm64\u0026distro=debian-12\u0026package-id=b930a37f60b873f5"
+          },
+          "Version": "3.23+nmu1",
+          "Arch": "arm64",
+          "SrcName": "hostname",
+          "SrcVersion": "3.23+nmu1",
+          "Licenses": [
+            "GPL-2.0-only"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "init-system-helpers@1.65.2+deb12u1",
+          "Name": "init-system-helpers",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/init-system-helpers@1.65.2%2Bdeb12u1?arch=all\u0026distro=debian-12",
+            "UID": "97759749c624d0ec",
+            "BOMRef": "pkg:deb/debian/init-system-helpers@1.65.2%2Bdeb12u1?arch=all\u0026distro=debian-12\u0026package-id=bc67df4e4ad2e833"
+          },
+          "Version": "1.65.2+deb12u1",
+          "Arch": "all",
+          "SrcName": "init-system-helpers",
+          "SrcVersion": "1.65.2+deb12u1",
+          "Licenses": [
+            "BSD-3-Clause",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later"
+          ],
+          "DependsOn": [
+            "usr-is-merged@37~deb12u1"
+          ]
+        },
+        {
+          "ID": "libacl1@2.3.1-3",
+          "Name": "libacl1",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libacl1@2.3.1-3?arch=arm64\u0026distro=debian-12\u0026upstream=acl",
+            "UID": "78f75a585193e4c5",
+            "BOMRef": "pkg:deb/debian/libacl1@2.3.1-3?arch=arm64\u0026distro=debian-12\u0026package-id=bc3827d7480a169b\u0026upstream=acl"
+          },
+          "Version": "2.3.1-3",
+          "Arch": "arm64",
+          "SrcName": "libacl1",
+          "SrcVersion": "2.3.1-3",
+          "Licenses": [
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "LGPL-2.0-or-later",
+            "LGPL-2.1-only"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libapt-pkg6.0@2.6.1",
+          "Name": "libapt-pkg6.0",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libapt-pkg6.0@2.6.1?arch=arm64\u0026distro=debian-12\u0026upstream=apt",
+            "UID": "d523347cffd9e49f",
+            "BOMRef": "pkg:deb/debian/libapt-pkg6.0@2.6.1?arch=arm64\u0026distro=debian-12\u0026package-id=cd126724974d25d1\u0026upstream=apt"
+          },
+          "Version": "2.6.1",
+          "Arch": "arm64",
+          "SrcName": "libapt-pkg6.0",
+          "SrcVersion": "2.6.1",
+          "Licenses": [
+            "BSD-3-Clause",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "Expat"
+          ],
+          "DependsOn": [
+            "libbz2-1.0@1.0.8-5+b1",
+            "libc6@2.36-9+deb12u14",
+            "libgcc-s1@12.2.0-14+deb12u1",
+            "libgcrypt20@1.10.1-3+deb12u1",
+            "liblz4-1@1.9.4-1",
+            "liblzma5@5.4.1-1",
+            "libstdc++6@12.2.0-14+deb12u1",
+            "libsystemd0@252.39-1~deb12u2",
+            "libudev1@252.39-1~deb12u2",
+            "libxxhash0@0.8.1-1",
+            "libzstd1@1.5.4+dfsg2-5",
+            "zlib1g@1:1.2.13.dfsg-1"
+          ]
+        },
+        {
+          "ID": "libattr1@1:2.5.1-4",
+          "Name": "libattr1",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libattr1@1:2.5.1-4?arch=arm64\u0026distro=debian-12\u0026upstream=attr",
+            "UID": "b99d4b9f9ad79959",
+            "BOMRef": "pkg:deb/debian/libattr1@1%3A2.5.1-4?arch=arm64\u0026distro=debian-12\u0026package-id=3acb72aa01871e2a\u0026upstream=attr"
+          },
+          "Version": "1:2.5.1-4",
+          "Arch": "arm64",
+          "SrcName": "libattr1",
+          "SrcVersion": "1:2.5.1-4",
+          "Licenses": [
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "LGPL-2.0-or-later",
+            "LGPL-2.1-only"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libaudit-common@1:3.0.9-1",
+          "Name": "libaudit-common",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libaudit-common@1:3.0.9-1?arch=all\u0026distro=debian-12\u0026upstream=audit",
+            "UID": "77d1bccd97884a6",
+            "BOMRef": "pkg:deb/debian/libaudit-common@1%3A3.0.9-1?arch=all\u0026distro=debian-12\u0026package-id=e35c37c43c21e3d0\u0026upstream=audit"
+          },
+          "Version": "1:3.0.9-1",
+          "Arch": "all",
+          "SrcName": "libaudit-common",
+          "SrcVersion": "1:3.0.9-1",
+          "Licenses": [
+            "GPL-1.0-only",
+            "GPL-2.0-only",
+            "LGPL-2.1-only"
+          ]
+        },
+        {
+          "ID": "libaudit1@1:3.0.9-1",
+          "Name": "libaudit1",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libaudit1@1:3.0.9-1?arch=arm64\u0026distro=debian-12\u0026upstream=audit",
+            "UID": "f8ef2eb015b2d529",
+            "BOMRef": "pkg:deb/debian/libaudit1@1%3A3.0.9-1?arch=arm64\u0026distro=debian-12\u0026package-id=e36d9ea59d69a619\u0026upstream=audit"
+          },
+          "Version": "1:3.0.9-1",
+          "Arch": "arm64",
+          "SrcName": "libaudit1",
+          "SrcVersion": "1:3.0.9-1",
+          "Licenses": [
+            "GPL-1.0-only",
+            "GPL-2.0-only",
+            "LGPL-2.1-only"
+          ],
+          "DependsOn": [
+            "libaudit-common@1:3.0.9-1",
+            "libc6@2.36-9+deb12u14",
+            "libcap-ng0@0.8.3-1+b3"
+          ]
+        },
+        {
+          "ID": "libblkid1@2.38.1-5+deb12u3",
+          "Name": "libblkid1",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libblkid1@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12\u0026upstream=util-linux",
+            "UID": "b9bf36dad05575ae",
+            "BOMRef": "pkg:deb/debian/libblkid1@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12\u0026package-id=ec1f2b91e6c6ea9b\u0026upstream=util-linux"
+          },
+          "Version": "2.38.1-5+deb12u3",
+          "Arch": "arm64",
+          "SrcName": "libblkid1",
+          "SrcVersion": "2.38.1-5+deb12u3",
+          "Licenses": [
+            "BSD-3-Clause",
+            "BSD-4-Clause",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "GPL-3.0-only",
+            "GPL-3.0-or-later",
+            "LGPL-2.0-only",
+            "LGPL-2.0-or-later",
+            "LGPL-2.1-only",
+            "LGPL-2.1-or-later",
+            "LGPL-3.0-only",
+            "LGPL-3.0-or-later",
+            "MIT",
+            "BSLA",
+            "LGPL",
+            "public-domain"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libbz2-1.0@1.0.8-5+b1",
+          "Name": "libbz2-1.0",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libbz2-1.0@1.0.8-5%2Bb1?arch=arm64\u0026distro=debian-12\u0026upstream=bzip2%401.0.8-5",
+            "UID": "c26ec99d97ce1c7d",
+            "BOMRef": "pkg:deb/debian/libbz2-1.0@1.0.8-5%2Bb1?arch=arm64\u0026distro=debian-12\u0026package-id=a0b202f29d493743\u0026upstream=bzip2%401.0.8-5"
+          },
+          "Version": "1.0.8-5+b1",
+          "Arch": "arm64",
+          "SrcName": "libbz2-1.0",
+          "SrcVersion": "1.0.8-5+b1",
+          "Licenses": [
+            "GPL-2.0-only",
+            "BSD-variant"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libc-bin@2.36-9+deb12u14",
+          "Name": "libc-bin",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libc-bin@2.36-9%2Bdeb12u14?arch=arm64\u0026distro=debian-12\u0026upstream=glibc",
+            "UID": "d5de392d1f155d4a",
+            "BOMRef": "pkg:deb/debian/libc-bin@2.36-9%2Bdeb12u14?arch=arm64\u0026distro=debian-12\u0026package-id=7b3adfa930408046\u0026upstream=glibc"
+          },
+          "Version": "2.36-9+deb12u14",
+          "Arch": "arm64",
+          "SrcName": "libc-bin",
+          "SrcVersion": "2.36-9+deb12u14",
+          "Licenses": [
+            "sha256:40c7e1f2118531f038ca22999bd976901254e1bc5cd1b0f0211bdd064c599987"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libc6@2.36-9+deb12u14",
+          "Name": "libc6",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libc6@2.36-9%2Bdeb12u14?arch=arm64\u0026distro=debian-12\u0026upstream=glibc",
+            "UID": "31e51c18667d1808",
+            "BOMRef": "pkg:deb/debian/libc6@2.36-9%2Bdeb12u14?arch=arm64\u0026distro=debian-12\u0026package-id=a438ed2c13a725bb\u0026upstream=glibc"
+          },
+          "Version": "2.36-9+deb12u14",
+          "Arch": "arm64",
+          "SrcName": "libc6",
+          "SrcVersion": "2.36-9+deb12u14",
+          "Licenses": [
+            "sha256:40c7e1f2118531f038ca22999bd976901254e1bc5cd1b0f0211bdd064c599987"
+          ],
+          "DependsOn": [
+            "libgcc-s1@12.2.0-14+deb12u1"
+          ]
+        },
+        {
+          "ID": "libcap-ng0@0.8.3-1+b3",
+          "Name": "libcap-ng0",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libcap-ng0@0.8.3-1%2Bb3?arch=arm64\u0026distro=debian-12\u0026upstream=libcap-ng%400.8.3-1",
+            "UID": "7d18611ff55b45bb",
+            "BOMRef": "pkg:deb/debian/libcap-ng0@0.8.3-1%2Bb3?arch=arm64\u0026distro=debian-12\u0026package-id=a219057a264d9d79\u0026upstream=libcap-ng%400.8.3-1"
+          },
+          "Version": "0.8.3-1+b3",
+          "Arch": "arm64",
+          "SrcName": "libcap-ng0",
+          "SrcVersion": "0.8.3-1+b3",
+          "Licenses": [
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "GPL-3.0-only",
+            "LGPL-2.1-only",
+            "LGPL-2.1-or-later"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libcap2@1:2.66-4+deb12u3+b1",
+          "Name": "libcap2",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libcap2@1:2.66-4%2Bdeb12u3%2Bb1?arch=arm64\u0026distro=debian-12\u0026upstream=libcap2%401:2.66-4%2Bdeb12u3",
+            "UID": "d5705306a995deb3",
+            "BOMRef": "pkg:deb/debian/libcap2@1%3A2.66-4%2Bdeb12u3%2Bb1?arch=arm64\u0026distro=debian-12\u0026package-id=df0829b474b5f0fe\u0026upstream=libcap2%401%3A2.66-4%2Bdeb12u3"
+          },
+          "Version": "1:2.66-4+deb12u3+b1",
+          "Arch": "arm64",
+          "SrcName": "libcap2",
+          "SrcVersion": "1:2.66-4+deb12u3+b1",
+          "Licenses": [
+            "BSD-3-Clause",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libcom-err2@1.47.0-2+b2",
+          "Name": "libcom-err2",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libcom-err2@1.47.0-2%2Bb2?arch=arm64\u0026distro=debian-12\u0026upstream=e2fsprogs%401.47.0-2",
+            "UID": "558186c759eea971",
+            "BOMRef": "pkg:deb/debian/libcom-err2@1.47.0-2%2Bb2?arch=arm64\u0026distro=debian-12\u0026package-id=6045bcd9dc9e3995\u0026upstream=e2fsprogs%401.47.0-2"
+          },
+          "Version": "1.47.0-2+b2",
+          "Arch": "arm64",
+          "SrcName": "libcom-err2",
+          "SrcVersion": "1.47.0-2+b2",
+          "Licenses": [
+            "Apache-2.0",
+            "BSD-3-Clause",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "ISC",
+            "Kazlib",
+            "LGPL-2.0-only",
+            "Latex2e",
+            "GPL"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libcrypt1@1:4.4.33-2",
+          "Name": "libcrypt1",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libcrypt1@1:4.4.33-2?arch=arm64\u0026distro=debian-12\u0026upstream=libxcrypt",
+            "UID": "e6151f0ae1316dbf",
+            "BOMRef": "pkg:deb/debian/libcrypt1@1%3A4.4.33-2?arch=arm64\u0026distro=debian-12\u0026package-id=7a36675c7813bcf6\u0026upstream=libxcrypt"
+          },
+          "Version": "1:4.4.33-2",
+          "Arch": "arm64",
+          "SrcName": "libcrypt1",
+          "SrcVersion": "1:4.4.33-2",
+          "Licenses": [
+            "sha256:5a5e7ca0e9f3f9679977e3a3e9ede45ad92885a3297ea78e766979f9866c5a16"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libdb5.3@5.3.28+dfsg2-1",
+          "Name": "libdb5.3",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libdb5.3@5.3.28%2Bdfsg2-1?arch=arm64\u0026distro=debian-12\u0026upstream=db5.3",
+            "UID": "c5f2b03c7845d533",
+            "BOMRef": "pkg:deb/debian/libdb5.3@5.3.28%2Bdfsg2-1?arch=arm64\u0026distro=debian-12\u0026package-id=5522c2c2b43acafb\u0026upstream=db5.3"
+          },
+          "Version": "5.3.28+dfsg2-1",
+          "Arch": "arm64",
+          "SrcName": "libdb5.3",
+          "SrcVersion": "5.3.28+dfsg2-1",
+          "Licenses": [
+            "BSD-3-Clause",
+            "GPL-3.0-only",
+            "MS-PL",
+            "Sleepycat",
+            "X11",
+            "Zlib",
+            "Artistic",
+            "BSD-3-clause-fjord",
+            "GPL",
+            "MIT-old",
+            "TCL-like"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libdebconfclient0@0.270",
+          "Name": "libdebconfclient0",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libdebconfclient0@0.270?arch=arm64\u0026distro=debian-12\u0026upstream=cdebconf",
+            "UID": "1a43cdf6205c843",
+            "BOMRef": "pkg:deb/debian/libdebconfclient0@0.270?arch=arm64\u0026distro=debian-12\u0026package-id=6651766d5f286f9e\u0026upstream=cdebconf"
+          },
+          "Version": "0.270",
+          "Arch": "arm64",
+          "SrcName": "libdebconfclient0",
+          "SrcVersion": "0.270",
+          "Licenses": [
+            "BSD-2-Clause",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libext2fs2@1.47.0-2+b2",
+          "Name": "libext2fs2",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libext2fs2@1.47.0-2%2Bb2?arch=arm64\u0026distro=debian-12\u0026upstream=e2fsprogs%401.47.0-2",
+            "UID": "a272b905dae91d43",
+            "BOMRef": "pkg:deb/debian/libext2fs2@1.47.0-2%2Bb2?arch=arm64\u0026distro=debian-12\u0026package-id=d84c8a3b602b6f5a\u0026upstream=e2fsprogs%401.47.0-2"
+          },
+          "Version": "1.47.0-2+b2",
+          "Arch": "arm64",
+          "SrcName": "libext2fs2",
+          "SrcVersion": "1.47.0-2+b2",
+          "Licenses": [
+            "Apache-2.0",
+            "BSD-3-Clause",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "ISC",
+            "Kazlib",
+            "LGPL-2.0-only",
+            "Latex2e",
+            "GPL"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libffi8@3.4.4-1",
+          "Name": "libffi8",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libffi8@3.4.4-1?arch=arm64\u0026distro=debian-12\u0026upstream=libffi",
+            "UID": "b93557c44962581e",
+            "BOMRef": "pkg:deb/debian/libffi8@3.4.4-1?arch=arm64\u0026distro=debian-12\u0026package-id=92fa0d336f62e9f4\u0026upstream=libffi"
+          },
+          "Version": "3.4.4-1",
+          "Arch": "arm64",
+          "SrcName": "libffi8",
+          "SrcVersion": "3.4.4-1",
+          "Licenses": [
+            "GPL-2.0-or-later",
+            "GPL-3.0-or-later",
+            "MPL-1.1",
+            "X11",
+            "Expat",
+            "GPL",
+            "public-domain"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libgcc-s1@12.2.0-14+deb12u1",
+          "Name": "libgcc-s1",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libgcc-s1@12.2.0-14%2Bdeb12u1?arch=arm64\u0026distro=debian-12\u0026upstream=gcc-12",
+            "UID": "1a15cc411a615bd3",
+            "BOMRef": "pkg:deb/debian/libgcc-s1@12.2.0-14%2Bdeb12u1?arch=arm64\u0026distro=debian-12\u0026package-id=09efa7d20720eaac\u0026upstream=gcc-12"
+          },
+          "Version": "12.2.0-14+deb12u1",
+          "Arch": "arm64",
+          "SrcName": "libgcc-s1",
+          "SrcVersion": "12.2.0-14+deb12u1",
+          "Licenses": [
+            "sha256:da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3"
+          ],
+          "DependsOn": [
+            "gcc-12-base@12.2.0-14+deb12u1",
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libgcrypt20@1.10.1-3+deb12u1",
+          "Name": "libgcrypt20",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libgcrypt20@1.10.1-3%2Bdeb12u1?arch=arm64\u0026distro=debian-12",
+            "UID": "9b5d17674ad583e0",
+            "BOMRef": "pkg:deb/debian/libgcrypt20@1.10.1-3%2Bdeb12u1?arch=arm64\u0026distro=debian-12\u0026package-id=2431c5300283a381"
+          },
+          "Version": "1.10.1-3+deb12u1",
+          "Arch": "arm64",
+          "SrcName": "libgcrypt20",
+          "SrcVersion": "1.10.1-3+deb12u1",
+          "Licenses": [
+            "sha256:95db2f9da663f2bfe2aabe9c72fce9d6c9ae767b912f397d7823f50bd55a1a7d"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14",
+            "libgpg-error0@1.46-1"
+          ]
+        },
+        {
+          "ID": "libgmp10@2:6.2.1+dfsg1-1.1",
+          "Name": "libgmp10",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libgmp10@2:6.2.1%2Bdfsg1-1.1?arch=arm64\u0026distro=debian-12\u0026upstream=gmp",
+            "UID": "1e2e39d6f95bafcc",
+            "BOMRef": "pkg:deb/debian/libgmp10@2%3A6.2.1%2Bdfsg1-1.1?arch=arm64\u0026distro=debian-12\u0026package-id=94bdb80af2a3e57e\u0026upstream=gmp"
+          },
+          "Version": "2:6.2.1+dfsg1-1.1",
+          "Arch": "arm64",
+          "SrcName": "libgmp10",
+          "SrcVersion": "2:6.2.1+dfsg1-1.1",
+          "Licenses": [
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "GPL-3.0-only",
+            "GPL-3.0-or-later",
+            "LGPL-3.0-only",
+            "LGPL-3.0-or-later"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libgnutls30@3.7.9-2+deb12u7",
+          "Name": "libgnutls30",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libgnutls30@3.7.9-2%2Bdeb12u7?arch=arm64\u0026distro=debian-12\u0026upstream=gnutls28",
+            "UID": "a36244ce696bd492",
+            "BOMRef": "pkg:deb/debian/libgnutls30@3.7.9-2%2Bdeb12u7?arch=arm64\u0026distro=debian-12\u0026package-id=5a28af22e9ba8133\u0026upstream=gnutls28"
+          },
+          "Version": "3.7.9-2+deb12u7",
+          "Arch": "arm64",
+          "SrcName": "libgnutls30",
+          "SrcVersion": "3.7.9-2+deb12u7",
+          "Licenses": [
+            "sha256:bb7e5c24b3e27bbba5671dd710d159a0066833bda4caa1d55d8027ffed539337"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14",
+            "libgmp10@2:6.2.1+dfsg1-1.1",
+            "libhogweed6@3.8.1-2",
+            "libidn2-0@2.3.3-1+b1",
+            "libnettle8@3.8.1-2",
+            "libp11-kit0@0.24.1-2",
+            "libtasn1-6@4.19.0-2+deb12u1",
+            "libunistring2@1.0-2"
+          ]
+        },
+        {
+          "ID": "libgpg-error0@1.46-1",
+          "Name": "libgpg-error0",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libgpg-error0@1.46-1?arch=arm64\u0026distro=debian-12\u0026upstream=libgpg-error",
+            "UID": "454f6ab69c030594",
+            "BOMRef": "pkg:deb/debian/libgpg-error0@1.46-1?arch=arm64\u0026distro=debian-12\u0026package-id=803ccc9bd0bd1689\u0026upstream=libgpg-error"
+          },
+          "Version": "1.46-1",
+          "Arch": "arm64",
+          "SrcName": "libgpg-error0",
+          "SrcVersion": "1.46-1",
+          "Licenses": [
+            "BSD-3-Clause",
+            "GPL-3.0-only",
+            "GPL-3.0-or-later",
+            "LGPL-2.1-only",
+            "LGPL-2.1-or-later",
+            "g10-permissive"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libhogweed6@3.8.1-2",
+          "Name": "libhogweed6",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libhogweed6@3.8.1-2?arch=arm64\u0026distro=debian-12\u0026upstream=nettle",
+            "UID": "1d9c4fc1cc6609e6",
+            "BOMRef": "pkg:deb/debian/libhogweed6@3.8.1-2?arch=arm64\u0026distro=debian-12\u0026package-id=fef6423858fddf98\u0026upstream=nettle"
+          },
+          "Version": "3.8.1-2",
+          "Arch": "arm64",
+          "SrcName": "libhogweed6",
+          "SrcVersion": "3.8.1-2",
+          "Licenses": [
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "GPL-3.0-or-later",
+            "LGPL-2.0-only",
+            "LGPL-2.0-or-later",
+            "LGPL-3.0-or-later",
+            "Expat",
+            "GAP",
+            "GPL",
+            "LGPL",
+            "public-domain"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14",
+            "libgmp10@2:6.2.1+dfsg1-1.1",
+            "libnettle8@3.8.1-2"
+          ]
+        },
+        {
+          "ID": "libidn2-0@2.3.3-1+b1",
+          "Name": "libidn2-0",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libidn2-0@2.3.3-1%2Bb1?arch=arm64\u0026distro=debian-12\u0026upstream=libidn2%402.3.3-1",
+            "UID": "3dd59d9ab9af5911",
+            "BOMRef": "pkg:deb/debian/libidn2-0@2.3.3-1%2Bb1?arch=arm64\u0026distro=debian-12\u0026package-id=e11caa9cc79eba6f\u0026upstream=libidn2%402.3.3-1"
+          },
+          "Version": "2.3.3-1+b1",
+          "Arch": "arm64",
+          "SrcName": "libidn2-0",
+          "SrcVersion": "2.3.3-1+b1",
+          "Licenses": [
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "GPL-3.0-only",
+            "GPL-3.0-or-later",
+            "LGPL-3.0-only",
+            "LGPL-3.0-or-later",
+            "Unicode"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14",
+            "libunistring2@1.0-2"
+          ]
+        },
+        {
+          "ID": "liblz4-1@1.9.4-1",
+          "Name": "liblz4-1",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/liblz4-1@1.9.4-1?arch=arm64\u0026distro=debian-12\u0026upstream=lz4",
+            "UID": "506363ea5eb6c178",
+            "BOMRef": "pkg:deb/debian/liblz4-1@1.9.4-1?arch=arm64\u0026distro=debian-12\u0026package-id=337cf3c141834d08\u0026upstream=lz4"
+          },
+          "Version": "1.9.4-1",
+          "Arch": "arm64",
+          "SrcName": "liblz4-1",
+          "SrcVersion": "1.9.4-1",
+          "Licenses": [
+            "BSD-2-Clause",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "liblzma5@5.4.1-1",
+          "Name": "liblzma5",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/liblzma5@5.4.1-1?arch=arm64\u0026distro=debian-12\u0026upstream=xz-utils",
+            "UID": "68511e2275a9f126",
+            "BOMRef": "pkg:deb/debian/liblzma5@5.4.1-1?arch=arm64\u0026distro=debian-12\u0026package-id=4d755f7380796f98\u0026upstream=xz-utils"
+          },
+          "Version": "5.4.1-1",
+          "Arch": "arm64",
+          "SrcName": "liblzma5",
+          "SrcVersion": "5.4.1-1",
+          "Licenses": [
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "GPL-3.0-only",
+            "LGPL-2.0-only",
+            "LGPL-2.1-only",
+            "LGPL-2.1-or-later",
+            "Autoconf",
+            "PD",
+            "PD-debian",
+            "config-h",
+            "noderivs",
+            "permissive-fsf",
+            "permissive-nowarranty",
+            "probably-PD"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libmd0@1.0.4-2",
+          "Name": "libmd0",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libmd0@1.0.4-2?arch=arm64\u0026distro=debian-12\u0026upstream=libmd",
+            "UID": "365a853992422ef2",
+            "BOMRef": "pkg:deb/debian/libmd0@1.0.4-2?arch=arm64\u0026distro=debian-12\u0026package-id=53d60174eaac2e95\u0026upstream=libmd"
+          },
+          "Version": "1.0.4-2",
+          "Arch": "arm64",
+          "SrcName": "libmd0",
+          "SrcVersion": "1.0.4-2",
+          "Licenses": [
+            "BSD-2-Clause",
+            "BSD-3-Clause",
+            "Beerware",
+            "ISC",
+            "BSD-3-clause-Aaron-D-Gifford",
+            "public-domain-md4",
+            "public-domain-md5",
+            "public-domain-sha1"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libmount1@2.38.1-5+deb12u3",
+          "Name": "libmount1",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libmount1@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12\u0026upstream=util-linux",
+            "UID": "396826f0fdae2772",
+            "BOMRef": "pkg:deb/debian/libmount1@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12\u0026package-id=d1ff77e807904a5c\u0026upstream=util-linux"
+          },
+          "Version": "2.38.1-5+deb12u3",
+          "Arch": "arm64",
+          "SrcName": "libmount1",
+          "SrcVersion": "2.38.1-5+deb12u3",
+          "Licenses": [
+            "BSD-3-Clause",
+            "BSD-4-Clause",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "GPL-3.0-only",
+            "GPL-3.0-or-later",
+            "LGPL-2.0-only",
+            "LGPL-2.0-or-later",
+            "LGPL-2.1-only",
+            "LGPL-2.1-or-later",
+            "LGPL-3.0-only",
+            "LGPL-3.0-or-later",
+            "MIT",
+            "BSLA",
+            "LGPL",
+            "public-domain"
+          ],
+          "DependsOn": [
+            "libblkid1@2.38.1-5+deb12u3",
+            "libc6@2.36-9+deb12u14",
+            "libselinux1@3.4-1+b6"
+          ]
+        },
+        {
+          "ID": "libnettle8@3.8.1-2",
+          "Name": "libnettle8",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libnettle8@3.8.1-2?arch=arm64\u0026distro=debian-12\u0026upstream=nettle",
+            "UID": "83cd8dd52a5ed40f",
+            "BOMRef": "pkg:deb/debian/libnettle8@3.8.1-2?arch=arm64\u0026distro=debian-12\u0026package-id=fba1f185a2c5c08d\u0026upstream=nettle"
+          },
+          "Version": "3.8.1-2",
+          "Arch": "arm64",
+          "SrcName": "libnettle8",
+          "SrcVersion": "3.8.1-2",
+          "Licenses": [
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "GPL-3.0-or-later",
+            "LGPL-2.0-only",
+            "LGPL-2.0-or-later",
+            "LGPL-3.0-or-later",
+            "Expat",
+            "GAP",
+            "GPL",
+            "LGPL",
+            "public-domain"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libp11-kit0@0.24.1-2",
+          "Name": "libp11-kit0",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libp11-kit0@0.24.1-2?arch=arm64\u0026distro=debian-12\u0026upstream=p11-kit",
+            "UID": "338eab6d7b12c397",
+            "BOMRef": "pkg:deb/debian/libp11-kit0@0.24.1-2?arch=arm64\u0026distro=debian-12\u0026package-id=f29269599f11f0af\u0026upstream=p11-kit"
+          },
+          "Version": "0.24.1-2",
+          "Arch": "arm64",
+          "SrcName": "libp11-kit0",
+          "SrcVersion": "0.24.1-2",
+          "Licenses": [
+            "Apache-2.0",
+            "BSD-3-Clause",
+            "ISC",
+            "LGPL-2.1-only",
+            "LGPL-2.1-or-later",
+            "ISC+IBM",
+            "permissive-like-automake-output",
+            "same-as-rest-of-p11kit"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14",
+            "libffi8@3.4.4-1"
+          ]
+        },
+        {
+          "ID": "libpam-modules@1.5.2-6+deb12u2",
+          "Name": "libpam-modules",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libpam-modules@1.5.2-6%2Bdeb12u2?arch=arm64\u0026distro=debian-12\u0026upstream=pam",
+            "UID": "fa5e2260b412a868",
+            "BOMRef": "pkg:deb/debian/libpam-modules@1.5.2-6%2Bdeb12u2?arch=arm64\u0026distro=debian-12\u0026package-id=edd1803172fb83c2\u0026upstream=pam"
+          },
+          "Version": "1.5.2-6+deb12u2",
+          "Arch": "arm64",
+          "SrcName": "libpam-modules",
+          "SrcVersion": "1.5.2-6+deb12u2",
+          "Licenses": [
+            "BSD-3-Clause",
+            "Beerware",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "GPL-3.0-only",
+            "GPL-3.0-or-later",
+            "LGPL-2.0-only",
+            "LGPL-2.0-or-later",
+            "BSD-tcp_wrappers",
+            "GPL",
+            "public-domain"
+          ],
+          "DependsOn": [
+            "debconf@1.5.82",
+            "libaudit1@1:3.0.9-1",
+            "libc6@2.36-9+deb12u14",
+            "libcrypt1@1:4.4.33-2",
+            "libdb5.3@5.3.28+dfsg2-1",
+            "libpam-modules-bin@1.5.2-6+deb12u2",
+            "libpam0g@1.5.2-6+deb12u2",
+            "libselinux1@3.4-1+b6"
+          ]
+        },
+        {
+          "ID": "libpam-modules-bin@1.5.2-6+deb12u2",
+          "Name": "libpam-modules-bin",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libpam-modules-bin@1.5.2-6%2Bdeb12u2?arch=arm64\u0026distro=debian-12\u0026upstream=pam",
+            "UID": "d43913ff7c1d8560",
+            "BOMRef": "pkg:deb/debian/libpam-modules-bin@1.5.2-6%2Bdeb12u2?arch=arm64\u0026distro=debian-12\u0026package-id=864a7aa03ee2fc9f\u0026upstream=pam"
+          },
+          "Version": "1.5.2-6+deb12u2",
+          "Arch": "arm64",
+          "SrcName": "libpam-modules-bin",
+          "SrcVersion": "1.5.2-6+deb12u2",
+          "Licenses": [
+            "BSD-3-Clause",
+            "Beerware",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "GPL-3.0-only",
+            "GPL-3.0-or-later",
+            "LGPL-2.0-only",
+            "LGPL-2.0-or-later",
+            "BSD-tcp_wrappers",
+            "GPL",
+            "public-domain"
+          ],
+          "DependsOn": [
+            "libaudit1@1:3.0.9-1",
+            "libc6@2.36-9+deb12u14",
+            "libcrypt1@1:4.4.33-2",
+            "libpam0g@1.5.2-6+deb12u2",
+            "libselinux1@3.4-1+b6"
+          ]
+        },
+        {
+          "ID": "libpam-runtime@1.5.2-6+deb12u2",
+          "Name": "libpam-runtime",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libpam-runtime@1.5.2-6%2Bdeb12u2?arch=all\u0026distro=debian-12\u0026upstream=pam",
+            "UID": "c43b00e646c29844",
+            "BOMRef": "pkg:deb/debian/libpam-runtime@1.5.2-6%2Bdeb12u2?arch=all\u0026distro=debian-12\u0026package-id=ca1034d5d24bcf54\u0026upstream=pam"
+          },
+          "Version": "1.5.2-6+deb12u2",
+          "Arch": "all",
+          "SrcName": "libpam-runtime",
+          "SrcVersion": "1.5.2-6+deb12u2",
+          "Licenses": [
+            "BSD-3-Clause",
+            "Beerware",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "GPL-3.0-only",
+            "GPL-3.0-or-later",
+            "LGPL-2.0-only",
+            "LGPL-2.0-or-later",
+            "BSD-tcp_wrappers",
+            "GPL",
+            "public-domain"
+          ],
+          "DependsOn": [
+            "debconf@1.5.82",
+            "libpam-modules@1.5.2-6+deb12u2"
+          ]
+        },
+        {
+          "ID": "libpam0g@1.5.2-6+deb12u2",
+          "Name": "libpam0g",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libpam0g@1.5.2-6%2Bdeb12u2?arch=arm64\u0026distro=debian-12\u0026upstream=pam",
+            "UID": "104d5d2afdd32bc8",
+            "BOMRef": "pkg:deb/debian/libpam0g@1.5.2-6%2Bdeb12u2?arch=arm64\u0026distro=debian-12\u0026package-id=8917c579d561b160\u0026upstream=pam"
+          },
+          "Version": "1.5.2-6+deb12u2",
+          "Arch": "arm64",
+          "SrcName": "libpam0g",
+          "SrcVersion": "1.5.2-6+deb12u2",
+          "Licenses": [
+            "BSD-3-Clause",
+            "Beerware",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "GPL-3.0-only",
+            "GPL-3.0-or-later",
+            "LGPL-2.0-only",
+            "LGPL-2.0-or-later",
+            "BSD-tcp_wrappers",
+            "GPL",
+            "public-domain"
+          ],
+          "DependsOn": [
+            "debconf@1.5.82",
+            "libaudit1@1:3.0.9-1",
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libpcre2-8-0@10.42-1",
+          "Name": "libpcre2-8-0",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libpcre2-8-0@10.42-1?arch=arm64\u0026distro=debian-12\u0026upstream=pcre2",
+            "UID": "746bfe63b694ca8a",
+            "BOMRef": "pkg:deb/debian/libpcre2-8-0@10.42-1?arch=arm64\u0026distro=debian-12\u0026package-id=4e8d6931b51c08db\u0026upstream=pcre2"
+          },
+          "Version": "10.42-1",
+          "Arch": "arm64",
+          "SrcName": "libpcre2-8-0",
+          "SrcVersion": "10.42-1",
+          "Licenses": [
+            "BSD-2-Clause",
+            "BSD-3-Clause",
+            "X11",
+            "BSD-3-clause-Cambridge",
+            "public-domain"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libseccomp2@2.5.4-1+deb12u1",
+          "Name": "libseccomp2",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libseccomp2@2.5.4-1%2Bdeb12u1?arch=arm64\u0026distro=debian-12\u0026upstream=libseccomp",
+            "UID": "eece7d21ca26768d",
+            "BOMRef": "pkg:deb/debian/libseccomp2@2.5.4-1%2Bdeb12u1?arch=arm64\u0026distro=debian-12\u0026package-id=95eebb3f6f247c39\u0026upstream=libseccomp"
+          },
+          "Version": "2.5.4-1+deb12u1",
+          "Arch": "arm64",
+          "SrcName": "libseccomp2",
+          "SrcVersion": "2.5.4-1+deb12u1",
+          "Licenses": [
+            "LGPL-2.1-only"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libselinux1@3.4-1+b6",
+          "Name": "libselinux1",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libselinux1@3.4-1%2Bb6?arch=arm64\u0026distro=debian-12\u0026upstream=libselinux%403.4-1",
+            "UID": "2f7825c4446b4c61",
+            "BOMRef": "pkg:deb/debian/libselinux1@3.4-1%2Bb6?arch=arm64\u0026distro=debian-12\u0026package-id=409da3f7527809fa\u0026upstream=libselinux%403.4-1"
+          },
+          "Version": "3.4-1+b6",
+          "Arch": "arm64",
+          "SrcName": "libselinux1",
+          "SrcVersion": "3.4-1+b6",
+          "Licenses": [
+            "sha256:641806738b0c6a3d03168c2649e6b94205198bb66cd557e6bae3a20b71c9bb0b"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14",
+            "libpcre2-8-0@10.42-1"
+          ]
+        },
+        {
+          "ID": "libsemanage-common@3.4-1",
+          "Name": "libsemanage-common",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libsemanage-common@3.4-1?arch=all\u0026distro=debian-12\u0026upstream=libsemanage",
+            "UID": "7d89150a89e347cd",
+            "BOMRef": "pkg:deb/debian/libsemanage-common@3.4-1?arch=all\u0026distro=debian-12\u0026package-id=4a9257795fc45897\u0026upstream=libsemanage"
+          },
+          "Version": "3.4-1",
+          "Arch": "all",
+          "SrcName": "libsemanage-common",
+          "SrcVersion": "3.4-1",
+          "Licenses": [
+            "sha256:e00e6a86c598f9e24ced0180a70a5f2f2e45e133d93adf2b17ce8a06ce4b1b51"
+          ]
+        },
+        {
+          "ID": "libsemanage2@3.4-1+b5",
+          "Name": "libsemanage2",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libsemanage2@3.4-1%2Bb5?arch=arm64\u0026distro=debian-12\u0026upstream=libsemanage%403.4-1",
+            "UID": "288258e848bc8d3d",
+            "BOMRef": "pkg:deb/debian/libsemanage2@3.4-1%2Bb5?arch=arm64\u0026distro=debian-12\u0026package-id=3b05220038d130c0\u0026upstream=libsemanage%403.4-1"
+          },
+          "Version": "3.4-1+b5",
+          "Arch": "arm64",
+          "SrcName": "libsemanage2",
+          "SrcVersion": "3.4-1+b5",
+          "Licenses": [
+            "sha256:e00e6a86c598f9e24ced0180a70a5f2f2e45e133d93adf2b17ce8a06ce4b1b51"
+          ],
+          "DependsOn": [
+            "libaudit1@1:3.0.9-1",
+            "libbz2-1.0@1.0.8-5+b1",
+            "libc6@2.36-9+deb12u14",
+            "libselinux1@3.4-1+b6",
+            "libsemanage-common@3.4-1",
+            "libsepol2@3.4-2.1"
+          ]
+        },
+        {
+          "ID": "libsepol2@3.4-2.1",
+          "Name": "libsepol2",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libsepol2@3.4-2.1?arch=arm64\u0026distro=debian-12\u0026upstream=libsepol",
+            "UID": "1166e68a9a4472d7",
+            "BOMRef": "pkg:deb/debian/libsepol2@3.4-2.1?arch=arm64\u0026distro=debian-12\u0026package-id=efaa9b577d61fad6\u0026upstream=libsepol"
+          },
+          "Version": "3.4-2.1",
+          "Arch": "arm64",
+          "SrcName": "libsepol2",
+          "SrcVersion": "3.4-2.1",
+          "Licenses": [
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "LGPL-2.1-only",
+            "LGPL-2.1-or-later",
+            "Zlib"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libsmartcols1@2.38.1-5+deb12u3",
+          "Name": "libsmartcols1",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libsmartcols1@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12\u0026upstream=util-linux",
+            "UID": "830043a61b19ae6a",
+            "BOMRef": "pkg:deb/debian/libsmartcols1@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12\u0026package-id=9b82d45aac84808c\u0026upstream=util-linux"
+          },
+          "Version": "2.38.1-5+deb12u3",
+          "Arch": "arm64",
+          "SrcName": "libsmartcols1",
+          "SrcVersion": "2.38.1-5+deb12u3",
+          "Licenses": [
+            "BSD-3-Clause",
+            "BSD-4-Clause",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "GPL-3.0-only",
+            "GPL-3.0-or-later",
+            "LGPL-2.0-only",
+            "LGPL-2.0-or-later",
+            "LGPL-2.1-only",
+            "LGPL-2.1-or-later",
+            "LGPL-3.0-only",
+            "LGPL-3.0-or-later",
+            "MIT",
+            "BSLA",
+            "LGPL",
+            "public-domain"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libss2@1.47.0-2+b2",
+          "Name": "libss2",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libss2@1.47.0-2%2Bb2?arch=arm64\u0026distro=debian-12\u0026upstream=e2fsprogs%401.47.0-2",
+            "UID": "f3aaaa661b7939dd",
+            "BOMRef": "pkg:deb/debian/libss2@1.47.0-2%2Bb2?arch=arm64\u0026distro=debian-12\u0026package-id=bd3d21dfdb41dd9e\u0026upstream=e2fsprogs%401.47.0-2"
+          },
+          "Version": "1.47.0-2+b2",
+          "Arch": "arm64",
+          "SrcName": "libss2",
+          "SrcVersion": "1.47.0-2+b2",
+          "Licenses": [
+            "Apache-2.0",
+            "BSD-3-Clause",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "ISC",
+            "Kazlib",
+            "LGPL-2.0-only",
+            "Latex2e",
+            "GPL"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14",
+            "libcom-err2@1.47.0-2+b2"
+          ]
+        },
+        {
+          "ID": "libssl3@3.0.20-1~deb12u2",
+          "Name": "libssl3",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libssl3@3.0.20-1~deb12u2?arch=arm64\u0026distro=debian-12\u0026upstream=openssl",
+            "UID": "df6e248e8c468a01",
+            "BOMRef": "pkg:deb/debian/libssl3@3.0.20-1~deb12u2?arch=arm64\u0026distro=debian-12\u0026package-id=168a48b0ee26e0a0\u0026upstream=openssl"
+          },
+          "Version": "3.0.20-1~deb12u2",
+          "Arch": "arm64",
+          "SrcName": "libssl3",
+          "SrcVersion": "3.0.20-1~deb12u2",
+          "Licenses": [
+            "Apache-2.0",
+            "GPL-1.0-only",
+            "GPL-1.0-or-later",
+            "Artistic"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libstdc++6@12.2.0-14+deb12u1",
+          "Name": "libstdc++6",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libstdc%2B%2B6@12.2.0-14%2Bdeb12u1?arch=arm64\u0026distro=debian-12\u0026upstream=gcc-12",
+            "UID": "362dc3c0ecafd406",
+            "BOMRef": "pkg:deb/debian/libstdc%2B%2B6@12.2.0-14%2Bdeb12u1?arch=arm64\u0026distro=debian-12\u0026package-id=1b38494314803585\u0026upstream=gcc-12"
+          },
+          "Version": "12.2.0-14+deb12u1",
+          "Arch": "arm64",
+          "SrcName": "libstdc++6",
+          "SrcVersion": "12.2.0-14+deb12u1",
+          "Licenses": [
+            "sha256:da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3"
+          ],
+          "DependsOn": [
+            "gcc-12-base@12.2.0-14+deb12u1",
+            "libc6@2.36-9+deb12u14",
+            "libgcc-s1@12.2.0-14+deb12u1"
+          ]
+        },
+        {
+          "ID": "libsystemd0@252.39-1~deb12u2",
+          "Name": "libsystemd0",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libsystemd0@252.39-1~deb12u2?arch=arm64\u0026distro=debian-12\u0026upstream=systemd",
+            "UID": "855531692bc21c5b",
+            "BOMRef": "pkg:deb/debian/libsystemd0@252.39-1~deb12u2?arch=arm64\u0026distro=debian-12\u0026package-id=726e7ba58b747357\u0026upstream=systemd"
+          },
+          "Version": "252.39-1~deb12u2",
+          "Arch": "arm64",
+          "SrcName": "libsystemd0",
+          "SrcVersion": "252.39-1~deb12u2",
+          "Licenses": [
+            "CC0-1.0",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "LGPL-2.1-only",
+            "LGPL-2.1-or-later",
+            "Expat",
+            "public-domain"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14",
+            "libcap2@1:2.66-4+deb12u3+b1",
+            "libgcrypt20@1.10.1-3+deb12u1",
+            "liblz4-1@1.9.4-1",
+            "liblzma5@5.4.1-1",
+            "libzstd1@1.5.4+dfsg2-5"
+          ]
+        },
+        {
+          "ID": "libtasn1-6@4.19.0-2+deb12u1",
+          "Name": "libtasn1-6",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libtasn1-6@4.19.0-2%2Bdeb12u1?arch=arm64\u0026distro=debian-12",
+            "UID": "5b7229d35663b54b",
+            "BOMRef": "pkg:deb/debian/libtasn1-6@4.19.0-2%2Bdeb12u1?arch=arm64\u0026distro=debian-12\u0026package-id=2b0cf33141f5538f"
+          },
+          "Version": "4.19.0-2+deb12u1",
+          "Arch": "arm64",
+          "SrcName": "libtasn1-6",
+          "SrcVersion": "4.19.0-2+deb12u1",
+          "Licenses": [
+            "sha256:572ad60ad184d8f52c6dc66d83a61a68f137db560b3452ce00588c9ecf128a65"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libtinfo6@6.4-4",
+          "Name": "libtinfo6",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libtinfo6@6.4-4?arch=arm64\u0026distro=debian-12\u0026upstream=ncurses",
+            "UID": "3ccfc683b57fbb0a",
+            "BOMRef": "pkg:deb/debian/libtinfo6@6.4-4?arch=arm64\u0026distro=debian-12\u0026package-id=b3627319965120a9\u0026upstream=ncurses"
+          },
+          "Version": "6.4-4",
+          "Arch": "arm64",
+          "SrcName": "libtinfo6",
+          "SrcVersion": "6.4-4",
+          "Licenses": [
+            "BSD-3-Clause",
+            "X11",
+            "MIT/X11"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libudev1@252.39-1~deb12u2",
+          "Name": "libudev1",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libudev1@252.39-1~deb12u2?arch=arm64\u0026distro=debian-12\u0026upstream=systemd",
+            "UID": "19a21f739429478e",
+            "BOMRef": "pkg:deb/debian/libudev1@252.39-1~deb12u2?arch=arm64\u0026distro=debian-12\u0026package-id=0829d1e4d20b5ede\u0026upstream=systemd"
+          },
+          "Version": "252.39-1~deb12u2",
+          "Arch": "arm64",
+          "SrcName": "libudev1",
+          "SrcVersion": "252.39-1~deb12u2",
+          "Licenses": [
+            "CC0-1.0",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "LGPL-2.1-only",
+            "LGPL-2.1-or-later",
+            "Expat",
+            "public-domain"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libunistring2@1.0-2",
+          "Name": "libunistring2",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libunistring2@1.0-2?arch=arm64\u0026distro=debian-12\u0026upstream=libunistring",
+            "UID": "374f99369b90b63e",
+            "BOMRef": "pkg:deb/debian/libunistring2@1.0-2?arch=arm64\u0026distro=debian-12\u0026package-id=ad8edaec1850081b\u0026upstream=libunistring"
+          },
+          "Version": "1.0-2",
+          "Arch": "arm64",
+          "SrcName": "libunistring2",
+          "SrcVersion": "1.0-2",
+          "Licenses": [
+            "GFDL-1.2-only",
+            "GFDL-1.2-or-later",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "GPL-3.0-only",
+            "GPL-3.0-or-later",
+            "LGPL-3.0-only",
+            "LGPL-3.0-or-later",
+            "MIT",
+            "FreeSoftware"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libuuid1@2.38.1-5+deb12u3",
+          "Name": "libuuid1",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libuuid1@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12\u0026upstream=util-linux",
+            "UID": "db8cc17662fc86ea",
+            "BOMRef": "pkg:deb/debian/libuuid1@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12\u0026package-id=9a28d53505f12e9b\u0026upstream=util-linux"
+          },
+          "Version": "2.38.1-5+deb12u3",
+          "Arch": "arm64",
+          "SrcName": "libuuid1",
+          "SrcVersion": "2.38.1-5+deb12u3",
+          "Licenses": [
+            "BSD-3-Clause",
+            "BSD-4-Clause",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "GPL-3.0-only",
+            "GPL-3.0-or-later",
+            "LGPL-2.0-only",
+            "LGPL-2.0-or-later",
+            "LGPL-2.1-only",
+            "LGPL-2.1-or-later",
+            "LGPL-3.0-only",
+            "LGPL-3.0-or-later",
+            "MIT",
+            "BSLA",
+            "LGPL",
+            "public-domain"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libxxhash0@0.8.1-1",
+          "Name": "libxxhash0",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libxxhash0@0.8.1-1?arch=arm64\u0026distro=debian-12\u0026upstream=xxhash",
+            "UID": "313842b2a8fd41e5",
+            "BOMRef": "pkg:deb/debian/libxxhash0@0.8.1-1?arch=arm64\u0026distro=debian-12\u0026package-id=b842aa67b5bca929\u0026upstream=xxhash"
+          },
+          "Version": "0.8.1-1",
+          "Arch": "arm64",
+          "SrcName": "libxxhash0",
+          "SrcVersion": "0.8.1-1",
+          "Licenses": [
+            "BSD-2-Clause",
+            "GPL-2.0-only"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "libzstd1@1.5.4+dfsg2-5",
+          "Name": "libzstd1",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/libzstd1@1.5.4%2Bdfsg2-5?arch=arm64\u0026distro=debian-12\u0026upstream=libzstd",
+            "UID": "574fbb328147068c",
+            "BOMRef": "pkg:deb/debian/libzstd1@1.5.4%2Bdfsg2-5?arch=arm64\u0026distro=debian-12\u0026package-id=dbd5bec91ecd0a73\u0026upstream=libzstd"
+          },
+          "Version": "1.5.4+dfsg2-5",
+          "Arch": "arm64",
+          "SrcName": "libzstd1",
+          "SrcVersion": "1.5.4+dfsg2-5",
+          "Licenses": [
+            "BSD-3-Clause",
+            "GPL-2.0-only",
+            "Zlib",
+            "Expat"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "login@1:4.13+dfsg1-1+deb12u2",
+          "Name": "login",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/login@1:4.13%2Bdfsg1-1%2Bdeb12u2?arch=arm64\u0026distro=debian-12\u0026upstream=shadow",
+            "UID": "dee6b3405483c5cd",
+            "BOMRef": "pkg:deb/debian/login@1%3A4.13%2Bdfsg1-1%2Bdeb12u2?arch=arm64\u0026distro=debian-12\u0026package-id=e74bcc30e3048776\u0026upstream=shadow"
+          },
+          "Version": "1:4.13+dfsg1-1+deb12u2",
+          "Arch": "arm64",
+          "SrcName": "login",
+          "SrcVersion": "1:4.13+dfsg1-1+deb12u2",
+          "Licenses": [
+            "BSD-3-Clause",
+            "GPL-1.0-only",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "public-domain"
+          ],
+          "DependsOn": [
+            "libaudit1@1:3.0.9-1",
+            "libc6@2.36-9+deb12u14",
+            "libcrypt1@1:4.4.33-2",
+            "libpam-modules@1.5.2-6+deb12u2",
+            "libpam-runtime@1.5.2-6+deb12u2",
+            "libpam0g@1.5.2-6+deb12u2"
+          ]
+        },
+        {
+          "ID": "logsave@1.47.0-2+b2",
+          "Name": "logsave",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/logsave@1.47.0-2%2Bb2?arch=arm64\u0026distro=debian-12\u0026upstream=e2fsprogs%401.47.0-2",
+            "UID": "60a6261690b7488",
+            "BOMRef": "pkg:deb/debian/logsave@1.47.0-2%2Bb2?arch=arm64\u0026distro=debian-12\u0026package-id=25d31e682049653e\u0026upstream=e2fsprogs%401.47.0-2"
+          },
+          "Version": "1.47.0-2+b2",
+          "Arch": "arm64",
+          "SrcName": "logsave",
+          "SrcVersion": "1.47.0-2+b2",
+          "Licenses": [
+            "Apache-2.0",
+            "BSD-3-Clause",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "ISC",
+            "Kazlib",
+            "LGPL-2.0-only",
+            "Latex2e",
+            "GPL"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "mawk@1.3.4.20200120-3.1",
+          "Name": "mawk",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/mawk@1.3.4.20200120-3.1?arch=arm64\u0026distro=debian-12",
+            "UID": "5f5eaaa852832cd5",
+            "BOMRef": "pkg:deb/debian/mawk@1.3.4.20200120-3.1?arch=arm64\u0026distro=debian-12\u0026package-id=e21f50c46c1cba7a"
+          },
+          "Version": "1.3.4.20200120-3.1",
+          "Arch": "arm64",
+          "SrcName": "mawk",
+          "SrcVersion": "1.3.4.20200120-3.1",
+          "Licenses": [
+            "CC-BY-3.0",
+            "GPL-2.0-only",
+            "X11"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "mount@2.38.1-5+deb12u3",
+          "Name": "mount",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/mount@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12\u0026upstream=util-linux",
+            "UID": "ecbafe5db5a50e25",
+            "BOMRef": "pkg:deb/debian/mount@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12\u0026package-id=32596223675d8e27\u0026upstream=util-linux"
+          },
+          "Version": "2.38.1-5+deb12u3",
+          "Arch": "arm64",
+          "SrcName": "mount",
+          "SrcVersion": "2.38.1-5+deb12u3",
+          "Licenses": [
+            "BSD-3-Clause",
+            "BSD-4-Clause",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "GPL-3.0-only",
+            "GPL-3.0-or-later",
+            "LGPL-2.0-only",
+            "LGPL-2.0-or-later",
+            "LGPL-2.1-only",
+            "LGPL-2.1-or-later",
+            "LGPL-3.0-only",
+            "LGPL-3.0-or-later",
+            "MIT",
+            "BSLA",
+            "LGPL",
+            "public-domain"
+          ],
+          "DependsOn": [
+            "libblkid1@2.38.1-5+deb12u3",
+            "libc6@2.36-9+deb12u14",
+            "libmount1@2.38.1-5+deb12u3",
+            "libselinux1@3.4-1+b6",
+            "libsmartcols1@2.38.1-5+deb12u3"
+          ]
+        },
+        {
+          "ID": "ncurses-base@6.4-4",
+          "Name": "ncurses-base",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/ncurses-base@6.4-4?arch=all\u0026distro=debian-12\u0026upstream=ncurses",
+            "UID": "d51806725bba1040",
+            "BOMRef": "pkg:deb/debian/ncurses-base@6.4-4?arch=all\u0026distro=debian-12\u0026package-id=ec73073218fd031a\u0026upstream=ncurses"
+          },
+          "Version": "6.4-4",
+          "Arch": "all",
+          "SrcName": "ncurses-base",
+          "SrcVersion": "6.4-4",
+          "Licenses": [
+            "BSD-3-Clause",
+            "X11",
+            "MIT/X11"
+          ]
+        },
+        {
+          "ID": "ncurses-bin@6.4-4",
+          "Name": "ncurses-bin",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/ncurses-bin@6.4-4?arch=arm64\u0026distro=debian-12\u0026upstream=ncurses",
+            "UID": "7775f97f6afacbb3",
+            "BOMRef": "pkg:deb/debian/ncurses-bin@6.4-4?arch=arm64\u0026distro=debian-12\u0026package-id=94ae699d00d4e59b\u0026upstream=ncurses"
+          },
+          "Version": "6.4-4",
+          "Arch": "arm64",
+          "SrcName": "ncurses-bin",
+          "SrcVersion": "6.4-4",
+          "Licenses": [
+            "BSD-3-Clause",
+            "X11",
+            "MIT/X11"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14",
+            "libtinfo6@6.4-4"
+          ]
+        },
+        {
+          "ID": "passwd@1:4.13+dfsg1-1+deb12u2",
+          "Name": "passwd",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/passwd@1:4.13%2Bdfsg1-1%2Bdeb12u2?arch=arm64\u0026distro=debian-12\u0026upstream=shadow",
+            "UID": "dba8adb8e0e60949",
+            "BOMRef": "pkg:deb/debian/passwd@1%3A4.13%2Bdfsg1-1%2Bdeb12u2?arch=arm64\u0026distro=debian-12\u0026package-id=494916ea3693ec07\u0026upstream=shadow"
+          },
+          "Version": "1:4.13+dfsg1-1+deb12u2",
+          "Arch": "arm64",
+          "SrcName": "passwd",
+          "SrcVersion": "1:4.13+dfsg1-1+deb12u2",
+          "Licenses": [
+            "BSD-3-Clause",
+            "GPL-1.0-only",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "public-domain"
+          ],
+          "DependsOn": [
+            "libaudit1@1:3.0.9-1",
+            "libc6@2.36-9+deb12u14",
+            "libcrypt1@1:4.4.33-2",
+            "libpam-modules@1.5.2-6+deb12u2",
+            "libpam0g@1.5.2-6+deb12u2",
+            "libselinux1@3.4-1+b6",
+            "libsemanage2@3.4-1+b5"
+          ]
+        },
+        {
+          "ID": "perl-base@5.36.0-7+deb12u3",
+          "Name": "perl-base",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/perl-base@5.36.0-7%2Bdeb12u3?arch=arm64\u0026distro=debian-12\u0026upstream=perl",
+            "UID": "ac8a44226ac389b7",
+            "BOMRef": "pkg:deb/debian/perl-base@5.36.0-7%2Bdeb12u3?arch=arm64\u0026distro=debian-12\u0026package-id=655a67f8452f234f\u0026upstream=perl"
+          },
+          "Version": "5.36.0-7+deb12u3",
+          "Arch": "arm64",
+          "SrcName": "perl-base",
+          "SrcVersion": "5.36.0-7+deb12u3",
+          "Licenses": [
+            "Artistic-2.0",
+            "Artistic-dist",
+            "BSD-3-Clause",
+            "GPL-1.0-only",
+            "GPL-1.0-or-later",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "LGPL-2.1-only",
+            "Zlib",
+            "Artistic",
+            "BSD-3-clause-GENERIC",
+            "BSD-3-clause-with-weird-numbering",
+            "BSD-4-clause-POWERDOG",
+            "BZIP",
+            "DONT-CHANGE-THE-GPL",
+            "Expat",
+            "GPL-3+-WITH-BISON-EXCEPTION",
+            "HSIEH-BSD",
+            "HSIEH-DERIVATIVE",
+            "REGCOMP",
+            "REGCOMP,",
+            "RRA-KEEP-THIS-NOTICE",
+            "SDBM-PUBLIC-DOMAIN",
+            "TEXT-TABS",
+            "Unicode"
+          ],
+          "DependsOn": [
+            "dpkg@1.21.23",
+            "libc6@2.36-9+deb12u14",
+            "libcrypt1@1:4.4.33-2"
+          ]
+        },
+        {
+          "ID": "sed@4.9-1+deb12u1",
+          "Name": "sed",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/sed@4.9-1%2Bdeb12u1?arch=arm64\u0026distro=debian-12",
+            "UID": "a4ddf7e1656b46ea",
+            "BOMRef": "pkg:deb/debian/sed@4.9-1%2Bdeb12u1?arch=arm64\u0026distro=debian-12\u0026package-id=c349386d209cdb1c"
+          },
+          "Version": "4.9-1+deb12u1",
+          "Arch": "arm64",
+          "SrcName": "sed",
+          "SrcVersion": "4.9-1+deb12u1",
+          "Licenses": [
+            "BSD-4-Clause-UC",
+            "BSL-1.0",
+            "GFDL-1.3-only",
+            "GPL-3.0-only",
+            "GPL-3.0-or-later",
+            "ISC",
+            "X11",
+            "GFDL-NIV-1.3+",
+            "pcre"
+          ],
+          "DependsOn": [
+            "libacl1@2.3.1-3",
+            "libc6@2.36-9+deb12u14",
+            "libselinux1@3.4-1+b6"
+          ]
+        },
+        {
+          "ID": "sysvinit-utils@3.06-4",
+          "Name": "sysvinit-utils",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/sysvinit-utils@3.06-4?arch=arm64\u0026distro=debian-12\u0026upstream=sysvinit",
+            "UID": "8324c1b7967026bf",
+            "BOMRef": "pkg:deb/debian/sysvinit-utils@3.06-4?arch=arm64\u0026distro=debian-12\u0026package-id=ac12ff3327c6469b\u0026upstream=sysvinit"
+          },
+          "Version": "3.06-4",
+          "Arch": "arm64",
+          "SrcName": "sysvinit-utils",
+          "SrcVersion": "3.06-4",
+          "Licenses": [
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "GPL-3.0-only"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        },
+        {
+          "ID": "tar@1.34+dfsg-1.2+deb12u1",
+          "Name": "tar",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/tar@1.34%2Bdfsg-1.2%2Bdeb12u1?arch=arm64\u0026distro=debian-12",
+            "UID": "10e2b5bcb2b78e57",
+            "BOMRef": "pkg:deb/debian/tar@1.34%2Bdfsg-1.2%2Bdeb12u1?arch=arm64\u0026distro=debian-12\u0026package-id=5744a4694b0fe811"
+          },
+          "Version": "1.34+dfsg-1.2+deb12u1",
+          "Arch": "arm64",
+          "SrcName": "tar",
+          "SrcVersion": "1.34+dfsg-1.2+deb12u1",
+          "Licenses": [
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "GPL-3.0-only",
+            "GPL-3.0-or-later",
+            "LGPL-3.0-only",
+            "LGPL-3.0-or-later"
+          ],
+          "DependsOn": [
+            "libacl1@2.3.1-3",
+            "libc6@2.36-9+deb12u14",
+            "libselinux1@3.4-1+b6"
+          ]
+        },
+        {
+          "ID": "tzdata@2026b-0+deb12u1",
+          "Name": "tzdata",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/tzdata@2026b-0%2Bdeb12u1?arch=all\u0026distro=debian-12",
+            "UID": "c431e1a1bda6326b",
+            "BOMRef": "pkg:deb/debian/tzdata@2026b-0%2Bdeb12u1?arch=all\u0026distro=debian-12\u0026package-id=d46071bbd0f9a5a0"
+          },
+          "Version": "2026b-0+deb12u1",
+          "Arch": "all",
+          "SrcName": "tzdata",
+          "SrcVersion": "2026b-0+deb12u1",
+          "Licenses": [
+            "public-domain"
+          ],
+          "DependsOn": [
+            "debconf@1.5.82"
+          ]
+        },
+        {
+          "ID": "usr-is-merged@37~deb12u1",
+          "Name": "usr-is-merged",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/usr-is-merged@37~deb12u1?arch=all\u0026distro=debian-12\u0026upstream=usrmerge",
+            "UID": "c4e55bc2769e9832",
+            "BOMRef": "pkg:deb/debian/usr-is-merged@37~deb12u1?arch=all\u0026distro=debian-12\u0026package-id=5d5368e5a339ea05\u0026upstream=usrmerge"
+          },
+          "Version": "37~deb12u1",
+          "Arch": "all",
+          "SrcName": "usr-is-merged",
+          "SrcVersion": "37~deb12u1",
+          "Licenses": [
+            "GPL-2.0-only",
+            "GPL-2.0-or-later"
+          ]
+        },
+        {
+          "ID": "util-linux@2.38.1-5+deb12u3",
+          "Name": "util-linux",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/util-linux@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12",
+            "UID": "48016ef4c55f73",
+            "BOMRef": "pkg:deb/debian/util-linux@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12\u0026package-id=082f2f36c63dcdfa"
+          },
+          "Version": "2.38.1-5+deb12u3",
+          "Arch": "arm64",
+          "SrcName": "util-linux",
+          "SrcVersion": "2.38.1-5+deb12u3",
+          "Licenses": [
+            "BSD-3-Clause",
+            "BSD-4-Clause",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "GPL-3.0-only",
+            "GPL-3.0-or-later",
+            "LGPL-2.0-only",
+            "LGPL-2.0-or-later",
+            "LGPL-2.1-only",
+            "LGPL-2.1-or-later",
+            "LGPL-3.0-only",
+            "LGPL-3.0-or-later",
+            "MIT",
+            "BSLA",
+            "LGPL",
+            "public-domain"
+          ],
+          "DependsOn": [
+            "libblkid1@2.38.1-5+deb12u3",
+            "libc6@2.36-9+deb12u14",
+            "libcap-ng0@0.8.3-1+b3",
+            "libcrypt1@1:4.4.33-2",
+            "libmount1@2.38.1-5+deb12u3",
+            "libpam0g@1.5.2-6+deb12u2",
+            "libselinux1@3.4-1+b6",
+            "libsmartcols1@2.38.1-5+deb12u3",
+            "libsystemd0@252.39-1~deb12u2",
+            "libtinfo6@6.4-4",
+            "libudev1@252.39-1~deb12u2",
+            "libuuid1@2.38.1-5+deb12u3",
+            "util-linux-extra@2.38.1-5+deb12u3",
+            "zlib1g@1:1.2.13.dfsg-1"
+          ]
+        },
+        {
+          "ID": "util-linux-extra@2.38.1-5+deb12u3",
+          "Name": "util-linux-extra",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/util-linux-extra@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12\u0026upstream=util-linux",
+            "UID": "46851787cedbe840",
+            "BOMRef": "pkg:deb/debian/util-linux-extra@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12\u0026package-id=2552ed79ca5d100f\u0026upstream=util-linux"
+          },
+          "Version": "2.38.1-5+deb12u3",
+          "Arch": "arm64",
+          "SrcName": "util-linux-extra",
+          "SrcVersion": "2.38.1-5+deb12u3",
+          "Licenses": [
+            "BSD-3-Clause",
+            "BSD-4-Clause",
+            "GPL-2.0-only",
+            "GPL-2.0-or-later",
+            "GPL-3.0-only",
+            "GPL-3.0-or-later",
+            "LGPL-2.0-only",
+            "LGPL-2.0-or-later",
+            "LGPL-2.1-only",
+            "LGPL-2.1-or-later",
+            "LGPL-3.0-only",
+            "LGPL-3.0-or-later",
+            "MIT",
+            "BSLA",
+            "LGPL",
+            "public-domain"
+          ],
+          "DependsOn": [
+            "libaudit1@1:3.0.9-1",
+            "libc6@2.36-9+deb12u14",
+            "libsmartcols1@2.38.1-5+deb12u3"
+          ]
+        },
+        {
+          "ID": "zlib1g@1:1.2.13.dfsg-1",
+          "Name": "zlib1g",
+          "Identifier": {
+            "PURL": "pkg:deb/debian/zlib1g@1:1.2.13.dfsg-1?arch=arm64\u0026distro=debian-12\u0026upstream=zlib",
+            "UID": "d3562fb8f7d3bc7f",
+            "BOMRef": "pkg:deb/debian/zlib1g@1%3A1.2.13.dfsg-1?arch=arm64\u0026distro=debian-12\u0026package-id=9225c9a6005053c2\u0026upstream=zlib"
+          },
+          "Version": "1:1.2.13.dfsg-1",
+          "Arch": "arm64",
+          "SrcName": "zlib1g",
+          "SrcVersion": "1:1.2.13.dfsg-1",
+          "Licenses": [
+            "Zlib"
+          ],
+          "DependsOn": [
+            "libc6@2.36-9+deb12u14"
+          ]
+        }
+      ],
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2011-3374",
+          "PkgID": "apt@2.6.1",
+          "PkgName": "apt",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/apt@2.6.1?arch=arm64\u0026distro=debian-12",
+            "UID": "333f18efe75e1045",
+            "BOMRef": "pkg:deb/debian/apt@2.6.1?arch=arm64\u0026distro=debian-12\u0026package-id=001f65ccfdc16db7"
+          },
+          "InstalledVersion": "2.6.1",
+          "Status": "affected",
+          "SeveritySource": "debian",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2011-3374",
+          "DataSource": {
+            "ID": "debian",
+            "Name": "Debian Security Tracker",
+            "URL": "https://salsa.debian.org/security-tracker-team/security-tracker"
+          },
+          "Fingerprint": "sha256:4835c4bb28651849268fbc850c2263e2a5e17478faa501ece5161edd97851bf2",
+          "Title": "It was found that apt-key in apt, all versions, do not correctly valid ...",
+          "Description": "It was found that apt-key in apt, all versions, do not correctly validate gpg keys with the master keyring, leading to a potential man-in-the-middle attack.",
+          "Severity": "LOW",
+          "CweIDs": [
+            "CWE-347"
+          ],
+          "VendorSeverity": {
+            "debian": 1,
+            "nvd": 1
+          },
+          "CVSS": {
+            "nvd": {
+              "V2Vector": "AV:N/AC:M/Au:N/C:N/I:P/A:N",
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N",
+              "V2Score": 4.3,
+              "V3Score": 3.7
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/cve-2011-3374",
+            "https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=642480",
+            "https://people.canonical.com/~ubuntu-security/cve/2011/CVE-2011-3374.html",
+            "https://seclists.org/fulldisclosure/2011/Sep/221",
+            "https://security-tracker.debian.org/tracker/CVE-2011-3374",
+            "https://snyk.io/vuln/SNYK-LINUX-APT-116518",
+            "https://ubuntu.com/security/CVE-2011-3374"
+          ],
+          "PublishedDate": "2019-11-26T00:15:11.03Z",
+          "LastModifiedDate": "2024-11-21T01:30:22.61Z"
+        },
+        {
+          "VulnerabilityID": "TEMP-0841856-B18BAF",
+          "PkgID": "bash@5.2.15-2+b13",
+          "PkgName": "bash",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/bash@5.2.15-2%2Bb13?arch=arm64\u0026distro=debian-12\u0026upstream=bash%405.2.15-2",
+            "UID": "b4eb2c971ada848d",
+            "BOMRef": "pkg:deb/debian/bash@5.2.15-2%2Bb13?arch=arm64\u0026distro=debian-12\u0026package-id=23da876c33ee972d\u0026upstream=bash%405.2.15-2"
+          },
+          "InstalledVersion": "5.2.15-2+b13",
+          "Status": "affected",
+          "SeveritySource": "debian",
+          "PrimaryURL": "https://security-tracker.debian.org/tracker/TEMP-0841856-B18BAF",
+          "DataSource": {
+            "ID": "debian",
+            "Name": "Debian Security Tracker",
+            "URL": "https://salsa.debian.org/security-tracker-team/security-tracker"
+          },
+          "Fingerprint": "sha256:6225115aeafaa3f11843f1fa4c277adc3d28d5df1778f60cad2d1d5fac14b306",
+          "Title": "[Privilege escalation possible to other user than root]",
+          "Severity": "LOW",
+          "VendorSeverity": {
+            "debian": 1
+          }
+        },
+        {
+          "VulnerabilityID": "CVE-2016-2781",
+          "PkgID": "coreutils@9.1-1",
+          "PkgName": "coreutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/coreutils@9.1-1?arch=arm64\u0026distro=debian-12",
+            "UID": "229971c82256f8e3",
+            "BOMRef": "pkg:deb/debian/coreutils@9.1-1?arch=arm64\u0026distro=debian-12\u0026package-id=cb34fd2c7a5fbf72"
+          },
+          "InstalledVersion": "9.1-1",
+          "Status": "will_not_fix",
+          "SeveritySource": "debian",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2016-2781",
+          "DataSource": {
+            "ID": "debian",
+            "Name": "Debian Security Tracker",
+            "URL": "https://salsa.debian.org/security-tracker-team/security-tracker"
+          },
+          "Fingerprint": "sha256:3bb8cff793bd620df7dcd632e2e220b813631ce988398ffa4122c0dffeef264e",
+          "Title": "coreutils: Non-privileged session can escape to the parent session in chroot",
+          "Description": "chroot in GNU coreutils, when used with --userspec, allows local users to escape to the parent session via a crafted TIOCSTI ioctl call, which pushes characters to the terminal's input buffer.",
+          "Severity": "LOW",
+          "CweIDs": [
+            "CWE-20"
+          ],
+          "VendorSeverity": {
+            "azure": 2,
+            "cbl-mariner": 2,
+            "debian": 1,
+            "nvd": 2,
+            "redhat": 2
+          },
+          "CVSS": {
+            "nvd": {
+              "V2Vector": "AV:L/AC:L/Au:N/C:N/I:P/A:N",
+              "V3Vector": "CVSS:3.0/AV:L/AC:L/PR:L/UI:N/S:C/C:N/I:H/A:N",
+              "V2Score": 2.1,
+              "V3Score": 6.5
+            },
+            "redhat": {
+              "V2Vector": "AV:L/AC:H/Au:N/C:C/I:C/A:C",
+              "V3Vector": "CVSS:3.0/AV:L/AC:L/PR:N/UI:R/S:C/C:H/I:H/A:H",
+              "V2Score": 6.2,
+              "V3Score": 8.6
+            }
+          },
+          "References": [
+            "http://www.openwall.com/lists/oss-security/2016/02/28/2",
+            "http://www.openwall.com/lists/oss-security/2016/02/28/3",
+            "https://access.redhat.com/security/cve/CVE-2016-2781",
+            "https://lists.apache.org/thread.html/rf9fa47ab66495c78bb4120b0754dd9531ca2ff0430f6685ac9b07772@%3Cdev.mina.apache.org%3E",
+            "https://nvd.nist.gov/vuln/detail/CVE-2016-2781",
+            "https://www.cve.org/CVERecord?id=CVE-2016-2781"
+          ],
+          "PublishedDate": "2017-02-07T15:59:00.333Z",
+          "LastModifiedDate": "2026-06-17T00:44:23.16Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2017-18018",
+          "PkgID": "coreutils@9.1-1",
+          "PkgName": "coreutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/coreutils@9.1-1?arch=arm64\u0026distro=debian-12",
+            "UID": "229971c82256f8e3",
+            "BOMRef": "pkg:deb/debian/coreutils@9.1-1?arch=arm64\u0026distro=debian-12\u0026package-id=cb34fd2c7a5fbf72"
+          },
+          "InstalledVersion": "9.1-1",
+          "Status": "affected",
+          "SeveritySource": "debian",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2017-18018",
+          "DataSource": {
+            "ID": "debian",
+            "Name": "Debian Security Tracker",
+            "URL": "https://salsa.debian.org/security-tracker-team/security-tracker"
+          },
+          "Fingerprint": "sha256:f7e81d26564a4c1052a45fac72fb61447175bb3a63d4e7f518f78c56200cf05a",
+          "Title": "coreutils: race condition vulnerability in chown and chgrp",
+          "Description": "In GNU Coreutils through 8.29, chown-core.c in chown and chgrp does not prevent replacement of a plain file with a symlink during use of the POSIX \"-R -L\" options, which allows local users to modify the ownership of arbitrary files by leveraging a race condition.",
+          "Severity": "LOW",
+          "CweIDs": [
+            "CWE-362"
+          ],
+          "VendorSeverity": {
+            "debian": 1,
+            "nvd": 2,
+            "redhat": 2
+          },
+          "CVSS": {
+            "nvd": {
+              "V2Vector": "AV:L/AC:M/Au:N/C:N/I:P/A:N",
+              "V3Vector": "CVSS:3.0/AV:L/AC:H/PR:L/UI:N/S:U/C:N/I:H/A:N",
+              "V2Score": 1.9,
+              "V3Score": 4.7
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.0/AV:L/AC:H/PR:L/UI:R/S:U/C:L/I:L/A:L",
+              "V3Score": 4.2
+            }
+          },
+          "References": [
+            "http://lists.gnu.org/archive/html/coreutils/2017-12/msg00045.html",
+            "https://access.redhat.com/security/cve/CVE-2017-18018",
+            "https://nvd.nist.gov/vuln/detail/CVE-2017-18018",
+            "https://www.cve.org/CVERecord?id=CVE-2017-18018"
+          ],
+          "PublishedDate": "2018-01-04T04:29:00.19Z",
+          "LastModifiedDate": "2026-06-17T01:12:02.94Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-5278",
+          "PkgID": "coreutils@9.1-1",
+          "PkgName": "coreutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/coreutils@9.1-1?arch=arm64\u0026distro=debian-12",
+            "UID": "229971c82256f8e3",
+            "BOMRef": "pkg:deb/debian/coreutils@9.1-1?arch=arm64\u0026distro=debian-12\u0026package-id=cb34fd2c7a5fbf72"
+          },
+          "InstalledVersion": "9.1-1",
+          "Status": "affected",
+          "SeveritySource": "debian",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2025-5278",
+          "DataSource": {
+            "ID": "debian",
+            "Name": "Debian Security Tracker",
+            "URL": "https://salsa.debian.org/security-tracker-team/security-tracker"
+          },
+          "Fingerprint": "sha256:913fc23e279c340f317e39d96c59b8a2cf1417692abe31f84c381ef9731645c3",
+          "Title": "coreutils: Heap Buffer Under-Read in GNU Coreutils sort via Key Specification",
+          "Description": "A flaw was found in GNU Coreutils. The sort utility's begfield() function is vulnerable to a heap buffer under-read. The program may access memory outside the allocated buffer if a user runs a crafted command using the traditional key format. A malicious input could lead to a crash or leak sensitive data.",
+          "Severity": "LOW",
+          "CweIDs": [
+            "CWE-121"
+          ],
+          "VendorSeverity": {
+            "alma": 2,
+            "amazon": 2,
+            "debian": 1,
+            "oracle-oval": 2,
+            "photon": 2,
+            "redhat": 2,
+            "rocky": 2
+          },
+          "CVSS": {
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:L/I:N/A:L",
+              "V3Score": 4.4
+            }
+          },
+          "References": [
+            "http://www.openwall.com/lists/oss-security/2025/05/27/2",
+            "http://www.openwall.com/lists/oss-security/2025/05/29/1",
+            "http://www.openwall.com/lists/oss-security/2025/05/29/2",
+            "https://access.redhat.com/errata/RHSA-2026:28911",
+            "https://access.redhat.com/errata/RHSA-2026:33124",
+            "https://access.redhat.com/errata/RHSA-2026:33313",
+            "https://access.redhat.com/errata/RHSA-2026:33612",
+            "https://access.redhat.com/errata/RHSA-2026:34102",
+            "https://access.redhat.com/security/cve/CVE-2025-5278",
+            "https://bugzilla.redhat.com/2368764",
+            "https://bugzilla.redhat.com/show_bug.cgi?id=2368764",
+            "https://cgit.git.savannah.gnu.org/cgit/coreutils.git/commit/?id=8c9602e3a145e9596dc1a63c6ed67865814b6633",
+            "https://cgit.git.savannah.gnu.org/cgit/coreutils.git/tree/NEWS?id=8c9602e3a145e9596dc1a63c6ed67865814b6633#n14",
+            "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-5278",
+            "https://debbugs.gnu.org/cgi/bugreport.cgi?bug=78507",
+            "https://errata.almalinux.org/9/ALSA-2026-28911.html",
+            "https://errata.rockylinux.org/RLSA-2026:28911",
+            "https://linux.oracle.com/cve/CVE-2025-5278.html",
+            "https://linux.oracle.com/errata/ELSA-2026-28911.html",
+            "https://nvd.nist.gov/vuln/detail/CVE-2025-5278",
+            "https://security-tracker.debian.org/tracker/CVE-2025-5278",
+            "https://www.cve.org/CVERecord?id=CVE-2025-5278"
+          ],
+          "PublishedDate": "2025-05-27T21:15:23.197Z",
+          "LastModifiedDate": "2026-07-01T11:16:20.657Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-41992",
+          "PkgID": "gzip@1.12-1",
+          "PkgName": "gzip",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/gzip@1.12-1?arch=arm64\u0026distro=debian-12",
+            "UID": "38666c7bd7b7f9c3",
+            "BOMRef": "pkg:deb/debian/gzip@1.12-1?arch=arm64\u0026distro=debian-12\u0026package-id=44e60b7e3873a328"
+          },
+          "InstalledVersion": "1.12-1",
+          "Status": "affected",
+          "SeveritySource": "nvd",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-41992",
+          "DataSource": {
+            "ID": "debian",
+            "Name": "Debian Security Tracker",
+            "URL": "https://salsa.debian.org/security-tracker-team/security-tracker"
+          },
+          "Fingerprint": "sha256:0fc63d4af51f4151091af97c4c3c6d98060d7d7f8d61d469e9aa0efe36243848",
+          "Title": "GNU gzip contains a global buffer overflow vulnerability in the LZH de ...",
+          "Description": "GNU gzip contains a global buffer overflow vulnerability in the LZH decompression logic caused by improper reuse of shared global state between different decompression formats within a single execution. GNU gzip maintains a global array that is shared across the LZ77, LZW, and LZH decompression routines and is not reinitialized between files processed in the same invocation.\nBy decompressing a specially crafted LZW file followed by a specially crafted LZH file in a single gzip -d command, an attacker can poison the shared global state and subsequently trigger an out‑of‑bounds read in the LZH decoder. The LZH decompression logic follows stale values left in the shared array, causing reads past the end of the allocated global buffer.\n\nThis issue has been fixed in the commit 63dbf6b3b9e6e781df1a6a64e609b10e23969681",
+          "Severity": "HIGH",
+          "CweIDs": [
+            "CWE-126"
+          ],
+          "VendorSeverity": {
+            "nvd": 3
+          },
+          "CVSS": {
+            "nvd": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+              "V3Score": 7.5
+            }
+          },
+          "References": [
+            "https://cert.pl/en/posts/2026/04/CVE-2026-41991/",
+            "https://cgit.git.savannah.gnu.org/cgit/gzip.git/commit/?id=63dbf6b3b9e6e781df1a6a64e609b10e23969681",
+            "https://www.gnu.org/software/gzip/"
+          ],
+          "PublishedDate": "2026-06-29T12:16:29.94Z",
+          "LastModifiedDate": "2026-07-01T14:02:20.173Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-41991",
+          "PkgID": "gzip@1.12-1",
+          "PkgName": "gzip",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/gzip@1.12-1?arch=arm64\u0026distro=debian-12",
+            "UID": "38666c7bd7b7f9c3",
+            "BOMRef": "pkg:deb/debian/gzip@1.12-1?arch=arm64\u0026distro=debian-12\u0026package-id=44e60b7e3873a328"
+          },
+          "InstalledVersion": "1.12-1",
+          "Status": "affected",
+          "SeveritySource": "nvd",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-41991",
+          "DataSource": {
+            "ID": "debian",
+            "Name": "Debian Security Tracker",
+            "URL": "https://salsa.debian.org/security-tracker-team/security-tracker"
+          },
+          "Fingerprint": "sha256:7ac86c572ff225caa1478fe89ab3a788962896d658c75f51430b3c2ed01a3b94",
+          "Title": "gzip: gzip: Arbitrary file overwrite via insecure temporary file handling in gzexe utility",
+          "Description": "GNU gzip contains a vulnerability in the gzexe utility related to insecure temporary file handling. When the mktemp utility is not available in the user’s PATH, gzexe falls back to constructing a temporary file path based solely on the process ID (PID). This predictable filename is created without exclusive access or existence checks.\nA local attacker can pre‑create the predicted temporary file path as a symbolic link pointing to an arbitrary file writable by the victim. When gzexe runs, it follows the symlink and overwrites the target file, resulting in a time‑of‑check to time‑of‑use (TOCTOU) condition that allows arbitrary file overwrite.\n\nThis issue has been fixed in the commit 4e6f8b24ab823146ab8776f0b7fe486ab34d4269",
+          "Severity": "MEDIUM",
+          "CweIDs": [
+            "CWE-377"
+          ],
+          "VendorSeverity": {
+            "nvd": 2,
+            "redhat": 2
+          },
+          "CVSS": {
+            "nvd": {
+              "V3Vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:N/I:H/A:N",
+              "V3Score": 4.7
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:R/S:U/C:N/I:H/A:H",
+              "V3Score": 6
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2026-41991",
+            "https://cert.pl/en/posts/2026/04/CVE-2026-41991/",
+            "https://cgit.git.savannah.gnu.org/cgit/gzip.git/commit/?id=4e6f8b24ab823146ab8776f0b7fe486ab34d4269",
+            "https://nvd.nist.gov/vuln/detail/CVE-2026-41991",
+            "https://www.cve.org/CVERecord?id=CVE-2026-41991",
+            "https://www.gnu.org/software/gzip/"
+          ],
+          "PublishedDate": "2026-06-29T12:16:29.77Z",
+          "LastModifiedDate": "2026-07-01T14:02:24.45Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2018-6829",
+          "PkgID": "libgcrypt20@1.10.1-3+deb12u1",
+          "PkgName": "libgcrypt20",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libgcrypt20@1.10.1-3%2Bdeb12u1?arch=arm64\u0026distro=debian-12",
+            "UID": "9b5d17674ad583e0",
+            "BOMRef": "pkg:deb/debian/libgcrypt20@1.10.1-3%2Bdeb12u1?arch=arm64\u0026distro=debian-12\u0026package-id=2431c5300283a381"
+          },
+          "InstalledVersion": "1.10.1-3+deb12u1",
+          "Status": "affected",
+          "SeveritySource": "debian",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2018-6829",
+          "DataSource": {
+            "ID": "debian",
+            "Name": "Debian Security Tracker",
+            "URL": "https://salsa.debian.org/security-tracker-team/security-tracker"
+          },
+          "Fingerprint": "sha256:0056f0a8904d9e47958587095ffac861443d506368c873a44633856b069b32ad",
+          "Title": "libgcrypt: ElGamal implementation doesn't have semantic security due to incorrectly encoded plaintexts possibly allowing to obtain sensitive information",
+          "Description": "cipher/elgamal.c in Libgcrypt through 1.8.2, when used to encrypt messages directly, improperly encodes plaintexts, which allows attackers to obtain sensitive information by reading ciphertext data (i.e., it does not have semantic security in face of a ciphertext-only attack). The Decisional Diffie-Hellman (DDH) assumption does not hold for Libgcrypt's ElGamal implementation.",
+          "Severity": "LOW",
+          "CweIDs": [
+            "CWE-327"
+          ],
+          "VendorSeverity": {
+            "debian": 1,
+            "nvd": 3,
+            "redhat": 2
+          },
+          "CVSS": {
+            "nvd": {
+              "V2Vector": "AV:N/AC:L/Au:N/C:P/I:N/A:N",
+              "V3Vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+              "V2Score": 5,
+              "V3Score": 7.5
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
+              "V3Score": 5.3
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2018-6829",
+            "https://github.com/weikengchen/attack-on-libgcrypt-elgamal",
+            "https://github.com/weikengchen/attack-on-libgcrypt-elgamal/wiki",
+            "https://lists.gnupg.org/pipermail/gcrypt-devel/2018-February/004394.html",
+            "https://nvd.nist.gov/vuln/detail/CVE-2018-6829",
+            "https://www.cve.org/CVERecord?id=CVE-2018-6829",
+            "https://www.oracle.com/security-alerts/cpujan2020.html"
+          ],
+          "PublishedDate": "2018-02-07T23:29:01.703Z",
+          "LastModifiedDate": "2026-06-17T02:02:19.757Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-2236",
+          "PkgID": "libgcrypt20@1.10.1-3+deb12u1",
+          "PkgName": "libgcrypt20",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libgcrypt20@1.10.1-3%2Bdeb12u1?arch=arm64\u0026distro=debian-12",
+            "UID": "9b5d17674ad583e0",
+            "BOMRef": "pkg:deb/debian/libgcrypt20@1.10.1-3%2Bdeb12u1?arch=arm64\u0026distro=debian-12\u0026package-id=2431c5300283a381"
+          },
+          "InstalledVersion": "1.10.1-3+deb12u1",
+          "Status": "affected",
+          "SeveritySource": "debian",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2024-2236",
+          "DataSource": {
+            "ID": "debian",
+            "Name": "Debian Security Tracker",
+            "URL": "https://salsa.debian.org/security-tracker-team/security-tracker"
+          },
+          "Fingerprint": "sha256:f6b140241da5bbce20c117c7e7b832a54e79e2bcedc1fa984d96232dd38c6589",
+          "Title": "libgcrypt: vulnerable to Marvin Attack",
+          "Description": "A timing-based side-channel flaw was found in libgcrypt's RSA implementation. This issue may allow a remote attacker to initiate a Bleichenbacher-style attack, which can lead to the decryption of RSA ciphertexts.",
+          "Severity": "LOW",
+          "CweIDs": [
+            "CWE-385"
+          ],
+          "VendorSeverity": {
+            "alma": 2,
+            "amazon": 2,
+            "debian": 1,
+            "oracle-oval": 2,
+            "redhat": 2,
+            "rocky": 2,
+            "ubuntu": 1
+          },
+          "CVSS": {
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N",
+              "V3Score": 5.9
+            }
+          },
+          "References": [
+            "https://access.redhat.com/errata/RHSA-2024:9404",
+            "https://access.redhat.com/errata/RHSA-2025:3530",
+            "https://access.redhat.com/errata/RHSA-2025:3534",
+            "https://access.redhat.com/security/cve/CVE-2024-2236",
+            "https://bugzilla.redhat.com/2245218",
+            "https://bugzilla.redhat.com/show_bug.cgi?id=2245218",
+            "https://bugzilla.redhat.com/show_bug.cgi?id=2268268",
+            "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2024-2236",
+            "https://dev.gnupg.org/T7136",
+            "https://errata.almalinux.org/9/ALSA-2024-9404.html",
+            "https://errata.rockylinux.org/RLSA-2024:9404",
+            "https://github.com/tomato42/marvin-toolkit/tree/master/example/libgcrypt",
+            "https://gitlab.com/redhat-crypto/libgcrypt/libgcrypt-mirror/-/merge_requests/17",
+            "https://linux.oracle.com/cve/CVE-2024-2236.html",
+            "https://linux.oracle.com/errata/ELSA-2024-9404.html",
+            "https://lists.gnupg.org/pipermail/gcrypt-devel/2024-March/005607.html",
+            "https://nvd.nist.gov/vuln/detail/CVE-2024-2236",
+            "https://www.cve.org/CVERecord?id=CVE-2024-2236"
+          ],
+          "PublishedDate": "2024-03-06T22:15:57.977Z",
+          "LastModifiedDate": "2026-06-17T07:24:06.083Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-13151",
+          "PkgID": "libtasn1-6@4.19.0-2+deb12u1",
+          "PkgName": "libtasn1-6",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libtasn1-6@4.19.0-2%2Bdeb12u1?arch=arm64\u0026distro=debian-12",
+            "UID": "5b7229d35663b54b",
+            "BOMRef": "pkg:deb/debian/libtasn1-6@4.19.0-2%2Bdeb12u1?arch=arm64\u0026distro=debian-12\u0026package-id=2b0cf33141f5538f"
+          },
+          "InstalledVersion": "4.19.0-2+deb12u1",
+          "Status": "affected",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2025-13151",
+          "DataSource": {
+            "ID": "debian",
+            "Name": "Debian Security Tracker",
+            "URL": "https://salsa.debian.org/security-tracker-team/security-tracker"
+          },
+          "Fingerprint": "sha256:6829f9b6468ed63b5074cdcffa1caf8766cc6f7998318b0bad52c865626f3d08",
+          "Title": "libtasn1: libtasn1: Denial of Service via stack-based buffer overflow in asn1_expend_octet_string",
+          "Description": "Stack-based buffer overflow in libtasn1 version: v4.20.0. The function fails to validate the size of input data resulting in a buffer overflow in asn1_expend_octet_string.",
+          "Severity": "LOW",
+          "CweIDs": [
+            "CWE-787"
+          ],
+          "VendorSeverity": {
+            "alma": 1,
+            "amazon": 3,
+            "azure": 1,
+            "cbl-mariner": 1,
+            "oracle-oval": 1,
+            "photon": 3,
+            "redhat": 1,
+            "rocky": 1,
+            "ubuntu": 2
+          },
+          "CVSS": {
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H",
+              "V3Score": 5.9
+            }
+          },
+          "References": [
+            "http://www.openwall.com/lists/oss-security/2026/01/08/5",
+            "https://access.redhat.com/errata/RHSA-2026:28253",
+            "https://access.redhat.com/security/cve/CVE-2025-13151",
+            "https://bugzilla.redhat.com/2427698",
+            "https://bugzilla.redhat.com/show_bug.cgi?id=2427698",
+            "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-13151",
+            "https://errata.almalinux.org/9/ALSA-2026-28253.html",
+            "https://errata.rockylinux.org/RLSA-2026:28253",
+            "https://gitlab.com/gnutls/libtasn1",
+            "https://gitlab.com/gnutls/libtasn1/-/merge_requests/121",
+            "https://linux.oracle.com/cve/CVE-2025-13151.html",
+            "https://linux.oracle.com/errata/ELSA-2026-28253.html",
+            "https://nvd.nist.gov/vuln/detail/CVE-2025-13151",
+            "https://ubuntu.com/security/notices/USN-7954-1",
+            "https://ubuntu.com/security/notices/USN-7954-2",
+            "https://www.cve.org/CVERecord?id=CVE-2025-13151",
+            "https://www.kb.cert.org/vuls/id/271649"
+          ],
+          "PublishedDate": "2026-01-07T22:15:43.2Z",
+          "LastModifiedDate": "2026-06-17T08:33:34.88Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-5704",
+          "PkgID": "tar@1.34+dfsg-1.2+deb12u1",
+          "PkgName": "tar",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/tar@1.34%2Bdfsg-1.2%2Bdeb12u1?arch=arm64\u0026distro=debian-12",
+            "UID": "10e2b5bcb2b78e57",
+            "BOMRef": "pkg:deb/debian/tar@1.34%2Bdfsg-1.2%2Bdeb12u1?arch=arm64\u0026distro=debian-12\u0026package-id=5744a4694b0fe811"
+          },
+          "InstalledVersion": "1.34+dfsg-1.2+deb12u1",
+          "Status": "affected",
+          "SeveritySource": "nvd",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-5704",
+          "DataSource": {
+            "ID": "debian",
+            "Name": "Debian Security Tracker",
+            "URL": "https://salsa.debian.org/security-tracker-team/security-tracker"
+          },
+          "Fingerprint": "sha256:9e2079047ca85e43c9495bc15b8c4e3e7016e04424885221ff36bc6ef10ac24c",
+          "Title": "tar: tar: Hidden file injection via crafted archives",
+          "Description": "A flaw was found in tar. A remote attacker could exploit this vulnerability by crafting a malicious archive, leading to hidden file injection with fully attacker-controlled content. This bypasses pre-extraction inspection mechanisms, potentially allowing an attacker to introduce malicious files onto a system without detection.",
+          "Severity": "MEDIUM",
+          "CweIDs": [
+            "CWE-434"
+          ],
+          "VendorSeverity": {
+            "nvd": 2,
+            "redhat": 2,
+            "ubuntu": 2
+          },
+          "CVSS": {
+            "nvd": {
+              "V3Vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:N/I:H/A:N",
+              "V3Score": 5.5
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:R/S:U/C:N/I:H/A:N",
+              "V3Score": 5
+            }
+          },
+          "References": [
+            "http://www.openwall.com/lists/oss-security/2026/04/11/10",
+            "http://www.openwall.com/lists/oss-security/2026/04/11/11",
+            "http://www.openwall.com/lists/oss-security/2026/04/12/2",
+            "https://access.redhat.com/security/cve/CVE-2026-5704",
+            "https://bugzilla.redhat.com/show_bug.cgi?id=2455360",
+            "https://nvd.nist.gov/vuln/detail/CVE-2026-5704",
+            "https://ubuntu.com/security/notices/USN-8477-1",
+            "https://www.cve.org/CVERecord?id=CVE-2026-5704"
+          ],
+          "PublishedDate": "2026-04-06T16:16:42.14Z",
+          "LastModifiedDate": "2026-06-17T10:59:31.78Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2005-2541",
+          "PkgID": "tar@1.34+dfsg-1.2+deb12u1",
+          "PkgName": "tar",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/tar@1.34%2Bdfsg-1.2%2Bdeb12u1?arch=arm64\u0026distro=debian-12",
+            "UID": "10e2b5bcb2b78e57",
+            "BOMRef": "pkg:deb/debian/tar@1.34%2Bdfsg-1.2%2Bdeb12u1?arch=arm64\u0026distro=debian-12\u0026package-id=5744a4694b0fe811"
+          },
+          "InstalledVersion": "1.34+dfsg-1.2+deb12u1",
+          "Status": "affected",
+          "SeveritySource": "debian",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2005-2541",
+          "DataSource": {
+            "ID": "debian",
+            "Name": "Debian Security Tracker",
+            "URL": "https://salsa.debian.org/security-tracker-team/security-tracker"
+          },
+          "Fingerprint": "sha256:799aa4650e3fb8270a97122fdaf50f913f2c5d8364a498a7dcf917fbd5fb72aa",
+          "Title": "tar: does not properly warn the user when extracting setuid or setgid files",
+          "Description": "Tar 1.15.1 does not properly warn the user when extracting setuid or setgid files, which may allow local users or remote attackers to gain privileges.",
+          "Severity": "LOW",
+          "VendorSeverity": {
+            "debian": 1,
+            "nvd": 3,
+            "redhat": 2
+          },
+          "CVSS": {
+            "nvd": {
+              "V2Vector": "AV:N/AC:L/Au:N/C:C/I:C/A:C",
+              "V2Score": 10
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:L/AC:H/PR:N/UI:R/S:U/C:H/I:H/A:H",
+              "V3Score": 7
+            }
+          },
+          "References": [
+            "http://marc.info/?l=bugtraq\u0026m=112327628230258\u0026w=2",
+            "https://access.redhat.com/security/cve/CVE-2005-2541",
+            "https://lists.apache.org/thread.html/rc713534b10f9daeee2e0990239fa407e2118e4aa9e88a7041177497c@%3Cissues.guacamole.apache.org%3E",
+            "https://nvd.nist.gov/vuln/detail/CVE-2005-2541",
+            "https://www.cve.org/CVERecord?id=CVE-2005-2541"
+          ],
+          "PublishedDate": "2005-08-10T04:00:00Z",
+          "LastModifiedDate": "2026-04-16T00:27:16.627Z"
+        },
+        {
+          "VulnerabilityID": "TEMP-0290435-0B57B5",
+          "PkgID": "tar@1.34+dfsg-1.2+deb12u1",
+          "PkgName": "tar",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/tar@1.34%2Bdfsg-1.2%2Bdeb12u1?arch=arm64\u0026distro=debian-12",
+            "UID": "10e2b5bcb2b78e57",
+            "BOMRef": "pkg:deb/debian/tar@1.34%2Bdfsg-1.2%2Bdeb12u1?arch=arm64\u0026distro=debian-12\u0026package-id=5744a4694b0fe811"
+          },
+          "InstalledVersion": "1.34+dfsg-1.2+deb12u1",
+          "Status": "affected",
+          "SeveritySource": "debian",
+          "PrimaryURL": "https://security-tracker.debian.org/tracker/TEMP-0290435-0B57B5",
+          "DataSource": {
+            "ID": "debian",
+            "Name": "Debian Security Tracker",
+            "URL": "https://salsa.debian.org/security-tracker-team/security-tracker"
+          },
+          "Fingerprint": "sha256:863aeaac188d232c01dad3e40c82d15db10196672a6b4aaa4d40993b41b3a4df",
+          "Title": "[tar's rmt command may have undesired side effects]",
+          "Severity": "LOW",
+          "VendorSeverity": {
+            "debian": 1
+          }
+        },
+        {
+          "VulnerabilityID": "CVE-2026-13595",
+          "PkgID": "util-linux@2.38.1-5+deb12u3",
+          "PkgName": "util-linux",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/util-linux@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12",
+            "UID": "48016ef4c55f73",
+            "BOMRef": "pkg:deb/debian/util-linux@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12\u0026package-id=082f2f36c63dcdfa"
+          },
+          "InstalledVersion": "2.38.1-5+deb12u3",
+          "Status": "affected",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-13595",
+          "DataSource": {
+            "ID": "debian",
+            "Name": "Debian Security Tracker",
+            "URL": "https://salsa.debian.org/security-tracker-team/security-tracker"
+          },
+          "Fingerprint": "sha256:710306d040696df450ed540d57e21447c2db7f0095a9165c34c0d609684c2632",
+          "Title": "util-linux: util-linux: heap use-after-free in libblkid nested partition probing",
+          "Description": "A flaw was found in the libblkid library of util-linux. During nested partition probing, the BSD, Minix, Solaris x86, and UnixWare partition probers cache a raw pointer to a parent partition entry in a dynamically allocated array. When subsequent partition additions cause the array to be reallocated, this pointer becomes stale, leading to a heap use-after-free read. An attacker who can present a crafted block device image (for example, via USB insertion or a loop-mounted disk image) can trigger this flaw without user interaction, as libblkid is invoked automatically by udev/udisks as root on block-device hot-plug events. This could lead to limited information disclosure or denial of service.",
+          "Severity": "MEDIUM",
+          "CweIDs": [
+            "CWE-416"
+          ],
+          "VendorSeverity": {
+            "redhat": 2
+          },
+          "CVSS": {
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:H",
+              "V3Score": 6.8
+            }
+          },
+          "References": [
+            "https://access.redhat.com/errata/RHSA-2026:26573",
+            "https://access.redhat.com/security/cve/CVE-2026-13595",
+            "https://bugzilla.redhat.com/show_bug.cgi?id=2494101",
+            "https://github.com/util-linux/util-linux/commit/c0186f14fbdb02f64c8e0ba701ce727ea764ff4c",
+            "https://nvd.nist.gov/vuln/detail/CVE-2026-13595",
+            "https://www.cve.org/CVERecord?id=CVE-2026-13595"
+          ],
+          "PublishedDate": "2026-06-29T09:16:28.303Z",
+          "LastModifiedDate": "2026-06-30T03:17:14.55Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-27456",
+          "PkgID": "util-linux@2.38.1-5+deb12u3",
+          "PkgName": "util-linux",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/util-linux@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12",
+            "UID": "48016ef4c55f73",
+            "BOMRef": "pkg:deb/debian/util-linux@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12\u0026package-id=082f2f36c63dcdfa"
+          },
+          "InstalledVersion": "2.38.1-5+deb12u3",
+          "Status": "affected",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-27456",
+          "DataSource": {
+            "ID": "debian",
+            "Name": "Debian Security Tracker",
+            "URL": "https://salsa.debian.org/security-tracker-team/security-tracker"
+          },
+          "Fingerprint": "sha256:993706c1196c0c80d02c25a3df8abe2d9a15f677d5c0acf8b0720c3d2a47c0b8",
+          "Title": "util-linux: TOCTOU in the mount program when setting up loop devices",
+          "Description": "util-linux is a random collection of Linux utilities. Prior to version 2.41.4, a TOCTOU (Time-of-Check-Time-of-Use) vulnerability has been identified in the SUID binary /usr/bin/mount from util-linux. The mount binary, when setting up loop devices, validates the source file path with user privileges via fork() + setuid() + realpath(), but subsequently re-canonicalizes and opens it with root privileges (euid=0) without verifying that the path has not been replaced between both operations. Neither O_NOFOLLOW, nor inode comparison, nor post-open fstat() are employed. This allows a local unprivileged user to replace the source file with a symlink pointing to any root-owned file or device during the race window, causing the SUID binary to open and mount it as root. Exploitation requires an /etc/fstab entry with user,loop options whose path points to a directory where the attacker has write permission, and that /usr/bin/mount has the SUID bit set (the default configuration on virtually all Linux distributions). The impact is unauthorized read access to root-protected files and block devices, including backup images, disk volumes, and any file containing a valid filesystem. This issue has been patched in version 2.41.4.",
+          "Severity": "MEDIUM",
+          "CweIDs": [
+            "CWE-59",
+            "CWE-269",
+            "CWE-367"
+          ],
+          "VendorSeverity": {
+            "azure": 2,
+            "bottlerocket": 2,
+            "julia": 2,
+            "redhat": 2,
+            "ubuntu": 2
+          },
+          "CVSS": {
+            "julia": {
+              "V3Vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:N/A:N",
+              "V3Score": 4.7
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:N/A:N",
+              "V3Score": 4.7
+            }
+          },
+          "References": [
+            "http://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2026-27456",
+            "https://access.redhat.com/security/cve/CVE-2026-27456",
+            "https://github.com/bottlerocket-os/bottlerocket-core-kit/blob/develop/advisories/14.5.0/BRSA-jgcxwcxt3sxd.toml",
+            "https://github.com/util-linux/util-linux/commit/5e390467b26a3cf3fecc04e1a0d482dff3162fc4",
+            "https://github.com/util-linux/util-linux/releases/tag/v2.41.4",
+            "https://github.com/util-linux/util-linux/security/advisories/GHSA-qq4x-vfq4-9h9g",
+            "https://nvd.nist.gov/vuln/detail/CVE-2026-27456",
+            "https://www.cve.org/CVERecord?id=CVE-2026-27456"
+          ],
+          "PublishedDate": "2026-04-03T22:16:25.4Z",
+          "LastModifiedDate": "2026-06-17T10:27:11.017Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-3184",
+          "PkgID": "util-linux@2.38.1-5+deb12u3",
+          "PkgName": "util-linux",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/util-linux@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12",
+            "UID": "48016ef4c55f73",
+            "BOMRef": "pkg:deb/debian/util-linux@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12\u0026package-id=082f2f36c63dcdfa"
+          },
+          "InstalledVersion": "2.38.1-5+deb12u3",
+          "Status": "will_not_fix",
+          "SeveritySource": "nvd",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-3184",
+          "DataSource": {
+            "ID": "debian",
+            "Name": "Debian Security Tracker",
+            "URL": "https://salsa.debian.org/security-tracker-team/security-tracker"
+          },
+          "Fingerprint": "sha256:ab3a11ec1d3e4f9abd1df6081ac5c8c756f486d00542afa022536e7d27176bb7",
+          "Title": "util-linux: util-linux: Access control bypass due to improper hostname canonicalization",
+          "Description": "A flaw was found in util-linux. Improper hostname canonicalization in the `login(1)` utility, when invoked with the `-h` option, can modify the supplied remote hostname before setting `PAM_RHOST`. A remote attacker could exploit this by providing a specially crafted hostname, potentially bypassing host-based Pluggable Authentication Modules (PAM) access control rules that rely on fully qualified domain names. This could lead to unauthorized access.",
+          "Severity": "MEDIUM",
+          "CweIDs": [
+            "CWE-289"
+          ],
+          "VendorSeverity": {
+            "azure": 1,
+            "nvd": 2,
+            "photon": 2,
+            "redhat": 1,
+            "ubuntu": 2
+          },
+          "CVSS": {
+            "nvd": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N",
+              "V3Score": 5.3
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N",
+              "V3Score": 3.7
+            }
+          },
+          "References": [
+            "https://access.redhat.com/errata/RHSA-2026:7180",
+            "https://access.redhat.com/security/cve/CVE-2026-3184",
+            "https://bugzilla.redhat.com/show_bug.cgi?id=2442570",
+            "https://nvd.nist.gov/vuln/detail/CVE-2026-3184",
+            "https://www.cve.org/CVERecord?id=CVE-2026-3184"
+          ],
+          "PublishedDate": "2026-04-03T19:17:23.377Z",
+          "LastModifiedDate": "2026-06-17T10:43:10.203Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2022-0563",
+          "PkgID": "util-linux@2.38.1-5+deb12u3",
+          "PkgName": "util-linux",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/util-linux@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12",
+            "UID": "48016ef4c55f73",
+            "BOMRef": "pkg:deb/debian/util-linux@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12\u0026package-id=082f2f36c63dcdfa"
+          },
+          "InstalledVersion": "2.38.1-5+deb12u3",
+          "Status": "affected",
+          "SeveritySource": "debian",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2022-0563",
+          "DataSource": {
+            "ID": "debian",
+            "Name": "Debian Security Tracker",
+            "URL": "https://salsa.debian.org/security-tracker-team/security-tracker"
+          },
+          "Fingerprint": "sha256:b51f5995ca66ad97af12634485b7d7b01b860d7d90cd59bbd9470f8975cc6333",
+          "Title": "util-linux: partial disclosure of arbitrary files in chfn and chsh when compiled with libreadline",
+          "Description": "A flaw was found in the util-linux chfn and chsh utilities when compiled with Readline support. The Readline library uses an \"INPUTRC\" environment variable to get a path to the library config file. When the library cannot parse the specified file, it prints an error message containing data from the file. This flaw allows an unprivileged user to read root-owned files, potentially leading to privilege escalation. This flaw affects util-linux versions prior to 2.37.4.",
+          "Severity": "LOW",
+          "CweIDs": [
+            "CWE-209"
+          ],
+          "VendorSeverity": {
+            "amazon": 2,
+            "bottlerocket": 2,
+            "cbl-mariner": 2,
+            "debian": 1,
+            "nvd": 2,
+            "photon": 2,
+            "redhat": 2
+          },
+          "CVSS": {
+            "nvd": {
+              "V2Vector": "AV:L/AC:M/Au:N/C:P/I:N/A:N",
+              "V3Vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N",
+              "V2Score": 1.9,
+              "V3Score": 5.5
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N",
+              "V3Score": 5.5
+            }
+          },
+          "References": [
+            "http://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2022-0563",
+            "https://access.redhat.com/security/cve/CVE-2022-0563",
+            "https://blog.trailofbits.com/2023/02/16/suid-logic-bug-linux-readline/",
+            "https://github.com/bottlerocket-os/bottlerocket/security/advisories/GHSA-mv4q-wq4c-5xmg",
+            "https://lore.kernel.org/util-linux/20220214110609.msiwlm457ngoic6w@ws.net.home/T/#u",
+            "https://nvd.nist.gov/vuln/detail/CVE-2022-0563",
+            "https://security.gentoo.org/glsa/202401-08",
+            "https://security.netapp.com/advisory/ntap-20220331-0002/",
+            "https://www.cve.org/CVERecord?id=CVE-2022-0563"
+          ],
+          "PublishedDate": "2022-02-21T19:15:08.393Z",
+          "LastModifiedDate": "2026-06-17T04:20:51.053Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-14104",
+          "PkgID": "util-linux@2.38.1-5+deb12u3",
+          "PkgName": "util-linux",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/util-linux@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12",
+            "UID": "48016ef4c55f73",
+            "BOMRef": "pkg:deb/debian/util-linux@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12\u0026package-id=082f2f36c63dcdfa"
+          },
+          "InstalledVersion": "2.38.1-5+deb12u3",
+          "Status": "affected",
+          "SeveritySource": "debian",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2025-14104",
+          "DataSource": {
+            "ID": "debian",
+            "Name": "Debian Security Tracker",
+            "URL": "https://salsa.debian.org/security-tracker-team/security-tracker"
+          },
+          "Fingerprint": "sha256:dad0ca8dddc809390bbb9369de9e7d1b1fba92032348f5fc39f7f4cdacf4c528",
+          "Title": "util-linux: util-linux: Heap buffer overread in setpwnam() when processing 256-byte usernames",
+          "Description": "A flaw was found in util-linux. This vulnerability allows a heap buffer overread when processing 256-byte usernames, specifically within the `setpwnam()` function, affecting SUID (Set User ID) login-utils utilities writing to the password database.",
+          "Severity": "LOW",
+          "CweIDs": [
+            "CWE-125"
+          ],
+          "VendorSeverity": {
+            "alma": 2,
+            "azure": 2,
+            "cbl-mariner": 2,
+            "debian": 1,
+            "oracle-oval": 2,
+            "photon": 2,
+            "redhat": 2,
+            "rocky": 2
+          },
+          "CVSS": {
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:H",
+              "V3Score": 6.1
+            }
+          },
+          "References": [
+            "https://access.redhat.com/errata/RHSA-2026:1696",
+            "https://access.redhat.com/errata/RHSA-2026:1852",
+            "https://access.redhat.com/errata/RHSA-2026:1913",
+            "https://access.redhat.com/errata/RHSA-2026:2485",
+            "https://access.redhat.com/errata/RHSA-2026:2563",
+            "https://access.redhat.com/errata/RHSA-2026:2737",
+            "https://access.redhat.com/errata/RHSA-2026:2800",
+            "https://access.redhat.com/errata/RHSA-2026:3406",
+            "https://access.redhat.com/errata/RHSA-2026:4943",
+            "https://access.redhat.com/errata/RHSA-2026:7180",
+            "https://access.redhat.com/security/cve/CVE-2025-14104",
+            "https://bugzilla.redhat.com/2419369",
+            "https://bugzilla.redhat.com/show_bug.cgi?id=2419369",
+            "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-14104",
+            "https://errata.almalinux.org/9/ALSA-2026-1913.html",
+            "https://errata.rockylinux.org/RLSA-2026:1913",
+            "https://linux.oracle.com/cve/CVE-2025-14104.html",
+            "https://linux.oracle.com/errata/ELSA-2026-1913.html",
+            "https://nvd.nist.gov/vuln/detail/CVE-2025-14104",
+            "https://www.cve.org/CVERecord?id=CVE-2025-14104"
+          ],
+          "PublishedDate": "2025-12-05T17:16:03.117Z",
+          "LastModifiedDate": "2026-06-30T00:16:53.04Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-53613",
+          "PkgID": "util-linux@2.38.1-5+deb12u3",
+          "PkgName": "util-linux",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/util-linux@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12",
+            "UID": "48016ef4c55f73",
+            "BOMRef": "pkg:deb/debian/util-linux@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12\u0026package-id=082f2f36c63dcdfa"
+          },
+          "InstalledVersion": "2.38.1-5+deb12u3",
+          "Status": "affected",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-53613",
+          "DataSource": {
+            "ID": "debian",
+            "Name": "Debian Security Tracker",
+            "URL": "https://salsa.debian.org/security-tracker-team/security-tracker"
+          },
+          "Fingerprint": "sha256:5a22dca9e85698070053104df9882f3545d32871e7d9106895a7feb23c550bde",
+          "Title": "[Local Privilege Escalation via TOCTOU in mount(8) - Target Path Redirection]",
+          "Severity": "UNKNOWN"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-53615",
+          "PkgID": "util-linux@2.38.1-5+deb12u3",
+          "PkgName": "util-linux",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/util-linux@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12",
+            "UID": "48016ef4c55f73",
+            "BOMRef": "pkg:deb/debian/util-linux@2.38.1-5%2Bdeb12u3?arch=arm64\u0026distro=debian-12\u0026package-id=082f2f36c63dcdfa"
+          },
+          "InstalledVersion": "2.38.1-5+deb12u3",
+          "Status": "affected",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-53615",
+          "DataSource": {
+            "ID": "debian",
+            "Name": "Debian Security Tracker",
+            "URL": "https://salsa.debian.org/security-tracker-team/security-tracker"
+          },
+          "Fingerprint": "sha256:72b419004513e1984b56a9ddc49be2e9b8f97e8222f6d92bc957bb4dd4449b3b",
+          "Title": "[Integer Overflow or Wraparound in libblkid/src/partitions/dos.c]",
+          "Severity": "UNKNOWN"
+        }
+      ]
+    }
+  ]
+}
