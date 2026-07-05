@@ -245,7 +245,9 @@ export DR_TOKEN=dr_...               # copy the token from the seed output
 make serve                           # http://localhost:8080 (leave running in this terminal)
 ```
 
-The server runs API-only unless GitHub OAuth is configured (see below). Check it:
+The UI uses passwordless magic-link sign-in; without an email sender configured
+(`SEND_API_KEY`), the server logs the sign-in link instead of emailing it (see
+the UI section below). For local API testing, `make seed` is simpler. Check it:
 
 ```bash
 curl -s http://localhost:8080/health         # -> ok
@@ -356,15 +358,30 @@ Re-run `make scan` after the vulnerability DB updates (or a scanner upgrade) to
 see change events accumulate — an unchanged SBOM against an unchanged DB produces
 no new events.
 
-### Optional: the token-minting UI (GitHub OAuth)
+### The token-minting UI (passwordless magic-link)
 
-The UI at `/` lets a human sign in with GitHub to create/revoke API tokens. It's
-disabled unless OAuth is configured — for local API testing, `make seed` is
-simpler. To enable it, register a GitHub OAuth app (callback
-`http://localhost:8080/auth/github/callback`) and set before `make serve`:
+The UI at `/` lets a human sign in — **no password, no OAuth** — to create and
+revoke API tokens. Enter an email, receive a one-time sign-in link (15-min TTL,
+single use), click it to get a session. Sign-up and sign-in are the same flow;
+the tenant is created and its email marked verified on first successful link.
+
+For local API testing, `make seed` is simpler (it mints a token directly). To
+exercise the UI locally **without** an email provider, the server logs the
+magic link instead of sending it:
 
 ```bash
-export GITHUB_OAUTH_CLIENT_ID=...  GITHUB_OAUTH_CLIENT_SECRET=...
+make serve                                  # in another terminal
+curl -s -X POST http://localhost:8080/auth/login -d "email=you@example.com"
+# then copy the "magic link (email sending disabled)" URL from the serve log
+# and open it in a browser — you're signed in.
+```
+
+To actually send email (needed in any real deployment, and for alerts later),
+set the shared platform email secret before `make serve`:
+
+```bash
+export SEND_API_KEY=...                      # Resend API key (shared: SEND_API_KEY)
+export EMAIL_FROM="DevRadar <no-reply@devradar.thingz.io>"   # optional; has a default
 ```
 
 ### Common tasks
@@ -406,7 +423,7 @@ DevRadar is the third service in the Thingz open source intelligence platform. E
 All three services run on GCP in the `thingzio` project (`us-west1`) and follow one platform contract — DevRadar references shared resources and creates only its own (details in [IMPLEMENTATION.md](IMPLEMENTATION.md)):
 - **Cloud SQL PostgreSQL** — one shared instance (`thingzio-pg`) and database (`thingz`); each service connects as its own DB user and prefixes its tables (`devradar_*`). DevRadar isolates tenants at the application layer (`WHERE tenant_id = $1`), like DevTrace; DevPulse uses Row-Level Security.
 - **Cloud Run** — each service owns its service/job; DevRadar runs a serve service (`devradar-saas-serve`) and a daily scan job (`devradar-saas-scan`), built with `ko`/GoReleaser and deployed via Workload Identity Federation.
-- **Secret Manager** — centralized credentials; DevRadar uses it only for its DB URL, OAuth secret, and Anthropic key — **never for registry credentials** (it has none).
+- **Secret Manager** — centralized credentials; DevRadar uses it only for its DB URL, the email-send key (`SEND_API_KEY`, magic-link + alerts), and the Anthropic key — **never for registry credentials** (it has none).
 - **Shared VPC, Artifact Registry, monitoring** — DevRadar attaches to the shared VPC, pushes to its own `devradar-saas-images` repo, and reuses the shared DB alert policies.
 - **AI** — like its siblings, DevRadar uses Claude, but narrowly: to turn a day's raw change events into a human-readable delta narrative on alerts (and, opt-in, to stub OpenVEX documents — see roadmap). The core value is still the deterministic data pipeline, not AI generation.
 

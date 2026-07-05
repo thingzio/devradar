@@ -10,7 +10,7 @@ DevRadar is the third service on the shared Thingz platform and follows the conv
 
 The system's runtime pieces, all Cloud Run, no VMs, no queue, no registry access:
 
-1. **Ingest API + minimal UI** — Cloud Run *service* (`devradar-saas-serve`). Accepts, validates, content-addresses, and stores SBOMs (API-token auth); serves a small GitHub-OAuth UI for minting/revoking API tokens (session auth).
+1. **Ingest API + minimal UI** — Cloud Run *service* (`devradar-saas-serve`). Accepts, validates, content-addresses, and stores SBOMs (API-token auth); serves a small passwordless magic-link UI for minting/revoking API tokens (session auth).
 2. **Daily Scan Job** — Cloud Run *job* (`devradar-saas-scan`). Rescans active SBOMs, writes current state + change events.
 3. **Read API + UI** — tenants pull their current findings and change history (`/v1/images`, `/v1/sboms/{id}/findings`, `/v1/sboms/{id}/events`). v1 is pull-only; push alerting is post-MVP.
 4. **Store** — shared Cloud SQL PostgreSQL (`thingz` database, `devradar_`-prefixed tables).
@@ -506,6 +506,8 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 
 Runs once daily. For each active SBOM: **canonicalize to CycloneDX**, run every available scanner on the canonical form, normalize, and write current state + change events in one transaction per (sbom, scanner). Pure CPU — the only external I/O is reading the SBOM from GCS and writing to Postgres.
 
+**Concurrency (v1: single instance).** `ListActiveSBOMs` fetches the whole active set with no claiming, so v1 assumes **one** scan-job execution per day (Cloud Scheduler → one run). At v1 corpus size (~1,000 SBOMs × ~3s ≈ under an hour on 2 vCPU) that is sufficient. Running two instances would not corrupt anything — `ApplyScan` is idempotent and event inserts are guarded by a unique key — but it would duplicate work, not parallelize it. When the corpus outgrows the daily window, parallelize by replacing `ListActiveSBOMs` with claim-based batches (`SELECT ... FOR UPDATE SKIP LOCKED` on a `scan_claimed_at` column) across Cloud Run Job `task_count` tasks — the same sharding DevPulse's import job uses. The idempotent writes mean this is a purely additive change; nothing in v1 blocks it.
+
 Canonicalization is the fix the spike surfaced ([Canonicalize to CycloneDX](#canonicalize-to-cyclonedx)): scanning is **not** format-neutral, so every SBOM is converted to CycloneDX here — in the job, never at ingest — before it reaches the scanners.
 
 ```go
@@ -628,25 +630,34 @@ DevRadar shares one Postgres database (`thingz` on `thingzio-pg`) with DevPulse 
 **Tenant isolation is application-level** (`WHERE tenant_id = $1` on every tenant-scoped query), mirroring DevTrace — *not* DevPulse's Row-Level Security. This is a deliberate choice: DevRadar's scan job is inherently **cross-tenant** (it iterates every active SBOM), so a per-request `app.tenant_id` GUC would fight the batch writer. App-level scoping works naturally with a pooled connection and a job that reads across all tenants, at the cost of relying on every *read* query carrying the predicate — see [Tenant Isolation](#tenant-isolation) for the reasoning and the guardrails. `devradar_finding_event` is partitioned monthly from day one.
 
 ```sql
--- ── Identity & auth (shapes mirror devtrace_tenant / _session / _api_token) ────
+-- ── Identity & auth (passwordless magic-link; no OAuth, no passwords) ──────────
 
--- A tenant is a GitHub identity. Owns SBOMs, API tokens, and alert routing.
+-- A tenant is identified by a verified email address. email is the login
+-- identity and the alert destination; email_verified_at is set the first time a
+-- magic-link is consumed.
 CREATE TABLE devradar_tenant (
-    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    github_id     BIGINT NOT NULL UNIQUE,
-    username      TEXT NOT NULL,
-    email         TEXT,                                -- alert destination
-    avatar_url    TEXT,
-    plan          TEXT NOT NULL DEFAULT 'free',
-    status        TEXT NOT NULL DEFAULT 'active',      -- active | suspended
-    min_severity  TEXT NOT NULL DEFAULT 'medium',      -- read-API default severity filter
-    tos_accepted_at TIMESTAMPTZ,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email            TEXT NOT NULL UNIQUE,             -- login identity + alert destination
+    email_verified_at TIMESTAMPTZ,                     -- first successful magic-link consume
+    plan             TEXT NOT NULL DEFAULT 'free',
+    status           TEXT NOT NULL DEFAULT 'active',   -- active | suspended
+    min_severity     TEXT NOT NULL DEFAULT 'medium',   -- read-API default severity filter
+    tos_accepted_at  TIMESTAMPTZ,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_devradar_tenant_username ON devradar_tenant(username);
 
--- Browser sessions (minted by the UI after GitHub OAuth). id = SHA-256(token).
+-- Single-use magic-link login tokens (hashed, short TTL). Consuming one
+-- authenticates the email and mints a session; deleted on consume.
+CREATE TABLE devradar_login_token (
+    id          TEXT PRIMARY KEY,                      -- hex SHA-256 of the raw token
+    email       TEXT NOT NULL,
+    expires_at  TIMESTAMPTZ NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_devradar_login_token_expires ON devradar_login_token(expires_at);
+
+-- Browser sessions (minted after a magic-link is consumed). id = SHA-256(token).
 CREATE TABLE devradar_session (
     id          TEXT PRIMARY KEY,                      -- hex SHA-256 of the opaque cookie token
     tenant_id   UUID NOT NULL REFERENCES devradar_tenant(id) ON DELETE CASCADE,
@@ -865,13 +876,13 @@ All GCP, in the shared `thingzio` project (`us-west1`). No VMs, no Cloud Tasks, 
 
 | Component | Technology | Notes |
 |---|---|---|
-| Ingest API + minimal UI | Cloud Run service `devradar-saas-serve` | Scales to zero; serves the JSON API and the OAuth/token-minting UI |
+| Ingest API + minimal UI | Cloud Run service `devradar-saas-serve` | Scales to zero; serves the JSON API and the magic-link token-minting UI |
 | Daily scan | Cloud Run Job `devradar-saas-scan` | ~2 vCPU; pinned scanner binaries baked in, vuln DB refreshed lazily at job start; triggered by Cloud Scheduler |
 | Images | `ko` via GoReleaser (no Dockerfile) | Pushed to Artifact Registry `us-west1-docker.pkg.dev/thingzio/devradar-saas-images/<name>` |
 | Scheduling | Cloud Scheduler | Triggers the scan job ~02:00 UTC |
 | SBOM bytes | GCS bucket `devradar-saas-sboms` (DevRadar-owned) | Content-addressed objects; the shared infra's DB-backup bucket is not for app data |
 | Store | Shared Cloud SQL `thingzio-pg`, database `thingz`, user `devradar` | `db-custom-1-3840` — DevRadar does **not** provision the instance |
-| Secrets | Secret Manager | `devradar-saas-database-url`, `devradar-saas-oauth-client-secret`, `devradar-saas-anthropic-api-key` |
+| Secrets | Secret Manager | `devradar-saas-database-url`, `SEND_API_KEY` (Resend — magic-link + alerts), `devradar-saas-anthropic-api-key` |
 
 This is the **two-deployable-unit** shape (DevPulse's model: a service + a scheduled Job), chosen over DevTrace's single-binary-with-background-goroutines because DevRadar's daily scan is a long batch over *all* tenants — a Cloud Run Job is independently retriable and scaled, and lets the API service scale to zero between requests.
 
@@ -921,11 +932,13 @@ Environment variables only — **no config file, no flags** (both siblings). A `
 
 ### Auth & tenancy
 
-DevRadar carries **both** sibling auth models because it needs both surfaces:
+DevRadar is **passwordless** and has no external OAuth dependency. Two surfaces:
 
-- **API tokens** (DevTrace's pattern) for the primary path — CI submitting SBOMs. Raw token `"dr_" + hex(32 random bytes)`, shown once; only the hex **SHA-256 hash** is stored (`devradar_api_token.token_hash`). `RequireAPIToken(db)` middleware reads `Authorization: Bearer`, 401 JSON on failure.
-- **GitHub OAuth → session cookie** for the minimal UI, where a human logs in to mint/revoke API tokens. Opaque 32-byte token, SHA-256-hashed as `devradar_session.id`, 7-day TTL; cookie is `__Host-session` on HTTPS else `session`, `HttpOnly`/`Secure`/`SameSite=Lax`. `RequireAuth(db, loginURL)` middleware; state-changing UI POSTs use double-submit-cookie CSRF.
-- `RequireAdmin(db)` gates admin ops on a `DEVRADAR_ADMIN_USERS` allowlist and returns **404** (not 403) to hide route existence.
+- **API tokens** for the primary path — CI submitting SBOMs. Raw token `"dr_" + hex(32 random bytes)`, shown once; only the hex **SHA-256 hash** is stored (`devradar_api_token.token_hash`). `RequireAPIToken(db)` middleware reads `Authorization: Bearer`, 401 JSON on failure.
+- **Magic-link → session cookie** for the minimal UI, where a human signs in to mint/revoke API tokens. Tenant identity is a **verified email** (no passwords, no OAuth provider): `POST /auth/login` issues a single-use `devradar_login_token` (hex SHA-256 stored, 15-min TTL) and emails it as a link (via Resend, `pkg/net`); `GET /auth/verify?token=` consumes it (single-use — a delete-and-return atomically enforces one use), upserts + verifies the tenant (`UpsertTenantByEmail`), and mints a session. Session token is opaque 32 bytes, SHA-256-hashed as `devradar_session.id`, 7-day TTL; cookie is `__Host-session` on HTTPS else `session`, `HttpOnly`/`Secure`/`SameSite=Lax`. Sign-up and sign-in are one flow; the login response is identical whether or not the email is registered (no account-enumeration). With no email sender configured the link is logged (dev).
+
+  *Why magic-link over passwords or OAuth:* the platform already sends email (needed for alerts), so email deliverability is a given — magic-link then needs no password storage/reset flow and no per-provider OAuth registration, making it strictly less to build and operate than either alternative for DevRadar's occasional-login dashboard.
+- Admin gating (`DEVRADAR_ADMIN_USERS` allowlist, 404-to-hide) is reserved for later; v1 has no admin surface.
 - Tenant is injected into `context` under a private key; `TenantFromContext(ctx)` retrieves it. Suspended tenants → 403 (API) / redirect (UI).
 
 ### Tenant Isolation
@@ -971,7 +984,7 @@ DevRadar plugs into `thingzio/infra` exactly as the siblings do — it **referen
 **Created by DevRadar's own `infra/saas/`:**
 
 1. `database.tf` — `data "google_sql_database_instance" "shared"` (reference) + `google_sql_user "app"` named **`devradar`** with a `random_password`. DevRadar does *not* create a database; it uses the shared `thingz` DB with `devradar_`-prefixed tables.
-2. `secrets.tf` — `devradar-saas-database-url` assembled as a Cloud SQL **unix-socket** DSN: `host=/cloudsql/thingzio:us-west1:thingzio-pg dbname=thingz user=devradar password=... sslmode=disable`; plus `devradar-saas-oauth-client-secret`, `devradar-saas-anthropic-api-key`. Each granted to the run SA via `secretmanager.secretAccessor`.
+2. `secrets.tf` — `devradar-saas-database-url` assembled as a Cloud SQL **unix-socket** DSN: `host=/cloudsql/thingzio:us-west1:thingzio-pg dbname=thingz user=devradar password=... sslmode=disable`; plus `SEND_API_KEY` (Resend, for magic-link + alerts) and `devradar-saas-anthropic-api-key`. Each granted to the run SA via `secretmanager.secretAccessor`.
 3. `iam.tf` — run SA `devradar-saas-run` (roles `cloudsql.client`, `cloudsql.instanceUser`, `artifactregistry.reader`, `logging.logWriter`, `monitoring.metricWriter`, plus `storage.objectAdmin` on its SBOM bucket); deployer SA `github-actions-devradar-saas`; WIF pool/provider bound to `assertion.repository == 'thingzio/devradar'`.
 4. `cloudrun.tf` — the `devradar-saas-serve` **service** and `devradar-saas-scan` **job**, both mounting the Cloud SQL socket (`volumes { cloud_sql_instance { instances = ["thingzio:us-west1:thingzio-pg"] } }` at `/cloudsql`), VPC egress `PRIVATE_RANGES_ONLY` onto `thingzio-subnet`, `DATABASE_URL` from the secret.
 5. `storage.tf` — GCS bucket `devradar-saas-sboms` for SBOM bytes (the shared `thingzio-db-backups` bucket is DB-only).

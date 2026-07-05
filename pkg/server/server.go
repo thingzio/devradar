@@ -1,7 +1,7 @@
 // Package server is DevRadar's HTTP surface: the SBOM ingest API, the
-// tenant-scoped read API, a minimal GitHub-OAuth UI for minting API tokens, and
-// health. It uses the stdlib ServeMux with method patterns (no third-party
-// router), matching the sibling services.
+// tenant-scoped read API, a minimal passwordless (magic-link) UI for minting API
+// tokens, and health. It uses the stdlib ServeMux with method patterns (no
+// third-party router), matching the sibling services.
 package server
 
 import (
@@ -16,6 +16,7 @@ import (
 	"github.com/thingzio/devradar/pkg/data/postgres"
 	"github.com/thingzio/devradar/pkg/gcs"
 	"github.com/thingzio/devradar/pkg/middleware"
+	drnet "github.com/thingzio/devradar/pkg/net"
 )
 
 // Options configures the server.
@@ -27,11 +28,10 @@ type Options struct {
 
 // Server holds handler dependencies.
 type Server struct {
-	store  *postgres.Store
-	blobs  BlobStore
-	oauth  *OAuthConfig
-	opts   Options
-	tokens int64 // reserved for future rate limiting
+	store *postgres.Store
+	blobs BlobStore
+	email drnet.Sender // nil in dev → magic links are logged, not sent
+	opts  Options
 }
 
 // BlobStore persists and retrieves raw SBOM bytes (GCS in production).
@@ -39,9 +39,10 @@ type BlobStore interface {
 	Put(ctx context.Context, objectPath string, data []byte) error
 }
 
-// New builds a Server.
-func New(store *postgres.Store, blobs BlobStore, oauth *OAuthConfig, opts Options) *Server {
-	return &Server{store: store, blobs: blobs, oauth: oauth, opts: opts}
+// New builds a Server. email may be nil (development), in which case magic-link
+// URLs are logged instead of emailed.
+func New(store *postgres.Store, blobs BlobStore, email drnet.Sender, opts Options) *Server {
+	return &Server{store: store, blobs: blobs, email: email, opts: opts}
 }
 
 // Handler builds the routed, middleware-wrapped http.Handler.
@@ -63,7 +64,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/sboms/{id}/findings", apiToken(http.HandlerFunc(s.handleFindings)))
 	mux.Handle("GET /v1/sboms/{id}/events", apiToken(http.HandlerFunc(s.handleEvents)))
 
-	// Minimal UI + OAuth (session auth) for minting API tokens.
+	// Minimal passwordless UI (session auth) for minting API tokens.
 	s.registerUI(mux, db)
 
 	return recoverPanics(securityHeaders(mux))

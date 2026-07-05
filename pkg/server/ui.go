@@ -1,10 +1,9 @@
 package server
 
 import (
-	"crypto/rand"
 	"database/sql"
 	"embed"
-	"encoding/hex"
+	"fmt"
 	"html/template"
 	"log/slog"
 	"net/http"
@@ -13,7 +12,6 @@ import (
 	"github.com/thingzio/devradar/pkg/config"
 	"github.com/thingzio/devradar/pkg/data"
 	"github.com/thingzio/devradar/pkg/middleware"
-	"github.com/thingzio/devradar/pkg/oauth"
 	"github.com/thingzio/devradar/pkg/tenant"
 )
 
@@ -24,44 +22,18 @@ var templates = template.Must(template.ParseFS(templateFS, "templates/*.html"))
 
 const (
 	sessionTTL    = 7 * 24 * time.Hour
-	oauthStateTTL = 10 * time.Minute
+	loginTokenTTL = 15 * time.Minute
 	loginPath     = "/"
 )
 
-// OAuthConfig wraps the GitHub OAuth config; nil disables the UI (API-only).
-type OAuthConfig struct {
-	GitHub *oauth.Config
-}
-
-// NewOAuthConfigFromEnv builds OAuth config from env, or nil if unconfigured.
-func NewOAuthConfigFromEnv() *OAuthConfig {
-	id := config.GetEnv("GITHUB_OAUTH_CLIENT_ID", "")
-	secret := config.GetEnv("GITHUB_OAUTH_CLIENT_SECRET", "")
-	if id == "" || secret == "" {
-		return nil
-	}
-	return &OAuthConfig{GitHub: &oauth.Config{
-		ClientID:     id,
-		ClientSecret: secret,
-		RedirectURL:  config.BaseURL() + "/auth/github/callback",
-	}}
-}
-
-// registerUI wires the OAuth login flow and the token-management page. If OAuth
-// is unconfigured the UI is disabled and only the JSON API is served.
+// registerUI wires the magic-link sign-in flow and the token-management page.
+// Auth is passwordless: enter an email, receive a one-time link, click it to get
+// a session, then mint API tokens for CI. If no email sender is configured
+// (local dev), the magic link is logged instead of sent.
 func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
-	if s.oauth == nil || s.oauth.GitHub == nil {
-		mux.HandleFunc("GET /", func(w http.ResponseWriter, _ *http.Request) {
-			writeJSON(w, http.StatusOK, map[string]string{
-				"service": "devradar", "ui": "disabled (OAuth not configured)",
-			})
-		})
-		return
-	}
-
 	mux.HandleFunc("GET /", s.handleLanding)
-	mux.HandleFunc("GET /auth/github", s.handleLogin)
-	mux.HandleFunc("GET /auth/github/callback", s.handleCallback)
+	mux.HandleFunc("POST /auth/login", s.handleRequestLink)
+	mux.HandleFunc("GET /auth/verify", s.handleVerify)
 	mux.HandleFunc("POST /auth/logout", s.handleLogout)
 
 	authed := middleware.RequireAuth(db, loginPath)
@@ -72,45 +44,68 @@ func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
 }
 
 func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
-	// If already signed in, go to tokens.
+	// Already signed in → straight to tokens.
 	if c, err := r.Cookie(middleware.SessionCookieName()); err == nil {
 		if _, err := tenant.ValidateSession(r.Context(), s.store.DB(), c.Value); err == nil {
 			http.Redirect(w, r, "/tokens", http.StatusFound)
 			return
 		}
 	}
-	render(w, "landing.html", map[string]any{"Error": r.URL.Query().Get("error")})
+	render(w, "landing.html", map[string]any{
+		"Error": r.URL.Query().Get("error"),
+		"Sent":  r.URL.Query().Get("sent") == "1",
+	})
 }
 
-func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	state := randToken()
-	http.SetCookie(w, stateCookie(state))
-	http.Redirect(w, r, s.oauth.GitHub.AuthCodeURL(state), http.StatusFound)
-}
-
-func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
+// handleRequestLink issues a magic link for the submitted email and sends (or,
+// in dev, logs) it. The response is identical whether or not the email already
+// has an account — sign-up and sign-in are one flow, and this avoids leaking
+// which addresses are registered.
+func (s *Server) handleRequestLink(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	// CSRF: state cookie must match the query param.
-	sc, err := r.Cookie("oauth_state")
-	if err != nil || sc.Value == "" || sc.Value != r.URL.Query().Get("state") {
-		http.Redirect(w, r, loginPath+"?error=state", http.StatusFound)
+	email := tenant.NormalizeEmail(r.FormValue("email"))
+	if !looksLikeEmail(email) {
+		http.Redirect(w, r, loginPath+"?error=email", http.StatusSeeOther)
 		return
 	}
-	token, err := s.oauth.GitHub.Exchange(ctx, r.URL.Query().Get("code"))
+
+	raw, err := tenant.CreateLoginToken(ctx, s.store.DB(), email, loginTokenTTL)
 	if err != nil {
-		slog.Warn("oauth exchange failed", "error", err)
-		http.Redirect(w, r, loginPath+"?error=oauth", http.StatusFound)
+		slog.Error("create login token", "error", err)
+		http.Redirect(w, r, loginPath+"?error=server", http.StatusSeeOther)
 		return
 	}
-	gu, err := s.oauth.GitHub.User(ctx, token)
+	link := config.BaseURL() + "/auth/verify?token=" + raw
+
+	if s.email == nil {
+		// Dev: no sender configured — log the link so it's usable locally.
+		slog.Info("magic link (email sending disabled)", "email", email, "link", link)
+	} else {
+		subject := "Your DevRadar sign-in link"
+		html := fmt.Sprintf(`<p>Click to sign in to DevRadar:</p><p><a href="%s">%s</a></p>`+
+			`<p>This link expires in %d minutes and can be used once.</p>`, link, link, int(loginTokenTTL.Minutes()))
+		text := fmt.Sprintf("Sign in to DevRadar:\n%s\n\nExpires in %d minutes; single use.",
+			link, int(loginTokenTTL.Minutes()))
+		if err := s.email.Send(ctx, email, subject, html, text); err != nil {
+			slog.Error("send magic link", "error", err)
+			http.Redirect(w, r, loginPath+"?error=server", http.StatusSeeOther)
+			return
+		}
+	}
+	http.Redirect(w, r, loginPath+"?sent=1", http.StatusSeeOther)
+}
+
+// handleVerify consumes a magic-link token, mints a session, and lands the user
+// on the tokens page.
+func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tn, err := tenant.ConsumeLoginToken(ctx, s.store.DB(), r.URL.Query().Get("token"))
 	if err != nil {
-		slog.Warn("oauth user fetch failed", "error", err)
-		http.Redirect(w, r, loginPath+"?error=oauth", http.StatusFound)
+		http.Redirect(w, r, loginPath+"?error=link", http.StatusFound)
 		return
 	}
-	tn, err := tenant.UpsertTenant(ctx, s.store.DB(), gu.ID, gu.Login, gu.Email, gu.AvatarURL)
-	if err != nil {
-		http.Redirect(w, r, loginPath+"?error=server", http.StatusFound)
+	if tn.Status == tenant.StatusSuspended {
+		http.Redirect(w, r, loginPath+"?error=suspended", http.StatusFound)
 		return
 	}
 	sess, err := tenant.CreateSession(ctx, s.store.DB(), tn.ID, sessionTTL)
@@ -138,12 +133,35 @@ func (s *Server) handleTokensPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	render(w, "tokens.html", map[string]any{
-		"Username":    tn.Username,
+		"Email":       tn.Email,
 		"Tokens":      tokens,
 		"NewToken":    r.URL.Query().Get("new"), // shown once after creation
 		"MinSeverity": defaultStr(tn.MinSeverity, data.DefaultMinSeverity),
 		"Severities":  []string{"critical", "high", "medium", "low", "negligible"},
 	})
+}
+
+func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
+	tn := middleware.TenantFromContext(r.Context())
+	name := r.FormValue("name")
+	if name == "" {
+		name = "api-token"
+	}
+	raw, err := tenant.CreateAPIToken(r.Context(), s.store.DB(), tn.ID, name)
+	if err != nil {
+		http.Error(w, "failed to create token", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/tokens?new="+raw, http.StatusSeeOther)
+}
+
+func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
+	tn := middleware.TenantFromContext(r.Context())
+	if err := tenant.RevokeAPIToken(r.Context(), s.store.DB(), tn.ID, r.PathValue("id")); err != nil {
+		http.Error(w, "failed to revoke token", http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, "/tokens", http.StatusSeeOther)
 }
 
 func (s *Server) handleSetMinSeverity(w http.ResponseWriter, r *http.Request) {
@@ -160,6 +178,16 @@ func (s *Server) handleSetMinSeverity(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/tokens", http.StatusSeeOther)
 }
 
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+func render(w http.ResponseWriter, name string, dataV any) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := templates.ExecuteTemplate(w, name, dataV); err != nil {
+		slog.Error("template render", "template", name, "error", err)
+		http.Error(w, "render error", http.StatusInternalServerError)
+	}
+}
+
 func defaultStr(s, def string) string {
 	if s == "" {
 		return def
@@ -167,54 +195,17 @@ func defaultStr(s, def string) string {
 	return s
 }
 
-func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
-	name := r.FormValue("name")
-	if name == "" {
-		name = "api-token"
+// looksLikeEmail is a minimal sanity check — real validation is that the link is
+// only deliverable to a controllable mailbox.
+func looksLikeEmail(s string) bool {
+	at := -1
+	for i, c := range s {
+		if c == '@' {
+			if at != -1 {
+				return false // more than one @
+			}
+			at = i
+		}
 	}
-	raw, err := tenant.CreateAPIToken(r.Context(), s.store.DB(), tn.ID, name)
-	if err != nil {
-		http.Error(w, "failed to create token", http.StatusInternalServerError)
-		return
-	}
-	// Show the raw token once via a redirect param (it is never stored).
-	http.Redirect(w, r, "/tokens?new="+raw, http.StatusSeeOther)
-}
-
-func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
-	if err := tenant.RevokeAPIToken(r.Context(), s.store.DB(), tn.ID, r.PathValue("id")); err != nil {
-		http.Error(w, "failed to revoke token", http.StatusBadRequest)
-		return
-	}
-	http.Redirect(w, r, "/tokens", http.StatusSeeOther)
-}
-
-// ── helpers ───────────────────────────────────────────────────────────────────
-
-func render(w http.ResponseWriter, name string, data any) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := templates.ExecuteTemplate(w, name, data); err != nil {
-		slog.Error("template render", "template", name, "error", err)
-		http.Error(w, "render error", http.StatusInternalServerError)
-	}
-}
-
-func randToken() string {
-	b := make([]byte, 24)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
-}
-
-func stateCookie(state string) *http.Cookie {
-	return &http.Cookie{
-		Name:     "oauth_state",
-		Value:    state,
-		Path:     "/",
-		MaxAge:   int(oauthStateTTL.Seconds()),
-		Secure:   config.BaseURL()[:5] == "https",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-	}
+	return at > 0 && at < len(s)-1
 }

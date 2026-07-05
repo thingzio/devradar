@@ -13,6 +13,7 @@ import (
 	"github.com/thingzio/devradar/pkg/data/postgres"
 	"github.com/thingzio/devradar/pkg/gcs"
 	"github.com/thingzio/devradar/pkg/logging"
+	drnet "github.com/thingzio/devradar/pkg/net"
 	"github.com/thingzio/devradar/pkg/server"
 )
 
@@ -50,12 +51,16 @@ func run(ctx context.Context) error {
 	}
 	defer closeBlobs()
 
-	oauthCfg := server.NewOAuthConfigFromEnv()
-	if oauthCfg == nil {
-		slog.Warn("GitHub OAuth not configured; UI disabled, API-only")
+	// Email sender for magic-link sign-in. Without SEND_API_KEY the server logs
+	// the magic link instead of emailing it (development).
+	var email drnet.Sender
+	if key := config.SendAPIKey(); key != "" {
+		email = drnet.ResendSender{APIKey: key, From: config.EmailFrom()}
+	} else {
+		slog.Warn("SEND_API_KEY not set; magic-link URLs will be logged, not emailed")
 	}
 
-	srv := server.New(store, blobs, oauthCfg, server.Options{
+	srv := server.New(store, blobs, email, server.Options{
 		Version: version, Commit: commit, Date: date,
 	})
 	return srv.Run(ctx)

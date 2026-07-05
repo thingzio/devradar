@@ -36,14 +36,9 @@ func seedTenantAndSBOM(t *testing.T, st *postgres.Store) (tenantID string, sb *p
 	t.Helper()
 	ctx := context.Background()
 
-	// github_id must be unique per tenant; derive a stable-ish int from rand.
-	var gh int64
-	for _, c := range randID(t)[:12] {
-		gh = gh*16 + int64(c%16)
-	}
 	err := st.DB().QueryRowContext(ctx,
-		`INSERT INTO devradar_tenant (github_id, username) VALUES ($1,$2) RETURNING id`,
-		gh, "test-"+randID(t)[:8]).Scan(&tenantID)
+		`INSERT INTO devradar_tenant (email) VALUES ($1) RETURNING id`,
+		"test-"+randID(t)[:8]+"@example.com").Scan(&tenantID)
 	if err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}

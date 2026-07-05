@@ -29,7 +29,7 @@ func run() error {
 	defer store.Close()
 
 	db := store.DB()
-	tn, err := tenant.UpsertTenant(ctx, db, 424242, "local-dev", "dev@example.com", "")
+	tn, err := tenant.UpsertTenantByEmail(ctx, db, "dev@example.com")
 	if err != nil {
 		return fmt.Errorf("upsert tenant: %w", err)
 	}
@@ -39,7 +39,7 @@ func run() error {
 	}
 
 	fmt.Printf("Tenant ID: %s\n", tn.ID)
-	fmt.Printf("Username:  %s\n", tn.Username)
+	fmt.Printf("Email:     %s\n", tn.Email)
 	fmt.Printf("API Token: %s\n\n", token)
 	fmt.Println("Export it for the curl examples in the README:")
 	fmt.Printf("  export DR_TOKEN=%s\n", token)

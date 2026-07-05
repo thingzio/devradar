@@ -20,19 +20,17 @@ const (
 	StatusSuspended = "suspended"
 )
 
-// Tenant is a row in devradar_tenant.
+// Tenant is a row in devradar_tenant. Identity is the verified email address.
 type Tenant struct {
-	ID            string
-	GitHubID      int64
-	Username      string
-	Email         string
-	AvatarURL     string
-	Plan          string
-	Status        string
-	MinSeverity   string // minimum severity of interest for the read API/alerts
-	TOSAcceptedAt *time.Time
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID              string
+	Email           string
+	EmailVerifiedAt *time.Time
+	Plan            string
+	Status          string
+	MinSeverity     string // minimum severity of interest for the read API/alerts
+	TOSAcceptedAt   *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // scanner is satisfied by both *sql.Row and *sql.Rows.
@@ -42,11 +40,14 @@ type scanner interface {
 
 func scanTenant(s scanner) (*Tenant, error) {
 	var t Tenant
-	var tos sql.NullTime
-	err := s.Scan(&t.ID, &t.GitHubID, &t.Username, &t.Email, &t.AvatarURL,
-		&t.Plan, &t.Status, &t.MinSeverity, &tos, &t.CreatedAt, &t.UpdatedAt)
+	var verified, tos sql.NullTime
+	err := s.Scan(&t.ID, &t.Email, &verified, &t.Plan, &t.Status, &t.MinSeverity,
+		&tos, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		return nil, err
+	}
+	if verified.Valid {
+		t.EmailVerifiedAt = &verified.Time
 	}
 	if tos.Valid {
 		t.TOSAcceptedAt = &tos.Time
@@ -54,25 +55,24 @@ func scanTenant(s scanner) (*Tenant, error) {
 	return &t, nil
 }
 
-const tenantColumns = `id, github_id, username, COALESCE(email,''), COALESCE(avatar_url,''),
-	plan, status, min_severity, tos_accepted_at, created_at, updated_at`
+const tenantColumns = `id, email, email_verified_at, plan, status, min_severity,
+	tos_accepted_at, created_at, updated_at`
 
-// UpsertTenant creates or updates a tenant from a GitHub identity (called on
-// OAuth login), keyed on github_id. Returns the current row.
-func UpsertTenant(ctx context.Context, db *sql.DB, githubID int64, username, email, avatarURL string) (*Tenant, error) {
+// UpsertTenantByEmail creates the tenant for email if absent (else returns the
+// existing one) and marks the email verified — called when a magic-link is
+// successfully consumed, which is proof the address is controlled. Email is
+// normalized (trimmed, lowercased) by the caller.
+func UpsertTenantByEmail(ctx context.Context, db *sql.DB, email string) (*Tenant, error) {
 	row := db.QueryRowContext(ctx, `
-		INSERT INTO devradar_tenant (github_id, username, email, avatar_url)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (github_id) DO UPDATE SET
-			username = EXCLUDED.username,
-			email = COALESCE(NULLIF(EXCLUDED.email,''), devradar_tenant.email),
-			avatar_url = EXCLUDED.avatar_url,
+		INSERT INTO devradar_tenant (email, email_verified_at)
+		VALUES ($1, now())
+		ON CONFLICT (email) DO UPDATE SET
+			email_verified_at = COALESCE(devradar_tenant.email_verified_at, now()),
 			updated_at = now()
-		RETURNING `+tenantColumns,
-		githubID, username, nullStr(email), nullStr(avatarURL))
+		RETURNING `+tenantColumns, email)
 	t, err := scanTenant(row)
 	if err != nil {
-		return nil, fmt.Errorf("upsert tenant: %w", err)
+		return nil, fmt.Errorf("upsert tenant by email: %w", err)
 	}
 	return t, nil
 }
@@ -104,16 +104,9 @@ func SetMinSeverity(ctx context.Context, db *sql.DB, tenantID, minSeverity strin
 // ErrNotFound is returned when a tenant does not exist.
 var ErrNotFound = errors.New("tenant not found")
 
-// HashToken returns the hex SHA-256 of a raw token. Used for both sessions and
-// API tokens — only the hash is ever stored.
+// HashToken returns the hex SHA-256 of a raw token. Used for sessions, API
+// tokens, and login tokens — only the hash is ever stored.
 func HashToken(raw string) string {
 	h := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(h[:])
-}
-
-func nullStr(s string) any {
-	if s == "" {
-		return nil
-	}
-	return s
 }

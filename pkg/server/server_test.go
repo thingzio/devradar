@@ -33,15 +33,11 @@ func testServer(t *testing.T) (*server.Server, *postgres.Store) {
 func seedTenantToken(t *testing.T, st *postgres.Store) (tenantID, token string) {
 	t.Helper()
 	ctx := context.Background()
-	var gh int64
 	b := make([]byte, 6)
 	_, _ = rand.Read(b)
-	for _, c := range b {
-		gh = gh<<8 | int64(c)
-	}
 	if err := st.DB().QueryRowContext(ctx,
-		`INSERT INTO devradar_tenant (github_id, username) VALUES ($1,$2) RETURNING id`,
-		gh, "u"+hex.EncodeToString(b)).Scan(&tenantID); err != nil {
+		`INSERT INTO devradar_tenant (email) VALUES ($1) RETURNING id`,
+		"u"+hex.EncodeToString(b)+"@example.com").Scan(&tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	tok, err := tenant.CreateAPIToken(ctx, st.DB(), tenantID, "test")

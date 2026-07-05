@@ -69,10 +69,22 @@ func SBOMBucket() string {
 	return GetEnv("DEVRADAR_SBOM_BUCKET", "devradar-saas-sboms")
 }
 
-// BaseURL returns the externally-reachable base URL (used for OAuth redirects
-// and cookie scheme).
+// BaseURL returns the externally-reachable base URL (used for magic-link URLs
+// and the cookie scheme).
 func BaseURL() string {
 	return GetEnv("BASE_URL", "http://localhost:8080")
+}
+
+// SendAPIKey returns the Resend API key for transactional email (magic-link
+// sign-in, later alerts). Empty disables real sending — the server then logs the
+// magic link instead (development). Shared platform secret name: SEND_API_KEY.
+func SendAPIKey() string {
+	return GetEnv("SEND_API_KEY", "")
+}
+
+// EmailFrom returns the From address for outbound email.
+func EmailFrom() string {
+	return GetEnv("EMAIL_FROM", "DevRadar <no-reply@devradar.thingz.io>")
 }
 
 // DebugEnabled reports whether debug-level logging is on (DEVRADAR_DEBUG).

@@ -57,7 +57,7 @@ func DestroySession(ctx context.Context, db *sql.DB, rawToken string) error {
 // prefixed returns the tenant column list qualified with a table alias. Must
 // match tenantColumns' order (scanTenant depends on it).
 func prefixed(a string) string {
-	return a + `.id, ` + a + `.github_id, ` + a + `.username, COALESCE(` + a + `.email,''), ` +
-		`COALESCE(` + a + `.avatar_url,''), ` + a + `.plan, ` + a + `.status, ` + a + `.min_severity, ` +
-		a + `.tos_accepted_at, ` + a + `.created_at, ` + a + `.updated_at`
+	return a + `.id, ` + a + `.email, ` + a + `.email_verified_at, ` + a + `.plan, ` +
+		a + `.status, ` + a + `.min_severity, ` + a + `.tos_accepted_at, ` +
+		a + `.created_at, ` + a + `.updated_at`
 }

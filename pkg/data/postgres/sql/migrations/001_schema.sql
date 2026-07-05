@@ -11,20 +11,20 @@ CREATE TABLE IF NOT EXISTS devradar_schema_version (
 
 -- ── Identity & auth ───────────────────────────────────────────────────────────
 
--- A tenant is a GitHub identity. Owns SBOMs, API tokens, and alert routing.
+-- A tenant is identified by a verified email address (magic-link auth — no
+-- passwords, no external OAuth). email is the login identity and the alert
+-- destination. email_verified_at is set the first time a login link is consumed.
 CREATE TABLE IF NOT EXISTS devradar_tenant (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    github_id       BIGINT NOT NULL UNIQUE,
-    username        TEXT NOT NULL,
-    email           TEXT,                              -- alert destination
-    avatar_url      TEXT,
-    plan            TEXT NOT NULL DEFAULT 'free',
-    status          TEXT NOT NULL DEFAULT 'active',    -- active | suspended
-    tos_accepted_at TIMESTAMPTZ,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email            TEXT NOT NULL UNIQUE,             -- login identity + alert destination
+    email_verified_at TIMESTAMPTZ,                     -- first successful magic-link consume
+    plan             TEXT NOT NULL DEFAULT 'free',
+    status           TEXT NOT NULL DEFAULT 'active',   -- active | suspended
+    min_severity     TEXT NOT NULL DEFAULT 'medium',   -- read-API default severity filter
+    tos_accepted_at  TIMESTAMPTZ,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS idx_devradar_tenant_username ON devradar_tenant(username);
 
 -- Browser sessions minted by the UI after GitHub OAuth. id = hex SHA-256(token).
 CREATE TABLE IF NOT EXISTS devradar_session (

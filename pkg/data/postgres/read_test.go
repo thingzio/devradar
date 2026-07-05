@@ -24,14 +24,10 @@ func TestListImages_ThresholdTrimsBreakdown(t *testing.T) {
 	// Isolated tenant + one SBOM with one finding per severity.
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
-	var gh int64
-	for _, c := range b {
-		gh = gh<<8 | int64(c)
-	}
 	var tenantID string
 	if err := st.DB().QueryRowContext(ctx,
-		`INSERT INTO devradar_tenant (github_id, username) VALUES ($1,$2) RETURNING id`,
-		gh, "img-"+hex.EncodeToString(b)).Scan(&tenantID); err != nil {
+		`INSERT INTO devradar_tenant (email) VALUES ($1) RETURNING id`,
+		"img-"+hex.EncodeToString(b)+"@example.com").Scan(&tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	sbomID := "img-" + hex.EncodeToString(b)
@@ -108,15 +104,11 @@ func TestImageTimeline_AcrossDigests(t *testing.T) {
 
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
-	var gh int64
-	for _, c := range b {
-		gh = gh<<8 | int64(c)
-	}
 	suffix := hex.EncodeToString(b)
 	var tenantID string
 	if err := st.DB().QueryRowContext(ctx,
-		`INSERT INTO devradar_tenant (github_id, username) VALUES ($1,$2) RETURNING id`,
-		gh, "tl-"+suffix).Scan(&tenantID); err != nil {
+		`INSERT INTO devradar_tenant (email) VALUES ($1) RETURNING id`,
+		"tl-"+suffix+"@example.com").Scan(&tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	imageRef := "example.com/app-" + suffix
@@ -177,8 +169,8 @@ func TestImageTimeline_AcrossDigests(t *testing.T) {
 	// Another tenant sees nothing for this ref → ErrNotFound (isolation).
 	var otherID string
 	_ = st.DB().QueryRowContext(ctx,
-		`INSERT INTO devradar_tenant (github_id, username) VALUES ($1,$2) RETURNING id`,
-		gh+1, "other-"+suffix).Scan(&otherID)
+		`INSERT INTO devradar_tenant (email) VALUES ($1) RETURNING id`,
+		"other-"+suffix+"@example.com").Scan(&otherID)
 	if _, err := st.ImageTimeline(ctx, otherID, imageRef, "medium", 100); err != postgres.ErrNotFound {
 		t.Errorf("cross-tenant timeline: err = %v, want ErrNotFound", err)
 	}
