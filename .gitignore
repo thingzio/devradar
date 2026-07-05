@@ -19,6 +19,11 @@ dist
 # Keys
 *.pem
 
+# GitHub Actions WIF credential file (written into the workspace by
+# google-github-actions/auth; must be ignored so goreleaser doesn't see the
+# tree as dirty).
+gha-creds-*.json
+
 # SBOMs
 .sboms
 
