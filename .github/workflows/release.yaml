@@ -1,0 +1,57 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write   # create the GitHub release
+  id-token: write   # Workload Identity Federation (keyless GCP auth)
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: saas
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read Go version
+        id: gover
+        run: echo "go=$(yq -r '.languages.go' .settings.yaml)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "${{ steps.gover.outputs.go }}"
+
+      # Keyless auth to GCP for pushing images (Artifact Registry).
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${{ vars.REGION }}-docker.pkg.dev" --quiet
+
+      - name: Release (build + push serve[ko] and scan[docker] images)
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> 2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  deploy:
+    needs: release
+    uses: ./.github/workflows/deploy.yaml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      image_tag: ${{ github.ref_name }}
+    secrets: inherit

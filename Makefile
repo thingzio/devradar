@@ -32,9 +32,10 @@ info: ## Prints current project info
 # =============================================================================
 
 .PHONY: tidy
-tidy: ## Formats code and tidies module dependencies
+tidy: ## Formats code, tidies deps, and refreshes the vendor tree
 	go fmt ./...
 	go mod tidy
+	go mod vendor
 
 # =============================================================================
 # Quality
@@ -119,8 +120,38 @@ build: ## Builds both binaries for the current platform (goreleaser snapshot)
 	@echo "Binaries in ./dist"
 
 .PHONY: release
-release: ## Runs a snapshot release (goreleaser + ko images)
+release: ## Runs a snapshot release (goreleaser: serve via ko, scan via Dockerfile)
 	goreleaser release --snapshot --clean --timeout $(BUILD_TIMEOUT)
+
+.PHONY: scan-image
+scan-image: ## Builds the scan-job container locally (scanners baked in)
+	docker build -f Dockerfile.scan -t devradar-scan:local .
+
+# =============================================================================
+# Infrastructure (Terraform) — see infra/saas
+# =============================================================================
+
+TF_DIR := infra/saas
+
+.PHONY: tf-init
+tf-init: ## Initializes Terraform (infra/saas)
+	terraform -chdir=$(TF_DIR) init
+
+.PHONY: tf-plan
+tf-plan: ## Plans infra changes
+	terraform -chdir=$(TF_DIR) plan
+
+.PHONY: tf-apply
+tf-apply: ## Applies infra changes (run by hand for the first deploy)
+	terraform -chdir=$(TF_DIR) apply
+
+.PHONY: tf-fmt
+tf-fmt: ## Formats Terraform
+	terraform -chdir=$(TF_DIR) fmt -recursive
+
+.PHONY: tf-validate
+tf-validate: ## Validates Terraform without backend/creds
+	terraform -chdir=$(TF_DIR) init -backend=false >/dev/null && terraform -chdir=$(TF_DIR) validate
 
 # =============================================================================
 # Cleanup

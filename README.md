@@ -8,7 +8,7 @@
 | **URL** | https://devradar.thingz.io |
 | **Parent** | Thingz (https://thingz.io) |
 | **Category** | Container Security / Vulnerability Intelligence |
-| **Status** | v1 in development — ingest + scan + read API run end-to-end locally; deployment (Terraform/CI) pending |
+| **Status** | v1 implemented — ingest + scan + read API run end-to-end locally; infra (Terraform/CI) written, awaiting first deploy |
 
 > Implementation reference (API, data model, SQL schema, scanner design): [IMPLEMENTATION.md](IMPLEMENTATION.md)
 > Jump to: [Run It Locally](#run-it-locally)

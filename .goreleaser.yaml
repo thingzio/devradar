@@ -46,9 +46,7 @@ release:
   prerelease: auto
   draft: true
 
-# Container images via ko (no Dockerfile). The scan-job image also needs the
-# grype and trivy binaries; ko builds a Go-only image, so the scanner binaries
-# are layered in via the Cloud Run base image / build step (tracked separately).
+# serve is pure Go → ko distroless image (no Dockerfile), like the siblings.
 kos:
   - id: devradar-serve
     build: devradar-serve
@@ -62,17 +60,26 @@ kos:
     preserve_import_paths: false
     bare: true
 
+# scan shells out to grype/trivy/syft at runtime, so its image is built from a
+# multi-stage Dockerfile (scanners baked in) rather than ko. goreleaser passes
+# the compiled binary's dir via build context; the Dockerfile rebuilds the Go
+# binary in-stage for a self-contained image.
+dockers:
   - id: devradar-scan
-    build: devradar-scan
-    repositories:
-      - us-west1-docker.pkg.dev/thingzio/devradar-saas-images/devradar-scan
-    platforms:
-      - linux/amd64
-    tags:
-      - latest
-      - "{{.Tag}}"
-    preserve_import_paths: false
-    bare: true
+    dockerfile: Dockerfile.scan
+    image_templates:
+      - us-west1-docker.pkg.dev/thingzio/devradar-saas-images/devradar-scan:latest
+      - us-west1-docker.pkg.dev/thingzio/devradar-saas-images/devradar-scan:{{ .Tag }}
+    build_flag_templates:
+      - "--build-arg=VERSION={{ .Version }}"
+      - "--build-arg=COMMIT={{ .ShortCommit }}"
+      - "--build-arg=DATE={{ .CommitDate }}"
+      - "--platform=linux/amd64"
+    extra_files:
+      - cmd
+      - pkg
+      - go.mod
+      - go.sum
 
 report_sizes: true
 

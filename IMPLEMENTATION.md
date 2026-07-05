@@ -996,6 +996,23 @@ DevRadar plugs into `thingzio/infra` exactly as the siblings do — it **referen
 
 > Do not replicate DevTrace's committed-plaintext-secrets `terraform.tfvars` — use untracked tfvars or Secret Manager-sourced values.
 
+### Container images
+
+The two units build differently because only one needs external binaries:
+
+- **`devradar-serve`** — pure Go → `ko` distroless image via GoReleaser (`kos:` block), identical to the siblings.
+- **`devradar-scan`** — shells out to grype/trivy/syft at runtime, so `ko` (Go-only) can't produce its image. It is built from a **multi-stage `Dockerfile.scan`** (GoReleaser `dockers:` block): stage 1 compiles the Go binary, a scanner stage fetches the pinned grype/trivy/syft release binaries, and a lean `debian:12-slim` runtime carries only the binary + scanners (small surface = fewer CVEs). Scanner versions in the Dockerfile ARGs must match `.settings.yaml` `scanners.*`. The vuln DBs are **not** baked — the job refreshes them at start (see [Vulnerability DB freshness](#vulnerability-db-freshness)).
+
+### First deploy (run by hand once)
+
+The instance and DB are shared, so the first apply needs an operator with rights on the `thingzio` project (it creates a `google_sql_user`, SAs, secrets, Cloud Run, etc. — never an instance or database):
+
+1. `make tf-init && make tf-apply` — creates all DevRadar resources, incl. the `devradar` SQL user and the assembled `devradar-saas-database-url` secret.
+2. **Populate the out-of-band secret values** (Terraform creates the secret containers but not their contents): add a version to `devradar-saas-send-api-key` (Resend key — magic-link) and, if used, `devradar-saas-anthropic-api-key`.
+3. Set the GitHub repo **Actions variables** from the TF outputs: `WIF_PROVIDER`, `DEPLOYER_SA`, `REGION`, `PROJECT_ID` — the `release`/`deploy` workflows read these for keyless auth. Use `environment: saas`.
+4. Tag a release (`vX.Y.Z`) → CI builds + pushes both images (serve via ko, scan via Dockerfile) and deploys them to the pre-created Cloud Run service + job.
+5. Flip `deletion_protection = true` on the serve service and scan job once the deploy is confirmed.
+
 ---
 
 ## Component Layout (target)

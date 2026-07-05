@@ -4,14 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Status
 
-**Design/spec phase — no application code exists yet.** The repo currently contains two documents:
+**v1 implemented and runnable.** The full pipeline works end-to-end locally (ingest → scan → read API) and the deploy layer (Terraform + CI) exists but has not had its first `terraform apply`.
 
-- `README.md` — high-level design (HLD): product brief, personas, architecture, cost, service-family context.
-- `IMPLEMENTATION.md` — implementation reference: API, data model + DDL, scanner/converter design, deployment.
+- `README.md` — high-level design (HLD) + a "Run It Locally" guide.
+- `IMPLEMENTATION.md` — implementation reference: API, data model + DDL, scanner/converter design, deployment + first-apply runbook. (Some inline code samples predate the code; the code under `pkg/`/`cmd/` is the source of truth where they differ.)
 
-Code samples in `IMPLEMENTATION.md` are the intended blueprint (component layout, interfaces, schema). Treat them as the target design when scaffolding — but they are illustrative and unverified, so validate against current library/tool APIs before copying. The target layout (`pkg/`-only, `cmd/devradar-serve` + `cmd/devradar-scan`) is specified in `IMPLEMENTATION.md` "Component Layout".
+Layout: `pkg/`-only (no `internal/`), binaries `cmd/devradar-serve` (ingest API + magic-link UI) and `cmd/devradar-scan` (daily job). Deps are **vendored** (`vendor/`); build with the module's default mode. Infra in `infra/saas/` (validated; not yet applied).
 
-Note: `.gitignore` inherits Go/Terraform/binary patterns (and stale `devpulse` binary names) from sibling Thingz projects; it does not reflect files that exist here yet.
+**Deferred (not gaps):** push/email alerting and scan concurrency/pooling — foundations built, clean upgrade paths documented.
+
+Dev loop: `make db-up`, `make seed`, `make serve`, `make scan`, `make test` (needs the DB); `make tf-validate` for infra. See the README for the full local walkthrough.
 
 ## What DevRadar Is (v1)
 

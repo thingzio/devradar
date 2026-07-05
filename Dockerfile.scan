@@ -1,0 +1,50 @@
+# Multi-stage build for the daily scan job. The scan binary shells out to grype,
+# trivy, and syft at runtime, so — unlike the pure-Go serve service (ko) — its
+# image must carry those binaries. Stage 1 builds the Go binary; stage 2 is a
+# lean runtime with only the binary + pinned scanners (small = fewer CVEs).
+#
+# Scanner versions are pinned here and MUST match .settings.yaml (scanners.*).
+
+# ── Stage 1: build the Go binary ───────────────────────────────────────────────
+FROM golang:1.26 AS build
+
+ARG VERSION=dev
+ARG COMMIT=none
+ARG DATE=unknown
+
+WORKDIR /src
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath \
+    -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
+    -o /out/devradar-scan ./cmd/devradar-scan
+
+# ── Stage 2: scanner binaries on a pinned installer, copied into runtime ───────
+# Use a small distro to fetch the pinned scanner release binaries.
+FROM debian:12-slim AS scanners
+
+ARG GRYPE_VERSION=v0.115.0
+ARG TRIVY_VERSION=v0.72.0
+ARG SYFT_VERSION=v1.46.0
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh  | sh -s -- -b /usr/local/bin "${SYFT_VERSION}" \
+    && curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin "${GRYPE_VERSION}" \
+    && curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin "${TRIVY_VERSION}"
+
+# ── Stage 3: lean runtime ──────────────────────────────────────────────────────
+FROM debian:12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --uid 10001 --create-home --shell /usr/sbin/nologin devradar
+
+COPY --from=scanners /usr/local/bin/syft  /usr/local/bin/syft
+COPY --from=scanners /usr/local/bin/grype /usr/local/bin/grype
+COPY --from=scanners /usr/local/bin/trivy /usr/local/bin/trivy
+COPY --from=build    /out/devradar-scan   /usr/local/bin/devradar-scan
+
+# Vuln DBs are refreshed at job start (EnsureDB) into the home cache, not baked.
+USER devradar
+ENV HOME=/home/devradar
+ENTRYPOINT ["/usr/local/bin/devradar-scan"]

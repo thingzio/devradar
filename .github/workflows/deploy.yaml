@@ -1,0 +1,46 @@
+name: deploy
+
+# Deploys the already-pushed images to Cloud Run: updates the serve service and
+# the scan job to the given tag. Reusable (called by release) or manual.
+on:
+  workflow_call:
+    inputs:
+      image_tag:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        type: string
+        default: latest
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: saas
+    env:
+      TAG: ${{ inputs.image_tag }}
+    steps:
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy serve service
+        run: |
+          gcloud run services update devradar-saas-serve \
+            --region "${{ vars.REGION }}" \
+            --image "${{ vars.REGION }}-docker.pkg.dev/${{ vars.PROJECT_ID }}/devradar-saas-images/devradar-serve:${TAG}"
+
+      - name: Deploy scan job
+        run: |
+          gcloud run jobs update devradar-saas-scan \
+            --region "${{ vars.REGION }}" \
+            --image "${{ vars.REGION }}-docker.pkg.dev/${{ vars.PROJECT_ID }}/devradar-saas-images/devradar-scan:${TAG}"
