@@ -2,12 +2,13 @@
   "permissions": {
     "allow": [
       "Bash(docker info *)",
-      "Bash(mkdir *)",
+      "Bash(mkdir -p .spike/sboms .spike/cache)",
       "Bash(xargs kill -9)",
       "Bash(pkill -f devradar-serve)",
-      "Bash(make *)",
-      "Bash(gofmt *)",
-      "Bash(grep *)"
+      "Bash(make db-down *)",
+      "Bash(gofmt -l pkg/ cmd/ tools/)",
+      "Bash(grep -n \"critical/high\\\\|Critical.*High\\\\|critical and high\\\\|CRITICAL/HIGH\\\\|critical or \\\\`high\" IMPLEMENTATION.md CLAUDE.md README.md)",
+      "Bash(git add *)"
     ]
   }
 }
