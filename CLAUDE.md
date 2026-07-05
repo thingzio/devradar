@@ -23,7 +23,7 @@ A tenant submits an SBOM (pinned to an image digest) via an authenticated API. A
 
 Four components, all Cloud Run, **no VMs, no queue, no registry access**:
 
-1. **Ingest API + minimal UI** (Cloud Run service `devradar-saas-serve`) — authenticated `POST /v1/sboms` (API token). Validates untrusted SBOM input, extracts the subject image digest, content-addresses by `sha256(bytes)`, stores bytes in GCS + a row in `devradar_sbom`. Also serves a small GitHub-OAuth UI for minting/revoking API tokens.
+1. **Ingest API + minimal UI** (Cloud Run service `devradar-saas-serve`) — authenticated `POST /v1/sboms` (API token). Validates untrusted SBOM input, extracts the subject image digest, content-addresses **per tenant** (`id = sha256(tenant_id + bytes)` — a global hash would collide across tenants submitting the same public SBOM and break isolation), stores bytes in GCS + a row in `devradar_sbom`. Also serves a small GitHub-OAuth UI for minting/revoking API tokens.
 2. **Daily Scan Job** (Cloud Run Job `devradar-saas-scan`, pure CPU) — for each active SBOM, runs Grype + Trivy on the SBOM file, normalizes, writes current state + change events.
 3. **Read API + UI (v1: pull)** — tenants retrieve current findings + change history (`/v1/images`, `/v1/sboms/{id}/findings`, `/events`). Push alerts (email/webhook) + Claude narratives are **post-MVP**; the event log that powers them is built in v1.
 4. **Store** — shared Cloud SQL Postgres (`thingz` DB, `devradar_` tables).

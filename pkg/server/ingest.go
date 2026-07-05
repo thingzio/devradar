@@ -1,0 +1,136 @@
+package server
+
+import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"time"
+
+	"github.com/thingzio/devradar/pkg/config"
+	"github.com/thingzio/devradar/pkg/data/postgres"
+	"github.com/thingzio/devradar/pkg/middleware"
+	"github.com/thingzio/devradar/pkg/sbom"
+)
+
+// maxSBOMBytes caps the decoded SBOM size (untrusted input).
+const maxSBOMBytes = 20 << 20 // 20 MiB
+
+// submitRequest is the POST /v1/sboms body. Only `sbom` is required; the rest
+// are overrides for when the SBOM's self-reporting is weak.
+type submitRequest struct {
+	SBOM        string `json:"sbom"`                   // base64-encoded bytes (required)
+	ImageRef    string `json:"image_ref,omitempty"`    // override the image reference
+	GeneratedAt string `json:"generated_at,omitempty"` // RFC3339 override
+}
+
+type submitResponse struct {
+	SBOMID   string `json:"sbom_id"`
+	ImageRef string `json:"image_ref"`
+	Digest   string `json:"digest"`
+	Format   string `json:"format"`
+	Existing bool   `json:"existing"` // true if this SBOM was already stored
+}
+
+// handleSubmitSBOM ingests an SBOM: validate, resolve subject, content-address,
+// store bytes + row. Thin and idempotent; no scanning or conversion here.
+func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tn := middleware.TenantFromContext(ctx)
+	if tn == nil {
+		writeError(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+
+	// Bound the request body before decode (base64 inflates ~4/3).
+	body, err := io.ReadAll(io.LimitReader(r.Body, (maxSBOMBytes*4/3)+1024))
+	if err != nil {
+		writeError(w, http.StatusRequestEntityTooLarge, "request too large")
+		return
+	}
+	var req submitRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.SBOM == "" {
+		writeError(w, http.StatusBadRequest, "missing sbom")
+		return
+	}
+
+	raw, err := base64.StdEncoding.DecodeString(req.SBOM)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "sbom is not valid base64")
+		return
+	}
+	if len(raw) > maxSBOMBytes {
+		writeError(w, http.StatusRequestEntityTooLarge, "sbom exceeds size limit")
+		return
+	}
+
+	subj, err := sbom.Resolve(raw)
+	if err != nil {
+		// Allow an explicit image_ref override to supply the digest when the SBOM
+		// itself can't be resolved.
+		if errors.Is(err, sbom.ErrNoDigest) && req.ImageRef != "" {
+			writeError(w, http.StatusUnprocessableEntity,
+				"could not resolve a digest from the SBOM; supply image_ref with an @sha256: digest")
+			return
+		}
+		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("cannot parse SBOM: %v", err))
+		return
+	}
+
+	imageRef := subj.ImageRef
+	if req.ImageRef != "" {
+		imageRef = req.ImageRef // caller override wins for the label
+	}
+	generatedAt := subj.GeneratedAt
+	if req.GeneratedAt != "" {
+		if t, perr := time.Parse(time.RFC3339, req.GeneratedAt); perr == nil {
+			generatedAt = t
+		}
+	}
+
+	// Content-address per tenant: the id is sha256(tenant_id + bytes), not
+	// sha256(bytes). A global content hash would collide across tenants — two
+	// tenants submitting the same public image's SBOM would share one row (PK is
+	// id), and the second submitter could never see "their" SBOM. Scoping by
+	// tenant preserves per-tenant idempotency and dedup while keeping isolation.
+	h := sha256.New()
+	h.Write([]byte(tn.ID))
+	h.Write([]byte{0}) // domain separator
+	h.Write(raw)
+	id := fmt.Sprintf("%x", h.Sum(nil))
+	objectPath := fmt.Sprintf("gs://%s/%s/%s", config.SBOMBucket(), tn.ID, id)
+
+	if err := s.blobs.Put(ctx, objectPath, raw); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to store SBOM")
+		return
+	}
+
+	inserted, err := s.store.UpsertSBOM(ctx, &postgres.SBOM{
+		ID:          id,
+		TenantID:    tn.ID,
+		ImageRef:    imageRef,
+		Digest:      subj.Digest,
+		Format:      string(subj.Format),
+		SpecVersion: subj.SpecVersion,
+		Tool:        subj.Tool,
+		ToolVersion: subj.ToolVersion,
+		ObjectPath:  objectPath,
+		GeneratedAt: generatedAt,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to record SBOM")
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, submitResponse{
+		SBOMID: id, ImageRef: imageRef, Digest: subj.Digest,
+		Format: string(subj.Format), Existing: !inserted,
+	})
+}

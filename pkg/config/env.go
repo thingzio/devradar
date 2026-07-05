@@ -64,6 +64,17 @@ func GCPProjectID() string {
 	return GetEnv("GCP_PROJECT", "thingzio")
 }
 
+// SBOMBucket returns the GCS bucket name for stored SBOM bytes.
+func SBOMBucket() string {
+	return GetEnv("DEVRADAR_SBOM_BUCKET", "devradar-saas-sboms")
+}
+
+// BaseURL returns the externally-reachable base URL (used for OAuth redirects
+// and cookie scheme).
+func BaseURL() string {
+	return GetEnv("BASE_URL", "http://localhost:8080")
+}
+
 // DebugEnabled reports whether debug-level logging is on (DEVRADAR_DEBUG).
 func DebugEnabled() bool {
 	return GetEnvBool("DEVRADAR_DEBUG")

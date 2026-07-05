@@ -1,0 +1,100 @@
+package tenant
+
+import (
+	"context"
+	"crypto/rand"
+	"database/sql"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"time"
+)
+
+// tokenPrefix identifies DevRadar API tokens (as devtrace uses "dt_").
+const tokenPrefix = "dr_"
+
+// ErrTokenInvalid is returned for an unknown or revoked API token.
+var ErrTokenInvalid = errors.New("invalid or revoked API token")
+
+// APITokenInfo is a token's metadata (never the secret).
+type APITokenInfo struct {
+	ID        string
+	Name      string
+	LastUsed  *time.Time
+	CreatedAt time.Time
+}
+
+// CreateAPIToken generates a "dr_"-prefixed token, stores only its SHA-256 hash,
+// and returns the raw token — shown to the user once, never persisted.
+func CreateAPIToken(ctx context.Context, db *sql.DB, tenantID, name string) (string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("generate api token: %w", err)
+	}
+	rawToken := tokenPrefix + hex.EncodeToString(raw)
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO devradar_api_token (tenant_id, name, token_hash) VALUES ($1, $2, $3)`,
+		tenantID, name, HashToken(rawToken)); err != nil {
+		return "", fmt.Errorf("create api token: %w", err)
+	}
+	return rawToken, nil
+}
+
+// ValidateAPIToken returns the owning tenant for a raw token and bumps
+// last_used_at in the same round-trip (CTE), avoiding a fire-and-forget write.
+func ValidateAPIToken(ctx context.Context, db *sql.DB, rawToken string) (*Tenant, error) {
+	row := db.QueryRowContext(ctx, `
+		WITH used AS (
+			UPDATE devradar_api_token SET last_used_at = NOW()
+			WHERE token_hash = $1 RETURNING tenant_id
+		)
+		SELECT `+prefixed("t")+`
+		FROM used u JOIN devradar_tenant t ON t.id = u.tenant_id`, HashToken(rawToken))
+	t, err := scanTenant(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrTokenInvalid
+	}
+	if err != nil {
+		return nil, fmt.Errorf("validate api token: %w", err)
+	}
+	return t, nil
+}
+
+// ListAPITokens returns a tenant's tokens, newest first.
+func ListAPITokens(ctx context.Context, db *sql.DB, tenantID string) ([]APITokenInfo, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT id, name, last_used_at, created_at FROM devradar_api_token
+		 WHERE tenant_id = $1 ORDER BY created_at DESC`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("list api tokens: %w", err)
+	}
+	defer rows.Close()
+
+	var out []APITokenInfo
+	for rows.Next() {
+		var ti APITokenInfo
+		var last sql.NullTime
+		if err := rows.Scan(&ti.ID, &ti.Name, &last, &ti.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan api token: %w", err)
+		}
+		if last.Valid {
+			ti.LastUsed = &last.Time
+		}
+		out = append(out, ti)
+	}
+	return out, rows.Err()
+}
+
+// RevokeAPIToken deletes a token owned by the tenant. Ownership is enforced in
+// the WHERE clause so one tenant can never revoke another's token.
+func RevokeAPIToken(ctx context.Context, db *sql.DB, tenantID, tokenID string) error {
+	res, err := db.ExecContext(ctx,
+		`DELETE FROM devradar_api_token WHERE id = $1 AND tenant_id = $2`, tokenID, tenantID)
+	if err != nil {
+		return fmt.Errorf("revoke api token: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return errors.New("token not found or not owned by tenant")
+	}
+	return nil
+}

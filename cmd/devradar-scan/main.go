@@ -77,8 +77,11 @@ func run(ctx context.Context) error {
 // for development against docker-compose Postgres.
 func newFetcher(ctx context.Context) (scan.Fetcher, func(), error) {
 	if config.GetEnvBool("DEVRADAR_LOCAL_SBOMS") {
-		slog.Info("using local filesystem SBOM fetcher")
-		return gcs.LocalFetcher{}, func() {}, nil
+		dir := config.GetEnv("DEVRADAR_LOCAL_SBOM_DIR", ".sboms")
+		slog.Info("using local filesystem SBOM store", "dir", dir)
+		// LocalStore maps gs:// object paths to the same on-disk layout the serve
+		// process writes, so submit (serve) → scan share one local store in dev.
+		return gcs.LocalStore{Dir: dir}, func() {}, nil
 	}
 	c, err := gcs.New(ctx)
 	if err != nil {

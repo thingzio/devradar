@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DevRadar</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 4rem auto; padding: 0 1rem; color: #1a1a1a; }
+    h1 { margin-bottom: 0.25rem; }
+    .sub { color: #666; margin-top: 0; }
+    .btn { display: inline-block; background: #24292f; color: #fff; padding: 0.6rem 1rem;
+           border-radius: 6px; text-decoration: none; margin-top: 1.5rem; }
+    .err { color: #b00020; margin-top: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>DevRadar</h1>
+  <p class="sub">Container vulnerability tracking — submit an SBOM, track what changes over time.</p>
+  {{if .Error}}<p class="err">Sign-in error: {{.Error}}</p>{{end}}
+  <p>Sign in to create API tokens for submitting SBOMs from your CI.</p>
+  <a class="btn" href="/auth/github">Sign in with GitHub</a>
+</body>
+</html>

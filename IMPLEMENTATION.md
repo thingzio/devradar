@@ -88,7 +88,7 @@ Because scanning is not format-neutral, every SBOM is converted to **CycloneDX**
 
 - **Accept both formats at the API**; never reject SPDX. SPDX is the more common compliance format — rejecting it would undercut "you give us the SBOM you already generate." Restriction also wouldn't fully solve it (Trivy-native SPDX scans fine), so a blanket ban would over-reject.
 - **Convert in the scan job, not at ingest.** Ingest stays thin and only *extracts* (digest/timestamp, proven to work on raw SPDX with no conversion). Conversion — potentially slow, and via a tool Syft flags experimental — runs in the retriable batch, where a failure is a recorded `devradar_scan_failure`, never a rejected submission.
-- **Store original bytes + canonical form.** The tenant's original artifact is what's content-addressed and audited (`devradar_sbom.id = sha256(raw)`); the canonical CDX is a derived scanning input.
+- **Store original bytes + canonical form.** The tenant's original artifact is what's content-addressed and audited (`devradar_sbom.id = sha256(tenant_id + raw)`, per-tenant); the canonical CDX is a derived scanning input.
 - **Record the converter version** (`Canonicalizer.Version()`) alongside `db_version` on each scan, for the same reproducibility reason.
 - **Backend is a seam, not yet chosen.** `pkg/sbom.Canonicalizer` is an interface. Candidates: shell out to `syft convert` (spike-proven, but experimental) or the CycloneDX/SPDX Go libraries in-process (needs its own fidelity check). A `passthrough` implementation (CycloneDX-only) ships first so the pipeline runs end-to-end on CDX before the SPDX backend lands.
 
@@ -378,7 +378,7 @@ func getScore(cvss *gabs.Container, sources ...string) float32 {
 
 ## Ingest API (Cloud Run service)
 
-Accepts an authenticated SBOM submission, treats the body as untrusted, extracts the subject digest, content-addresses the bytes, and stores. Idempotent by construction: the same SBOM bytes produce the same `sha256`, so resubmission dedupes. Ingest is deliberately **thin** — it does **not** scan and does **not** convert formats; all heavy/fallible work is deferred to the scan job (see [Ingest vs. scan-job split](#ingest-vs-scan-job-split)).
+Accepts an authenticated SBOM submission, treats the body as untrusted, extracts the subject digest, content-addresses the bytes **per tenant**, and stores. Idempotent by construction: the same bytes from the same tenant produce the same id, so resubmission dedupes (and two tenants submitting the same public SBOM get distinct rows). Ingest is deliberately **thin** — it does **not** scan and does **not** convert formats; all heavy/fallible work is deferred to the scan job (see [Ingest vs. scan-job split](#ingest-vs-scan-job-split)).
 
 ### Request contract
 
@@ -467,7 +467,11 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id := fmt.Sprintf("%x", sha256.Sum256(raw)) // content address
+	// Per-tenant content address: sha256(tenant_id + bytes). A global content
+	// hash would collide across tenants submitting the same public SBOM (PK is
+	// id), so the second submitter could never see their own row. Scoping by
+	// tenant keeps per-tenant idempotency/dedup and preserves isolation.
+	id := tenantContentID(tenant.ID, raw)
 
 	if err := s.gcs.PutIfAbsent(ctx, sbomObjectPath(tenant.ID, id), raw); err != nil {
 		http.Error(w, "storage error", http.StatusInternalServerError)

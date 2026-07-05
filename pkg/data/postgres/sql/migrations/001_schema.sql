@@ -52,7 +52,7 @@ CREATE INDEX IF NOT EXISTS idx_devradar_api_token_tenant ON devradar_api_token(t
 -- One row per unique submitted SBOM. Content-addressed (id = sha256 of bytes),
 -- digest-pinned, immutable. Bytes live in GCS; this is the index over them.
 CREATE TABLE IF NOT EXISTS devradar_sbom (
-    id                  TEXT PRIMARY KEY,              -- sha256 of raw bytes
+    id                  TEXT PRIMARY KEY,              -- sha256(tenant_id + bytes): per-tenant content address
     tenant_id           UUID NOT NULL REFERENCES devradar_tenant(id) ON DELETE CASCADE,
     image_ref           TEXT NOT NULL,                 -- may be a private registry
     digest              TEXT NOT NULL,                 -- sha256:...

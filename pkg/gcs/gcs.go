@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"cloud.google.com/go/storage"
@@ -49,6 +50,25 @@ func (c *Client) Fetch(ctx context.Context, objectPath string) ([]byte, error) {
 	return b, nil
 }
 
+// Put writes data to a gs://bucket/key URI. Used by the ingest API to store the
+// raw SBOM bytes it is handed. Content-addressed writes are effectively
+// idempotent (same id → same object), so an overwrite is harmless.
+func (c *Client) Put(ctx context.Context, objectPath string, data []byte) error {
+	bucket, key, err := parseGSURI(objectPath)
+	if err != nil {
+		return err
+	}
+	w := c.sc.Bucket(bucket).Object(key).NewWriter(ctx)
+	if _, err := w.Write(data); err != nil {
+		_ = w.Close()
+		return fmt.Errorf("write %s: %w", objectPath, err)
+	}
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", objectPath, err)
+	}
+	return nil
+}
+
 func parseGSURI(uri string) (bucket, key string, err error) {
 	rest, ok := strings.CutPrefix(uri, "gs://")
 	if !ok {
@@ -61,11 +81,26 @@ func parseGSURI(uri string) (bucket, key string, err error) {
 	return bucket, key, nil
 }
 
-// LocalFetcher reads SBOM bytes from the local filesystem. object_path is
-// treated as a file path. For development and tests only.
-type LocalFetcher struct{}
+// LocalStore reads and writes SBOM bytes under a base directory, keyed by the
+// tail of the gs:// path. For development and tests only — pairs with the scan
+// job's LocalFetcher so a full submit→scan loop runs without GCS.
+type LocalStore struct{ Dir string }
 
-// Fetch reads the file at objectPath.
-func (LocalFetcher) Fetch(_ context.Context, objectPath string) ([]byte, error) {
-	return os.ReadFile(objectPath)
+// Put writes data to Dir/<sanitized objectPath>.
+func (l LocalStore) Put(_ context.Context, objectPath string, data []byte) error {
+	p := l.pathFor(objectPath)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(p, data, 0o600)
+}
+
+// Fetch reads back what Put wrote.
+func (l LocalStore) Fetch(_ context.Context, objectPath string) ([]byte, error) {
+	return os.ReadFile(l.pathFor(objectPath))
+}
+
+func (l LocalStore) pathFor(objectPath string) string {
+	safe := strings.NewReplacer("gs://", "", "/", "_", ":", "_").Replace(objectPath)
+	return filepath.Join(l.Dir, safe)
 }
