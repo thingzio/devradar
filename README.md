@@ -331,6 +331,9 @@ curl -s http://localhost:8080/v1/images -H "Authorization: Bearer $DR_TOKEN"
 # current findings and change history for one SBOM (use sbom_id from step 4)
 curl -s http://localhost:8080/v1/sboms/<sbom_id>/findings -H "Authorization: Bearer $DR_TOKEN"
 curl -s http://localhost:8080/v1/sboms/<sbom_id>/events   -H "Authorization: Bearer $DR_TOKEN"
+
+# change history for an image ACROSS digests (ref is a query param — refs have slashes)
+curl -s "http://localhost:8080/v1/images/timeline?ref=alpine" -H "Authorization: Bearer $DR_TOKEN"
 ```
 
 **Severity threshold.** Every read endpoint filters by a minimum severity —

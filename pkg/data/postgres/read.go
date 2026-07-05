@@ -183,6 +183,64 @@ func (s *Store) EventsBySBOM(ctx context.Context, tenantID, sbomID, minSeverity 
 	return out, rows.Err()
 }
 
+// TimelineEvent is one change in an image's history, carrying the digest it
+// occurred on so a caller can see the inventory progress across digest changes.
+type TimelineEvent struct {
+	Digest     string    `json:"digest"`
+	SBOMID     string    `json:"sbom_id"`
+	Scanner    string    `json:"scanner"`
+	EventType  string    `json:"event_type"`
+	Exposure   string    `json:"exposure"`
+	Package    string    `json:"package"`
+	Severity   string    `json:"severity"`
+	Score      float32   `json:"score"`
+	Cause      string    `json:"cause"`
+	OccurredAt time.Time `json:"occurred_at"`
+}
+
+// ImageTimeline returns the change history for an image ref across ALL its
+// digests — the cross-digest view of how one tracked image evolved. Filtered to
+// minSeverity (unknown always included), newest first. Tenant-scoped; returns
+// ErrNotFound if the ref is unknown to the tenant (so an empty history and an
+// unknown image are distinguishable).
+func (s *Store) ImageTimeline(ctx context.Context, tenantID, imageRef, minSeverity string, limit int) ([]TimelineEvent, error) {
+	var known bool
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM devradar_sbom WHERE tenant_id = $1 AND image_ref = $2)`,
+		tenantID, imageRef).Scan(&known); err != nil {
+		return nil, fmt.Errorf("check image ref: %w", err)
+	}
+	if !known {
+		return nil, ErrNotFound
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT sb.digest, e.sbom_id, e.scanner, e.event_type, e.exposure, e.package,
+		       e.severity, e.score, e.cause, e.occurred_at
+		FROM devradar_finding_event e
+		JOIN devradar_sbom sb ON sb.id = e.sbom_id
+		WHERE e.tenant_id = $1 AND sb.image_ref = $2 AND e.severity = ANY($3)
+		ORDER BY e.occurred_at DESC LIMIT $4`,
+		tenantID, imageRef, pq.Array(data.AllowedSeverities(minSeverity)), limit)
+	if err != nil {
+		return nil, fmt.Errorf("image timeline: %w", err)
+	}
+	defer rows.Close()
+
+	var out []TimelineEvent
+	for rows.Next() {
+		var t TimelineEvent
+		if err := rows.Scan(&t.Digest, &t.SBOMID, &t.Scanner, &t.EventType, &t.Exposure,
+			&t.Package, &t.Severity, &t.Score, &t.Cause, &t.OccurredAt); err != nil {
+			return nil, fmt.Errorf("scan timeline event: %w", err)
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 // ErrNotFound is returned when a tenant-scoped resource doesn't exist or isn't
 // owned by the tenant (indistinguishable by design).
 var ErrNotFound = errNotFound{}

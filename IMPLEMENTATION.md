@@ -401,7 +401,7 @@ Read endpoints (session or token auth):
 | Method | Path | Purpose |
 |---|---|---|
 | `GET`  | `/v1/images` | List the tenant's tracked images (latest state per digest). |
-| `GET`  | `/v1/images/{ref}/timeline` | Event history for an image ref across digests. |
+| `GET`  | `/v1/images/timeline?ref=<image_ref>` | Event history for an image ref across digests. `ref` is a query param, not a path segment (image refs contain slashes). |
 | `GET`  | `/v1/sboms/{id}/findings` | Current findings for one SBOM. |
 | `GET`  | `/v1/sboms/{id}/events` | Change events for one SBOM. |
 
@@ -795,7 +795,7 @@ The read endpoints (tenant-scoped, `WHERE tenant_id = $1`):
 | Method | Path | Returns |
 |---|---|---|
 | `GET` | `/v1/images` | tracked images (latest state per digest) |
-| `GET` | `/v1/images/{ref}/timeline` | change events for an image ref across digests |
+| `GET` | `/v1/images/timeline?ref=<image_ref>` | change events for an image ref across digests (ref is a query param — refs contain slashes) |
 | `GET` | `/v1/sboms/{id}/findings` | current findings for one SBOM |
 | `GET` | `/v1/sboms/{id}/events` | change events for one SBOM |
 
@@ -914,7 +914,7 @@ Environment variables only — **no config file, no flags** (both siblings). A `
 
 ### HTTP server
 
-- **stdlib `net/http.ServeMux`** with Go 1.22+ method patterns (`"POST /v1/sboms"`, `"GET /v1/images/{ref}/timeline"`); path params via `r.PathValue`. No third-party router.
+- **stdlib `net/http.ServeMux`** with Go 1.22+ method patterns (`"POST /v1/sboms"`, `"GET /v1/sboms/{id}/findings"`); path params via `r.PathValue`. Values that contain slashes (image refs) travel as query params, not path segments, since a wildcard matches only one segment. No third-party router.
 - Outer middleware `recoverPanics(securityHeaders(mux))`; per-route composition by functional wrapping. Hardened `http.Server` timeouts (Read 30s / ReadHeader 5s / Write 60s / Idle 120s / MaxHeaderBytes 64KB), listens `0.0.0.0:8080` (`PORT` override), graceful shutdown on ctx cancel.
 - **`GET /health` → 200** as the Cloud Run startup probe (migrations run before `ListenAndServe`, so readiness == listening). No separate readiness endpoint.
 - JSON APIs return a `{"error": "..."}` envelope; the UI uses `html/template` with `//go:embed templates/*.html` + `static/*`.

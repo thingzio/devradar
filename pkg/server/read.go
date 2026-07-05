@@ -48,6 +48,39 @@ func (s *Server) handleListImages(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"min_severity": min, "images": images})
 }
 
+// handleTimeline returns the change history for an image ref across all its
+// digests. The ref is a query param (not a path segment) because image refs
+// contain slashes, which a stdlib ServeMux path wildcard can't capture.
+func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
+	tn := middleware.TenantFromContext(r.Context())
+	if tn == nil {
+		writeError(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+	ref := r.URL.Query().Get("ref")
+	if ref == "" {
+		writeError(w, http.StatusBadRequest, "missing ref query parameter")
+		return
+	}
+	min, ok := minSeverity(r, tn)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid min_severity")
+		return
+	}
+	limit := 200
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
+	}
+	events, err := s.store.ImageTimeline(r.Context(), tn.ID, ref, min, limit)
+	if err != nil {
+		writeReadErr(w, err, "failed to load timeline")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"image_ref": ref, "min_severity": min, "timeline": events})
+}
+
 // handleFindings returns current findings for one of the tenant's SBOMs,
 // filtered to ?min_severity (or the tenant default); unknown always included.
 func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
