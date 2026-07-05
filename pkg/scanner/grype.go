@@ -3,7 +3,9 @@ package scanner
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os/exec"
+	"time"
 )
 
 type grypeScanner struct{}
@@ -30,8 +32,59 @@ func (g *grypeScanner) Version() string {
 	return v.Version
 }
 
+// DBVersion returns the grype DB build timestamp (RFC3339), read from
+// `grype db status -o json`. Call after EnsureDB.
+func (g *grypeScanner) DBVersion() string {
+	out := captureVersion("grype", "db", "status", "-o", "json")
+	if out == "" {
+		return ""
+	}
+	var s struct {
+		Built string `json:"built"`
+	}
+	if err := json.Unmarshal([]byte(out), &s); err != nil {
+		return ""
+	}
+	return s.Built
+}
+
+// EnsureDB updates the grype DB if missing or older than maxAge. grype's own
+// `db status` reports validity (it enforces a max age); we additionally honor
+// the caller's maxAge. Runs once at job start; scans then run frozen.
+func (g *grypeScanner) EnsureDB(ctx context.Context, maxAge time.Duration) error {
+	if grypeDBFresh(maxAge) {
+		return nil
+	}
+	cmd := exec.CommandContext(ctx, "grype", "db", "update")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("grype db update: %w (%s)", err, truncate(string(out), 300))
+	}
+	return nil
+}
+
+// grypeDBFresh reports whether the installed DB is present, grype-valid, and
+// built within maxAge.
+func grypeDBFresh(maxAge time.Duration) bool {
+	out := captureVersion("grype", "db", "status", "-o", "json")
+	if out == "" {
+		return false
+	}
+	var s struct {
+		Built string `json:"built"`
+		Valid bool   `json:"valid"`
+	}
+	if err := json.Unmarshal([]byte(out), &s); err != nil || !s.Valid {
+		return false
+	}
+	built, err := time.Parse(time.RFC3339, s.Built)
+	if err != nil {
+		return false
+	}
+	return time.Since(built) <= maxAge
+}
+
 // ScanSBOM scans the SBOM via grype's "sbom:" scheme. No network, no image
-// pull; DB auto-update disabled because the pinned DB is baked into the image.
+// pull; DB auto-update disabled so the run uses the frozen DB from EnsureDB.
 func (g *grypeScanner) ScanSBOM(ctx context.Context, sbomPath, outPath string) error {
 	cmd := exec.CommandContext(ctx, "grype",
 		"sbom:"+sbomPath,

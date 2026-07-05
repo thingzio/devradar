@@ -12,7 +12,7 @@ The system's runtime pieces, all Cloud Run, no VMs, no queue, no registry access
 
 1. **Ingest API + minimal UI** — Cloud Run *service* (`devradar-saas-serve`). Accepts, validates, content-addresses, and stores SBOMs (API-token auth); serves a small GitHub-OAuth UI for minting/revoking API tokens (session auth).
 2. **Daily Scan Job** — Cloud Run *job* (`devradar-saas-scan`). Rescans active SBOMs, writes current state + change events.
-3. **Alerting** — triggered by new critical/high `added` events; emails the submitting tenant, optionally with a Claude-generated narrative.
+3. **Read API + UI** — tenants pull their current findings and change history (`/v1/images`, `/v1/sboms/{id}/findings`, `/v1/sboms/{id}/events`). v1 is pull-only; push alerting is post-MVP.
 4. **Store** — shared Cloud SQL PostgreSQL (`thingz` database, `devradar_`-prefixed tables).
 
 The scanner design (a `Scanner` interface to run the tool, a `Converter` interface to normalize its JSON, both behind a registry) is **informed by the patterns proven in** [vimp](https://github.com/mchmarny/vimp) — but reimplemented natively in this module. **DevRadar takes lessons from vimp, not code: there is no build or module dependency on vimp.** DevRadar changes the scanner *input* from an image reference to an SBOM file and adds the time-series event model.
@@ -29,7 +29,7 @@ The scanner design (a `Scanner` interface to run the tool, a `Converter` interfa
 
 **Normalize across scanners.** No single scanner's output shape defines the data. Both Grype and Trivy run from day one, normalized into one `Vulnerability` type. New scanners register as converters.
 
-**Pin everything, record every version axis.** A finding set is determined by four inputs — the SBOM inventory, the vuln DB, the scanner binary, and the canonicalizer — that change on different clocks. Scanner and tool versions are pinned in `.settings.yaml` (the platform-wide single source of truth), baked into the job image, and **all four axes are recorded per scan run**. This is what lets every change be attributed to exactly one cause (image / db / tooling) and every result be reproduced exactly. Reproducibility is the product; the pinned, recorded version is a first-class, auditable fact.
+**Pin the tools, refresh the data, record every version axis.** A finding set is determined by four inputs — the SBOM inventory, the vuln DB, the scanner binary, and the canonicalizer — that change on different clocks. Scanner *binaries* and tool versions are pinned in `.settings.yaml` (the platform-wide single source of truth) and baked into the job image; the vulnerability *database* is refreshed lazily at job start (see [Vulnerability DB freshness](#vulnerability-db-freshness)) rather than baked, then frozen for the run. **All four axes are recorded per scan run.** This is what lets every change be attributed to exactly one cause (image / db / tooling) and every result be reproduced exactly. Reproducibility is the product; the recorded version is a first-class, auditable fact.
 
 ---
 
@@ -193,7 +193,8 @@ func (g *grypeScanner) IsAvailable() bool     { return isInstalled("grype") }
 
 func (g *grypeScanner) ScanSBOM(ctx context.Context, sbomPath, outPath string) error {
 	// grype reads an SBOM via the "sbom:" scheme; no network, no image pull.
-	// DB updates are disabled — the pinned DB is baked into the job image.
+	// Auto-update off: the DB was refreshed once at job start (EnsureDB) and is
+	// frozen for the run, so every scan shares one db_version.
 	cmd := exec.CommandContext(ctx, "grype",
 		"sbom:"+sbomPath,
 		"-q",
@@ -223,7 +224,8 @@ func (t *trivyScanner) ConverterName() string { return "trivy" }
 func (t *trivyScanner) IsAvailable() bool     { return isInstalled("trivy") }
 
 func (t *trivyScanner) ScanSBOM(ctx context.Context, sbomPath, outPath string) error {
-	// trivy scans an SBOM directly. --skip-db-update: the pinned DB is baked in.
+	// trivy scans an SBOM directly. --skip-db-update: the DB was refreshed once
+	// at job start (EnsureDB) and is frozen for the run.
 	cmd := exec.CommandContext(ctx, "trivy", "sbom",
 		"--quiet",
 		"--scanners", "vuln",
@@ -765,7 +767,7 @@ Note the DDL is written **idempotent** (`CREATE TABLE IF NOT EXISTS` / `CREATE I
 
 ### Why the event log instead of the original `findings`-per-day table
 
-The original design appended every finding on every scan — ~159M rows/year, of which ~99% are byte-identical to the prior day because a fixed SBOM's inventory doesn't change. The event model stores *current state* (bounded) plus *changes* (a handful of rows on a normal day). Same query power for "what did this image look like on date X" (replay events up to X, or read `devradar_scan_run` + reconstruct), far less storage, and alerts are a trivial `SELECT` over `devradar_finding_event` instead of a nightly diff job.
+The original design appended every finding on every scan — ~159M rows/year, of which ~99% are byte-identical to the prior day because a fixed SBOM's inventory doesn't change. The event model stores *current state* (bounded) plus *changes* (a handful of rows on a normal day). Same query power for "what did this image look like on date X" (replay events up to X, or read `devradar_scan_run` + reconstruct), far less storage, and the "what changed" read API (and future alerts) is a trivial `SELECT` over `devradar_finding_event` instead of a nightly diff job.
 
 ### Retention & roll-up (forward-looking, additive)
 
@@ -776,28 +778,42 @@ The original design appended every finding on every scan — ~159M rows/year, of
 
 ---
 
-## Alerting
+## Reading Findings & Deltas (v1 — pull)
 
-Triggered by the scan job (or a short poll over recent events). When an `added` event of severity `critical` or `high` lands for a tenant, notify that tenant (the submitter is always known — they own the SBOM).
+**v1 is pull, not push.** There is no email/notification delivery in the MVP; tenants retrieve their current findings and change history over the read API (and the UI renders the same data). The event log and cause classification already produced by the scan job are exactly what these endpoints serve — delivery is the only thing deferred.
+
+The read endpoints (tenant-scoped, `WHERE tenant_id = $1`):
+
+| Method | Path | Returns |
+|---|---|---|
+| `GET` | `/v1/images` | tracked images (latest state per digest) |
+| `GET` | `/v1/images/{ref}/timeline` | change events for an image ref across digests |
+| `GET` | `/v1/sboms/{id}/findings` | current findings for one SBOM |
+| `GET` | `/v1/sboms/{id}/events` | change events for one SBOM |
+
+The core query — recent actionable changes for a tenant — is the same one a future alerter will use; in v1 it backs the "what changed" view. `cause IN ('image','db')` filters out tooling-driven deltas so a grype/trivy upgrade never shows up as a real change (and, later, never pages anyone):
 
 ```sql
--- New actionable events since the last alert watermark for a tenant.
--- cause IN ('image','db') excludes tooling-driven deltas — a grype/trivy upgrade
--- must never page a tenant for a change that isn't in their image or the CVE data.
+-- Actionable changes for a tenant since a caller-supplied cursor.
 SELECT e.exposure, e.package, e.severity, e.score, s.image_ref, e.cause, e.occurred_at
 FROM devradar_finding_event e
 JOIN devradar_sbom s ON s.id = e.sbom_id
 WHERE e.tenant_id = $1
   AND e.event_type = 'added'
   AND e.severity IN ('critical','high')
-  AND e.cause IN ('image','db')     -- never alert on tooling-driven changes
-  AND e.occurred_at > $2            -- last alert watermark
+  AND e.cause IN ('image','db')     -- exclude tooling-driven changes
+  AND e.occurred_at > $2            -- cursor / since
 ORDER BY e.occurred_at;
 ```
 
-Alert routing needs no registry knowledge, no external identity resolution — the SBOM carries the tenant, the tenant carries the destination (`devradar_tenant.email`). This is a direct benefit of the submit-time ownership model.
+### Alerting & narratives (post-MVP)
 
-**Delta narratives (Claude).** Raw events are precise but terse. DevRadar mirrors the sibling pattern of using Claude to turn a day's change set into a one-line human summary — e.g. *"Criticals rose by 3: new CVEs in openssl and glibc from a vulnerability-DB update; the image did not change."* This runs in the scan/alert path with the **Haiku** model (high-volume, cheap — same split the siblings use: Haiku for batch, Sonnet for interactive). The Anthropic client is nil-safe: if `ANTHROPIC_API_KEY` is unset the alert still fires with the raw event list, so narrative generation is strictly additive and never a hard dependency. See [Platform Alignment → Claude](#claude-optional-delta-narratives).
+Push delivery is deferred, but the design is unchanged and the data is ready:
+
+- **Email/webhook alerts** — the SBOM carries the tenant and the tenant carries the destination (`devradar_tenant.email`), so routing needs no registry knowledge or external identity resolution. An alerter is a thin consumer of the query above plus a per-tenant watermark.
+- **Delta narratives (Claude)** — turn a day's change set into a one-line human summary (e.g. *"Criticals rose by 3: new CVEs in openssl and glibc from a DB update; the image did not change"*), using the **Haiku** model, nil-safe (absent key ⇒ raw events, never a hard dependency). See [Platform Alignment → Claude](#claude-optional-delta-narratives).
+
+Both are strictly additive: they consume the event log v1 already produces, so shipping pull-first costs nothing later.
 
 ---
 
@@ -835,7 +851,7 @@ All GCP, in the shared `thingzio` project (`us-west1`). No VMs, no Cloud Tasks, 
 | Component | Technology | Notes |
 |---|---|---|
 | Ingest API + minimal UI | Cloud Run service `devradar-saas-serve` | Scales to zero; serves the JSON API and the OAuth/token-minting UI |
-| Daily scan | Cloud Run Job `devradar-saas-scan` | ~2 vCPU; scanners + pinned DBs baked into the image; triggered by Cloud Scheduler |
+| Daily scan | Cloud Run Job `devradar-saas-scan` | ~2 vCPU; pinned scanner binaries baked in, vuln DB refreshed lazily at job start; triggered by Cloud Scheduler |
 | Images | `ko` via GoReleaser (no Dockerfile) | Pushed to Artifact Registry `us-west1-docker.pkg.dev/thingzio/devradar-saas-images/<name>` |
 | Scheduling | Cloud Scheduler | Triggers the scan job ~02:00 UTC |
 | SBOM bytes | GCS bucket `devradar-saas-sboms` (DevRadar-owned) | Content-addressed objects; the shared infra's DB-backup bucket is not for app data |
@@ -847,7 +863,16 @@ This is the **two-deployable-unit** shape (DevPulse's model: a service + a sched
 **Scanner/DB versioning.** Two version concerns, two files:
 
 - **`.settings.yaml`** — the platform single-source-of-truth (Go version, `ko`/`goreleaser`/`golangci-lint`/`tfsec` versions, coverage threshold), consumed by the Makefile and CI via `yq`, identical to both siblings.
-- **Pinned scanner versions** live alongside it and are baked into the scan-job image; `db_version` recorded on every `devradar_scan_run` ties each finding to the exact DB that produced it. The job image is rebuilt (nightly) to refresh the baked scanner DBs so each run starts <24h stale.
+- **Pinned scanner versions** live alongside it and are baked into the scan-job image; `db_version` recorded on every `devradar_scan_run` ties each finding to the exact DB that produced it.
+
+#### Vulnerability DB freshness
+
+The scanner *binaries* are pinned and baked (a fixed matcher version is what makes findings reproducible). The vulnerability *database* is **not** baked — it is refreshed lazily:
+
+- At **job start**, `Scanner.EnsureDB(ctx, maxAge)` updates each scanner's DB if it is missing or older than `maxAge` (default 24h): `grype db update` when `grype db status` reports stale/invalid; `trivy image --download-db-only` when its `UpdatedAt` is beyond `maxAge`.
+- For the **rest of the run** the DB is frozen — every per-SBOM scan runs with auto-update off (`GRYPE_DB_AUTO_UPDATE=false` / `--skip-db-update`). This is the important invariant: **one job run uses exactly one DB version**, so a DB refresh can never fire mid-run and split otherwise-identical SBOMs across two `db_version`s (which would corrupt cause attribution).
+
+This replaces the original "bake the DB into a nightly-rebuilt image" plan, which was a holdover from the discarded VM-fleet design. For a single daily Cloud Run Job the one-time refresh at start amortizes to nothing, needs no image-rebuild pipeline, and is always current. Baking would only win for air-gapped or high-frequency cold-start topologies — neither applies here.
 
 ---
 

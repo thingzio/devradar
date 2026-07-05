@@ -25,7 +25,7 @@ Four components, all Cloud Run, **no VMs, no queue, no registry access**:
 
 1. **Ingest API + minimal UI** (Cloud Run service `devradar-saas-serve`) — authenticated `POST /v1/sboms` (API token). Validates untrusted SBOM input, extracts the subject image digest, content-addresses by `sha256(bytes)`, stores bytes in GCS + a row in `devradar_sbom`. Also serves a small GitHub-OAuth UI for minting/revoking API tokens.
 2. **Daily Scan Job** (Cloud Run Job `devradar-saas-scan`, pure CPU) — for each active SBOM, runs Grype + Trivy on the SBOM file, normalizes, writes current state + change events.
-3. **Alerting** — emails the submitting tenant on new `added` CRITICAL/HIGH events, optionally with a Claude narrative.
+3. **Read API + UI (v1: pull)** — tenants retrieve current findings + change history (`/v1/images`, `/v1/sboms/{id}/findings`, `/events`). Push alerts (email/webhook) + Claude narratives are **post-MVP**; the event log that powers them is built in v1.
 4. **Store** — shared Cloud SQL Postgres (`thingz` DB, `devradar_` tables).
 
 Three ideas unlock the whole design:
@@ -76,7 +76,7 @@ DevRadar is the third service on the shared platform (`thingzio/infra`) and mirr
 - **Auth (both surfaces):** API tokens (`dr_`+hex, stored SHA-256, `Bearer`, `RequireAPIToken`) for CI submission; GitHub OAuth → SHA-256-hashed session cookie (`RequireAuth`) for the token-minting UI; `RequireAdmin` allowlist returns 404 to hide routes; CSRF on UI POSTs.
 - **Build/CI:** `ko` via GoReleaser (no Dockerfile); `.settings.yaml` is the version/threshold SoT consumed by Make + CI via `yq`; deploy via Workload Identity Federation; vendored deps.
 - **Logging:** `log/slog` JSON to stderr, tagged `version`+`source`; no app-level OTel/Prometheus.
-- **Claude:** nil-safe hand-rolled Anthropic Messages client (`pkg/claude`), Haiku for the batch scan/alert path; optional, never a hard dependency.
+- **Claude:** nil-safe hand-rolled Anthropic Messages client (`pkg/claude`), Haiku for batch; optional, never a hard dependency. Post-MVP (delta narratives ride on push alerting, which is deferred) — plus opt-in OpenVEX stubbing (Sonnet).
 - **Infra:** references shared `thingzio-pg` + `thingzio-vpc`; creates only its own SQL user `devradar`, `devradar-saas-*` secrets, run/deployer SAs + WIF, Cloud Run service+job, GCS bucket `devradar-saas-sboms`, Artifact Registry `devradar-saas-images`; TF state prefix `devradar`.
 
 ## Conventions & Constraints (project-specific)
@@ -84,7 +84,7 @@ DevRadar is the third service on the shared platform (`thingzio/infra`) and mirr
 - **Never pull images.** If a design idea requires registry access, auth, or egress, it belongs in the roadmap ("SBOM source #2"), not v1.
 - **Untrusted input.** The SBOM is attacker-controllable: enforce body size caps (`http.MaxBytesReader`), decompression-bomb limits, schema validation, and fail closed if the subject digest can't be resolved.
 - **Subject-digest extraction is format-specific and fiddly** (CycloneDX `metadata.component` hashes/PURL vs SPDX root `DESCRIBES` package checksums/externalRefs). It gets its own normalization step; reject SBOMs whose digest can't be resolved.
-- **Pin scanner versions** in `.settings.yaml`; bake binaries + DB snapshots into the scan-job image; record `db_version` on every `devradar_scan_run`. Never `latest`.
+- **Pin scanner binaries** in `.settings.yaml` and bake them into the scan-job image (fixed matcher = reproducible findings); **refresh the vuln DB lazily** at job start via `Scanner.EnsureDB` then freeze it for the run (one run = one `db_version`) — do NOT bake the DB. Record `db_version` on every `devradar_scan_run`. Never `latest`.
 - **Idempotency everywhere** — ingest dedupes by content hash; `ApplyScan` re-runs produce zero new events; event inserts guarded by a natural unique key. Cloud Run Jobs retry.
 - **Don't swallow failures** — per-SBOM/per-scanner errors go to `devradar_scan_failure`, not just logs.
 - **Tenancy** flows from SBOM → tenant → alert destination (`devradar_tenant.email`); app-level `tenant_id` scoping, see Data Model.

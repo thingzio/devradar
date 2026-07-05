@@ -6,7 +6,10 @@
 // cheap to add later. (Design from vimp, reimplemented natively.)
 package scanner
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Scanner runs one vulnerability scanner against an SBOM file.
 type Scanner interface {
@@ -16,6 +19,16 @@ type Scanner interface {
 	// per scan run so a change in findings is attributable to a scanner upgrade
 	// rather than the image or the vuln DB. "" if it cannot be determined.
 	Version() string
+	// DBVersion returns an identifier for the currently-installed vulnerability
+	// database (e.g. its build timestamp), recorded per scan run. Call after
+	// EnsureDB so the value reflects the DB the run will actually use. "" if it
+	// cannot be determined.
+	DBVersion() string
+	// EnsureDB updates the vulnerability database if it is missing or older than
+	// maxAge, then leaves it frozen for the run. The scan job calls this ONCE at
+	// startup; per-SBOM scans then run with auto-update disabled so every scan in
+	// a run shares one DB version (which keeps cause attribution honest).
+	EnsureDB(ctx context.Context, maxAge time.Duration) error
 	// IsAvailable reports whether the scanner binary is installed.
 	IsAvailable() bool
 	// ScanSBOM scans the SBOM at sbomPath and writes raw JSON to outPath.

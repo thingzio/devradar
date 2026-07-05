@@ -145,7 +145,9 @@ CREATE TABLE IF NOT EXISTS devradar_finding_event_default PARTITION OF devradar_
 
 CREATE INDEX IF NOT EXISTS idx_devradar_fe_tenant_time
     ON devradar_finding_event(tenant_id, occurred_at DESC);
-CREATE INDEX IF NOT EXISTS idx_devradar_fe_alerting
+-- Serves the "what changed" read API (and post-MVP alerting): tenant-facing
+-- causes only (image|db), never tooling-driven noise.
+CREATE INDEX IF NOT EXISTS idx_devradar_fe_actionable
     ON devradar_finding_event(tenant_id, event_type, severity, occurred_at DESC)
     WHERE cause IN ('image', 'db');
 
