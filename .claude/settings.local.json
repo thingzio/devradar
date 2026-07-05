@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker info *)",
+      "Bash(mkdir *)",
+      "Bash(xargs kill -9)",
+      "Bash(pkill -f devradar-serve)",
+      "Bash(make *)",
+      "Bash(gofmt *)",
+      "Bash(grep *)"
+    ]
+  }
+}

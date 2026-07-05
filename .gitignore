@@ -19,11 +19,11 @@ dist
 # Keys
 *.pem
 
+# SBOMs
+.sboms
 
 # Configs
-pkg/config/config.yaml
-
-.claude/settings.local.json
+config.yaml
 
 # Worktrees
 .worktrees
