@@ -9,9 +9,10 @@ import (
 	"github.com/thingzio/devradar/pkg/data"
 )
 
-// SeverityCounts is the full per-severity breakdown for an image. All levels are
-// always returned; callers/UI decide what to emphasize. Relevant is the count at
-// or above a supplied threshold (unknown always included).
+// SeverityCounts is the per-severity breakdown for an image. Levels below the
+// requested threshold are zeroed (unknown is always kept), so the visible
+// buckets sum to Relevant. Total is the overall finding count regardless of
+// threshold, so callers can still see that lower-severity findings exist.
 type SeverityCounts struct {
 	Critical   int `json:"critical"`
 	High       int `json:"high"`
@@ -19,8 +20,8 @@ type SeverityCounts struct {
 	Low        int `json:"low"`
 	Negligible int `json:"negligible"`
 	Unknown    int `json:"unknown"`
-	Total      int `json:"total"`
-	Relevant   int `json:"relevant"` // >= min_severity (or unknown)
+	Total      int `json:"total"`    // all findings, regardless of threshold
+	Relevant   int `json:"relevant"` // >= min_severity (or unknown) — sums the visible buckets
 }
 
 // Image is a tenant-facing summary of one tracked image (one SBOM).
@@ -33,9 +34,10 @@ type Image struct {
 	Counts      SeverityCounts `json:"counts"`
 }
 
-// ListImages returns a tenant's active images with the full severity breakdown.
-// minSeverity sets which levels count toward Counts.Relevant (unknown always
-// counts); it does not hide any level from the breakdown. Tenant-scoped.
+// ListImages returns a tenant's active images. Every tracked image is returned
+// (the list is an inventory — images never disappear); minSeverity trims the
+// per-severity breakdown to levels at or above the threshold (unknown always
+// kept), zeroing the rest. Total still reflects all findings. Tenant-scoped.
 func (s *Store) ListImages(ctx context.Context, tenantID, minSeverity string) ([]Image, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT sb.id, sb.image_ref, sb.digest, sb.format, sb.submitted_at,
@@ -64,29 +66,34 @@ func (s *Store) ListImages(ctx context.Context, tenantID, minSeverity string) ([
 			&c.Critical, &c.High, &c.Medium, &c.Low, &c.Negligible, &c.Unknown, &c.Total); err != nil {
 			return nil, fmt.Errorf("scan image: %w", err)
 		}
-		c.Relevant = relevantCount(c, minSeverity)
-		im.Counts = c
+		im.Counts = applyThreshold(c, minSeverity)
 		out = append(out, im)
 	}
 	return out, rows.Err()
 }
 
-// relevantCount sums the per-severity counts that meet the threshold (unknown
-// always included), using the shared ordering so it can't drift from the filter.
-func relevantCount(c SeverityCounts, min string) int {
-	n := c.Unknown
-	for sev, cnt := range map[string]int{
-		data.SeverityCritical:   c.Critical,
-		data.SeverityHigh:       c.High,
-		data.SeverityMedium:     c.Medium,
-		data.SeverityLow:        c.Low,
-		data.SeverityNegligible: c.Negligible,
-	} {
+// applyThreshold zeroes the per-severity buckets below min (unknown is always
+// kept) and sets Relevant to the sum of the visible buckets. Total is left as
+// the overall finding count. Uses the shared ordering so it can't drift from the
+// row filter on /findings and /events.
+func applyThreshold(c SeverityCounts, min string) SeverityCounts {
+	buckets := map[string]*int{
+		data.SeverityCritical:   &c.Critical,
+		data.SeverityHigh:       &c.High,
+		data.SeverityMedium:     &c.Medium,
+		data.SeverityLow:        &c.Low,
+		data.SeverityNegligible: &c.Negligible,
+	}
+	relevant := c.Unknown // unknown always kept
+	for sev, p := range buckets {
 		if data.MeetsThreshold(sev, min) {
-			n += cnt
+			relevant += *p
+		} else {
+			*p = 0 // trim sub-threshold bucket from the breakdown
 		}
 	}
-	return n
+	c.Relevant = relevant
+	return c
 }
 
 // Finding is a tenant-facing current finding row.
