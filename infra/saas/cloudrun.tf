@@ -22,7 +22,9 @@ resource "google_cloud_run_v2_service" "serve" {
     }
 
     containers {
-      image = "${local.image_base}/devradar-serve:${var.image_tag}"
+      # Bootstrap placeholder; CI (gcloud run deploy) sets the real image and
+      # Terraform ignores it thereafter (see lifecycle block below).
+      image = var.bootstrap_image
 
       ports {
         container_port = 8080
@@ -94,6 +96,13 @@ resource "google_cloud_run_v2_service" "serve" {
     }
   }
 
+  # CI owns the deployed image; Terraform owns the resource shape. Ignore the
+  # image so `gcloud run deploy` from the release workflow is not reverted on the
+  # next `terraform apply`.
+  lifecycle {
+    ignore_changes = [template[0].containers[0].image]
+  }
+
   depends_on = [google_project_service.default]
 }
 
@@ -131,7 +140,8 @@ resource "google_cloud_run_v2_job" "scan" {
       }
 
       containers {
-        image = "${local.image_base}/devradar-scan:${var.image_tag}"
+        # Bootstrap placeholder; CI sets the real scan image (see lifecycle below).
+        image = var.bootstrap_image
 
         env {
           name = "DATABASE_URL"
@@ -168,6 +178,11 @@ resource "google_cloud_run_v2_job" "scan" {
         }
       }
     }
+  }
+
+  # CI owns the deployed image (nested template for jobs).
+  lifecycle {
+    ignore_changes = [template[0].template[0].containers[0].image]
   }
 
   depends_on = [google_project_service.default]

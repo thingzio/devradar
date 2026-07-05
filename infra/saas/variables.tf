@@ -28,10 +28,16 @@ variable "git_repo" {
   default     = "thingzio/devradar"
 }
 
-variable "image_tag" {
-  description = "Container image tag to deploy"
+variable "bootstrap_image" {
+  description = <<-EOT
+    Placeholder image used ONLY to create the Cloud Run resources on the first
+    apply, before CI has pushed the real images. A public Google sample image
+    that serves HTTP on 8080. After creation, CI (gcloud run deploy) sets the
+    real image; Terraform ignores image changes thereafter (see cloudrun.tf
+    lifecycle blocks), so this value is never re-applied.
+  EOT
   type        = string
-  default     = "latest"
+  default     = "us-docker.pkg.dev/cloudrun/container/hello"
 }
 
 variable "notification_email" {

@@ -49,8 +49,12 @@ make tf-plan          # review — expect ~1 SQL user, 1 bucket, 3 secrets, SAs,
 make tf-apply         # run by hand with an operator identity
 ```
 
-This creates everything except the two container images (pushed by CI in step 4)
-and the secret **values** (step 2). Capture the outputs:
+The Cloud Run service and job are created with a **public placeholder image**
+(`var.bootstrap_image`) so this first apply succeeds before any DevRadar image
+exists — the real images are pushed and deployed by CI in step 4. Terraform
+`ignore_changes` on the image field means CI's deploys are never reverted by a
+later `terraform apply`. This creates everything except the real images and the
+secret **values** (step 2). Capture the outputs:
 
 ```bash
 terraform -chdir=infra/saas output
