@@ -178,7 +178,7 @@ The store is Cloud SQL PostgreSQL. Full DDL is in [IMPLEMENTATION.md](IMPLEMENTA
 
 DevRadar normalizes multiple scanners into one scanner-agnostic finding, so no single scanner's quirks define the data. v1 ships **Grype and Trivy** together — running two from the start prevents overfitting the schema to either one. Additional scanners register as converters without touching the rest of the pipeline.
 
-This design (a `Scanner` interface that runs the tool, a `Converter` interface that normalizes its JSON, both behind a registry with format auto-detection) is adapted from [vimp](https://github.com/mchmarny/vimp), which already implements it for Grype, Trivy, Snyk, Clair, OSV, and Anchore. DevRadar reuses that model, changing the scanner input from an image reference to an SBOM file. See [IMPLEMENTATION.md](IMPLEMENTATION.md).
+This design (a `Scanner` interface that runs the tool, a `Converter` interface that normalizes its JSON, both behind a registry with format auto-detection) draws on the patterns proven in [vimp](https://github.com/mchmarny/vimp), which implements them for Grype, Trivy, Snyk, Clair, OSV, and Anchore. DevRadar applies the same model — reimplemented natively, with no dependency on vimp — changing the scanner input from an image reference to an SBOM file. See [IMPLEMENTATION.md](IMPLEMENTATION.md).
 
 ---
 

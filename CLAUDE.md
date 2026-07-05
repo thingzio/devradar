@@ -50,13 +50,14 @@ Shared Cloud SQL Postgres (`thingzio-pg`, database `thingz`); DevRadar connects 
 
 - `devradar_finding_event` is **partitioned monthly by `occurred_at`** from day one and **retained forever** in v1. Retention tiers and roll-ups are later, additive concerns (a policy or a derived read-model, never a migration).
 - Finding identity/dedup/join key is `data.Vulnerability.GetID()` = `sha256(exposure/package/version)`.
+- **Four version axes, one cause.** A finding set is determined by SBOM inventory (`devradar_sbom.id`/digest), vuln DB (`db_version`), scanner binary (`scanner_version` — the matcher logic), and canonicalizer (`canonicalizer_version`). All are recorded on `devradar_scan_run`. Every `devradar_finding_event` carries a `cause` (`image` | `db` | `tooling`); alerting filters `cause IN ('image','db')` so a grype/trivy upgrade never pages a tenant for a tooling-driven delta. This completes the "clean causality" model — see IMPLEMENTATION.md "ApplyScan → Cause classification".
 - **Tenant isolation is application-level** (`WHERE tenant_id = $1` on every tenant-scoped read), mirroring DevTrace — **not** DevPulse's RLS. Reason: the scan job is inherently cross-tenant, so a per-connection `app.tenant_id` GUC would fight the batch writer. Guardrail: all raw SQL lives in the `data/postgres` Store, every scoped method takes `tenantID` first, integration tests assert cross-tenant reads are empty. RLS remains a reversible later upgrade for the read tables if compliance demands it.
 
-## Scanner / Converter Design (reused from vimp)
+## Scanner / Converter Design (vimp pattern — NO dependency on vimp)
 
-The multi-scanner design is adapted from **[vimp](https://github.com/mchmarny/vimp)** (same author): a `Scanner` interface (run the tool) and a `Converter` interface (normalize its JSON), both behind a registry with format auto-detection. DevRadar changes the scanner **input from an image ref to an SBOM file** and adds the time-series event model. Reuse `pkg/scanner`, `pkg/converter`, `pkg/parser`, and `pkg/data` from vimp's shape.
+The multi-scanner design follows the **patterns proven in [vimp](https://github.com/mchmarny/vimp)** (same author): a `Scanner` interface (run the tool) and a `Converter` interface (normalize its JSON), both behind a registry with format auto-detection. **Critical: DevRadar takes lessons from vimp, not code — there is no `github.com/mchmarny/vimp` import, and there must never be one.** `pkg/scanner`, `pkg/converter`, `pkg/parser`, `pkg/data` are reimplemented natively in this module. DevRadar changes the scanner **input from an image ref to an SBOM file** and adds the time-series event model.
 
-- **Normalized type** is vimp's minimal `data.Vulnerability` (`Exposure, Package, Version, Severity, Score, IsFixed`) — deliberately lowest-common-denominator so no scanner's quirks leak into the schema.
+- **Normalized type** follows vimp's minimal `data.Vulnerability` (`Exposure, Package, Version, Severity, Score, IsFixed`) — deliberately lowest-common-denominator so no scanner's quirks leak into the schema (reimplemented, not imported).
 - **Converters parse with `gabs`** (not typed structs), which is what lets CVSS score resolution walk a **source-precedence list** (`nvd` → `redhat` → …, V3 over V2) instead of hardcoding one provider. This is the fix for the "Trivy vendor-CVSS silently stored as 0.0" bug — preserve it.
 - v1 ships **Grype + Trivy together** (running two prevents overfitting the schema to one). More scanners = register another converter, no other changes.
 

@@ -12,11 +12,9 @@ tmp
 bin
 dist
 # Build output binaries (not source directories)
-/devpulse
-/devpulse-site
-/devpulse-import
-/devpulse-cloud
-/devpulse-admin
+/devradar
+/devradar-serve
+/devradar-scan
 
 # Keys
 *.pem
@@ -29,6 +27,9 @@ pkg/config/config.yaml
 
 # Worktrees
 .worktrees
+
+# Spike / scratch (SBOM generation experiments; fixtures live in pkg/sbom/testdata)
+.spike/
 
 
 # =============================================================================

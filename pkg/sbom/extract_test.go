@@ -1,0 +1,90 @@
+package sbom
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+// Known-good values captured during the ingestion spike. The digests are the
+// manifest digests these images resolved to at generation time; every
+// tool/format combination must extract the same digest for a given image.
+const (
+	nginxDigest = "sha256:5825bde471b86b270298e80ba1f0f3e515a73da1a17a982632f1c262689f1144"
+	redisDigest = "sha256:b2b95679e3b46fb51864949ed25ea976fc3a6bcc00a40a1bc00d568cb2822e50"
+	promDigest  = "sha256:c6b27ea434f8389bfe233fbc7be381cf50587c286e871bc842008f5a1b1908a7"
+)
+
+func TestResolve_Fixtures(t *testing.T) {
+	tests := []struct {
+		file       string
+		wantDigest string
+		wantFormat Format
+		wantTool   string
+	}{
+		{"nginx.syft.cdx.json", nginxDigest, FormatCycloneDX, "syft"},
+		{"nginx.syft.spdx.json", nginxDigest, FormatSPDX, "syft"},
+		{"nginx.trivy.cdx.json", nginxDigest, FormatCycloneDX, "trivy"},
+		{"nginx.trivy.spdx.json", nginxDigest, FormatSPDX, "trivy"},
+		{"redis.syft.cdx.json", redisDigest, FormatCycloneDX, "syft"},
+		{"redis.syft.spdx.json", redisDigest, FormatSPDX, "syft"},
+		{"redis.trivy.cdx.json", redisDigest, FormatCycloneDX, "trivy"},
+		{"redis.trivy.spdx.json", redisDigest, FormatSPDX, "trivy"},
+		{"prometheus.syft.cdx.json", promDigest, FormatCycloneDX, "syft"},
+		{"prometheus.syft.spdx.json", promDigest, FormatSPDX, "syft"},
+		{"prometheus.trivy.cdx.json", promDigest, FormatCycloneDX, "trivy"},
+		{"prometheus.trivy.spdx.json", promDigest, FormatSPDX, "trivy"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.file, func(t *testing.T) {
+			raw, err := os.ReadFile(filepath.Join("testdata", tt.file))
+			if err != nil {
+				t.Fatalf("read fixture: %v", err)
+			}
+
+			got, err := Resolve(raw)
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+
+			if got.Digest != tt.wantDigest {
+				t.Errorf("digest = %q, want %q", got.Digest, tt.wantDigest)
+			}
+			if got.Format != tt.wantFormat {
+				t.Errorf("format = %q, want %q", got.Format, tt.wantFormat)
+			}
+			if got.Tool != tt.wantTool {
+				t.Errorf("tool = %q, want %q", got.Tool, tt.wantTool)
+			}
+			if got.ToolVersion == "" {
+				t.Errorf("tool version not extracted")
+			}
+			if got.GeneratedAt.IsZero() {
+				t.Errorf("generated-at not extracted")
+			}
+			if got.GeneratedAt.After(time.Now()) {
+				t.Errorf("generated-at %v is in the future", got.GeneratedAt)
+			}
+		})
+	}
+}
+
+func TestResolve_UnknownFormat(t *testing.T) {
+	if _, err := Resolve([]byte(`{"hello":"world"}`)); err != ErrUnknownFormat {
+		t.Errorf("err = %v, want ErrUnknownFormat", err)
+	}
+	if _, err := Resolve([]byte(`not json`)); err != ErrUnknownFormat {
+		t.Errorf("err = %v, want ErrUnknownFormat", err)
+	}
+}
+
+func TestResolve_NoDigest(t *testing.T) {
+	// A CycloneDX document with no digest anywhere must fail closed.
+	doc := `{"bomFormat":"CycloneDX","specVersion":"1.7",` +
+		`"metadata":{"component":{"name":"nginx","type":"container"}}}`
+	if _, err := Resolve([]byte(doc)); err != ErrNoDigest {
+		t.Errorf("err = %v, want ErrNoDigest", err)
+	}
+}

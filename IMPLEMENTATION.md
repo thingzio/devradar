@@ -15,7 +15,7 @@ The system's runtime pieces, all Cloud Run, no VMs, no queue, no registry access
 3. **Alerting** — triggered by new critical/high `added` events; emails the submitting tenant, optionally with a Claude-generated narrative.
 4. **Store** — shared Cloud SQL PostgreSQL (`thingz` database, `devradar_`-prefixed tables).
 
-The scanner design (a `Scanner` interface to run the tool, a `Converter` interface to normalize its JSON, both behind a registry) is adapted from [vimp](https://github.com/mchmarny/vimp). DevRadar changes the scanner *input* from an image reference to an SBOM file and adds the time-series event model.
+The scanner design (a `Scanner` interface to run the tool, a `Converter` interface to normalize its JSON, both behind a registry) is **informed by the patterns proven in** [vimp](https://github.com/mchmarny/vimp) — but reimplemented natively in this module. **DevRadar takes lessons from vimp, not code: there is no build or module dependency on vimp.** DevRadar changes the scanner *input* from an image reference to an SBOM file and adds the time-series event model.
 
 ---
 
@@ -29,7 +29,7 @@ The scanner design (a `Scanner` interface to run the tool, a `Converter` interfa
 
 **Normalize across scanners.** No single scanner's output shape defines the data. Both Grype and Trivy run from day one, normalized into one `Vulnerability` type. New scanners register as converters.
 
-**Pin everything.** Scanner and tool versions are pinned in `.settings.yaml` (the platform-wide single source of truth, consumed by Make + CI), baked into the job image, and recorded per scan run. Reproducibility is the product; the pinned version is a first-class, auditable fact.
+**Pin everything, record every version axis.** A finding set is determined by four inputs — the SBOM inventory, the vuln DB, the scanner binary, and the canonicalizer — that change on different clocks. Scanner and tool versions are pinned in `.settings.yaml` (the platform-wide single source of truth), baked into the job image, and **all four axes are recorded per scan run**. This is what lets every change be attributed to exactly one cause (image / db / tooling) and every result be reproduced exactly. Reproducibility is the product; the pinned, recorded version is a first-class, auditable fact.
 
 ---
 
@@ -56,8 +56,51 @@ So accuracy reduces to a single question: does the SBOM's catalog equal what the
 **Design consequences (implemented):**
 
 1. **Recommend Syft-generated CycloneDX, all layers.** Document that faithfulness is highest when the SBOM comes from the scanner's own cataloger family with deep binary classification on. Grype-on-Syft is the zero-gap path.
-2. **Run Trivy as a deliberate cross-check.** Divergence between Grype and Trivy on the same SBOM surfaces cataloger disagreement — signal, not noise. The `finding_events`/`findings` model already keys by scanner, so per-scanner differences are first-class.
-3. **Record generator provenance at ingest.** `sboms.tool` / `sboms.tool_version` (from CycloneDX `metadata.tools` or SPDX `creationInfo.creators`) make the cataloging boundary auditable — "this finding set reflects Syft 1.x cataloging" — and let a future check flag SBOMs from generators known to under-catalog. Best-effort: captured when present, never required.
+2. **Run Trivy as a deliberate cross-check.** Divergence between Grype and Trivy on the same SBOM surfaces cataloger disagreement — signal, not noise. The `devradar_finding_event`/`devradar_finding` model already keys by scanner, so per-scanner differences are first-class.
+3. **Record generator provenance at ingest.** `devradar_sbom.tool` / `devradar_sbom.tool_version` (from CycloneDX `metadata.tools` or SPDX `creationInfo.creators`) make the cataloging boundary auditable — "this finding set reflects Syft 1.x cataloging" — and let a future check flag SBOMs from generators known to under-catalog. Best-effort: captured when present, never required.
+
+---
+
+## SBOM Ingestion Spike (findings)
+
+Before building, a spike validated the two premises the pipeline rests on, using 12 real SBOMs — `{nginx, redis, prometheus} × {syft, trivy} × {CycloneDX, SPDX}` (retained as `pkg/sbom/testdata` fixtures). Results:
+
+**1. Digest, timestamp, and generator extract reliably from all four format×tool combinations (12/12).** The paths differ per combination (tabulated in [Subject digest extraction](#subject-digest-extraction-spike-validated)) but are deterministic. **Consequence:** submission needs only the SBOM bytes — no required image URI. `pkg/sbom.Resolve` implements this with a fixture table test.
+
+**2. Scanning is NOT format-neutral — and this is the load-bearing finding.** Grype reads everything. But **Trivy returns zero findings on Syft-generated SPDX**:
+
+| Scanner ← SBOM | nginx findings |
+|---|---|
+| Grype ← Syft CDX / Syft SPDX | 369 / 369 |
+| Trivy ← Syft **CDX** | 60 |
+| Trivy ← Syft **SPDX** | **0** ← broken |
+| Trivy ← Trivy's own SPDX | 374 |
+
+Root cause: Trivy can't find OS/distro metadata in Syft's SPDX (`WARN Unsupported os family="none"`) and drops all OS packages. It is **not** a DevRadar bug and not fixable in our code.
+
+**3. Converting SPDX → CycloneDX fully recovers it.** `syft convert spdx→cyclonedx` preserves the OS metadata (`debian 13`), all 3378 components, and the exact digest — and Trivy then finds the same 60 it finds on native CDX. This is the basis for canonicalizing on ingest-side storage but converting in the scan job (below).
+
+---
+
+## Canonicalize to CycloneDX
+
+Because scanning is not format-neutral, every SBOM is converted to **CycloneDX** before it reaches the scanners, giving even coverage across scanners regardless of the submitted format. Design decisions, all driven by the spike:
+
+- **Accept both formats at the API**; never reject SPDX. SPDX is the more common compliance format — rejecting it would undercut "you give us the SBOM you already generate." Restriction also wouldn't fully solve it (Trivy-native SPDX scans fine), so a blanket ban would over-reject.
+- **Convert in the scan job, not at ingest.** Ingest stays thin and only *extracts* (digest/timestamp, proven to work on raw SPDX with no conversion). Conversion — potentially slow, and via a tool Syft flags experimental — runs in the retriable batch, where a failure is a recorded `devradar_scan_failure`, never a rejected submission.
+- **Store original bytes + canonical form.** The tenant's original artifact is what's content-addressed and audited (`devradar_sbom.id = sha256(raw)`); the canonical CDX is a derived scanning input.
+- **Record the converter version** (`Canonicalizer.Version()`) alongside `db_version` on each scan, for the same reproducibility reason.
+- **Backend is a seam, not yet chosen.** `pkg/sbom.Canonicalizer` is an interface. Candidates: shell out to `syft convert` (spike-proven, but experimental) or the CycloneDX/SPDX Go libraries in-process (needs its own fidelity check). A `passthrough` implementation (CycloneDX-only) ships first so the pipeline runs end-to-end on CDX before the SPDX backend lands.
+
+```go
+// pkg/sbom/canonicalize.go
+type Canonicalizer interface {
+	// Canonicalize returns CycloneDX JSON for raw SBOM of the stated format
+	// (pass-through when already CycloneDX). Runs in the scan job.
+	Canonicalize(ctx context.Context, raw []byte, format Format) (cyclonedx []byte, err error)
+	Version() string // converter identity, recorded per scan for reproducibility
+}
+```
 
 ---
 
@@ -86,6 +129,12 @@ import "context"
 type Scanner interface {
 	// Name is the scanner identifier, e.g. "grype", "trivy".
 	Name() string
+
+	// Version is the scanner binary version (the matcher logic), recorded per
+	// scan run so a change in findings can be attributed to a scanner upgrade
+	// rather than the image or the vuln DB. Resolved from the binary, e.g.
+	// `grype version -o json`.
+	Version() string
 
 	// IsAvailable reports whether the scanner can run in this environment.
 	IsAvailable() bool
@@ -187,7 +236,7 @@ func (t *trivyScanner) ScanSBOM(ctx context.Context, sbomPath, outPath string) e
 }
 ```
 
-`runCmd` (adapted from vimp) runs the command under the context, kills the process on cancellation, and validates that the output file exists and contains parseable JSON before returning success — so a scanner that dies on a malformed SBOM surfaces as a clean per-SBOM error rather than corrupt data.
+`runCmd` (following vimp's approach, reimplemented here) runs the command under the context, kills the process on cancellation, and validates that the output file exists and contains parseable JSON before returning success — so a scanner that dies on a malformed SBOM surfaces as a clean per-SBOM error rather than corrupt data.
 
 ```go
 // pkg/scanner/exec.go
@@ -247,9 +296,9 @@ func validateJSON(path string) error {
 
 ---
 
-## Normalized Data Model (from vimp)
+## Normalized Data Model
 
-DevRadar normalizes every scanner into one deliberately minimal, scanner-agnostic type. This is vimp's `data.Vulnerability`, kept as the lowest common denominator so no scanner's idiosyncrasies leak into the schema.
+DevRadar normalizes every scanner into one deliberately minimal, scanner-agnostic type — the lowest common denominator, so no scanner's idiosyncrasies leak into the schema. The shape follows the lesson from vimp's `data.Vulnerability` (reimplemented here, not imported):
 
 ```go
 // pkg/data/vuln.go
@@ -280,7 +329,7 @@ func (v *Vulnerability) GetID() string {
 
 ### Converters
 
-The `Converter` interface and its registry are adopted from vimp verbatim (auto-detection via `CanHandle`, lookup by name). Both converters parse with `gabs` rather than typed structs, which is what lets the score logic walk a **source-precedence list** instead of hardcoding one CVSS provider — the fix for the common "Trivy reports vendor CVSS, not NVD, so score is silently 0" bug.
+The `Converter` interface and its registry follow vimp's structure (auto-detection via `CanHandle`, lookup by name), reimplemented in this module. Both converters parse with `gabs` rather than typed structs, which is what lets the score logic walk a **source-precedence list** instead of hardcoding one CVSS provider — the fix for the common "Trivy reports vendor CVSS, not NVD, so score is silently 0" bug.
 
 ```go
 // pkg/converter/converter.go
@@ -300,7 +349,7 @@ type Converter interface {
 }
 ```
 
-Grype and Trivy converters carry over directly from vimp (`internal/converter/grype`, `internal/converter/trivy`). Key detail preserved from vimp's Trivy converter — resolve CVSS across sources in priority order, taking V3 over V2:
+The Grype and Trivy converters (`pkg/converter/grype`, `pkg/converter/trivy`) reimplement vimp's, preserving one key detail from vimp's Trivy converter — resolve CVSS across sources in priority order, taking V3 over V2:
 
 ```go
 // getScore walks CVSS sources in precedence order (e.g. "nvd", "redhat"),
@@ -327,13 +376,26 @@ func getScore(cvss *gabs.Container, sources ...string) float32 {
 
 ## Ingest API (Cloud Run service)
 
-Accepts an authenticated SBOM submission, treats the body as untrusted, extracts the subject digest, content-addresses the bytes, and stores. Idempotent by construction: the same SBOM bytes produce the same `sha256`, so resubmission dedupes.
+Accepts an authenticated SBOM submission, treats the body as untrusted, extracts the subject digest, content-addresses the bytes, and stores. Idempotent by construction: the same SBOM bytes produce the same `sha256`, so resubmission dedupes. Ingest is deliberately **thin** — it does **not** scan and does **not** convert formats; all heavy/fallible work is deferred to the scan job (see [Ingest vs. scan-job split](#ingest-vs-scan-job-split)).
 
-### Endpoints
+### Request contract
+
+The SBOM is self-contained — the spike ([SBOM Ingestion Spike](#sbom-ingestion-spike-findings)) confirmed that digest, generation timestamp, and generator tool/version all extract reliably from CycloneDX **and** SPDX as produced by both Syft and Trivy. So submission requires only the artifact; everything else is an optional override for when the SBOM's self-reporting is weak.
+
+`POST /v1/sboms`, `Authorization: Bearer dr_...`, JSON body:
+
+| Field | Req? | Purpose |
+|---|---|---|
+| `sbom` | **yes** | Base64-encoded SBOM bytes (CycloneDX or SPDX; gzip allowed within the size cap). |
+| `image_ref` | no | Override the image reference. The SBOM's digest is always trusted; this only *labels* it — Syft SPDX reports just `nginx`, Trivy embeds the full registry path, and a tenant may want their canonical name (`registry.internal/team/api:1.4.2`). |
+| `format_hint` | no | `cyclonedx`\|`spdx`. Auto-detection is reliable; this is only a fast-fail assist. |
+| `generated_at` | no | Override the SBOM's timestamp, for the rare generator that omits it. |
+| `labels` | no | Free-form tenant tags (`env=prod`) for the tenant's own filtering. |
+
+Read endpoints (session or token auth):
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/v1/sboms` | Submit an SBOM. Returns the SBOM id (content hash) and its resolved image ref + digest. |
 | `GET`  | `/v1/images` | List the tenant's tracked images (latest state per digest). |
 | `GET`  | `/v1/images/{ref}/timeline` | Event history for an image ref across digests. |
 | `GET`  | `/v1/sboms/{id}/findings` | Current findings for one SBOM. |
@@ -345,37 +407,41 @@ The SBOM is attacker-controllable. The handler enforces, before any parsing:
 
 - **Size cap** on the request body (e.g. 20 MB) via `http.MaxBytesReader`.
 - **Decompression cap** if the body is gzipped — bounded reader on the decompressed stream to prevent decompression bombs.
-- **Format + schema validation** — must be recognizable CycloneDX or SPDX at a supported version (latest minus 1–2 minor); reject otherwise.
-- **Subject resolution** — the image ref + digest must be extractable (below); reject if not. DevRadar refuses to store an SBOM it can't pin to a digest.
+- **Format detection** — must be recognizable CycloneDX or SPDX; reject otherwise (`ErrUnknownFormat`).
+- **Subject resolution** — the digest must be extractable from the SBOM *or* supplied via `image_ref`; fail closed otherwise (`ErrNoDigest`). DevRadar refuses to store an SBOM it can't pin to a digest.
 
-### Subject digest extraction
+### Subject digest extraction (spike-validated)
 
-The image ref and digest live in different places across formats and generators; this is the fiddliest part of ingest and gets its own normalization step.
+The digest, timestamp, and generator live in different places across formats and generators — the fiddliest part of ingest, so it gets its own package (`pkg/sbom`) and a fixture-based table test over 12 real SBOMs. The empirically-confirmed extraction paths:
 
-- **CycloneDX** — `metadata.component` of type `container`; digest from its `hashes` (SHA-256) or a `purl`/property carrying `@sha256:...`.
-- **SPDX** — the root `DESCRIBES` package; digest from `checksums` (SHA256) or `externalRefs` (PURL).
+| Format + tool | Digest path | Timestamp path |
+|---|---|---|
+| CycloneDX + Syft | `metadata.component.version` | `metadata.timestamp` |
+| CycloneDX + Trivy | property `aquasecurity:trivy:RepoDigest` (strip `repo@`) | `metadata.timestamp` |
+| SPDX + Syft | package `SPDXID ~ DocumentRoot-Image` → `.versionInfo` | `creationInfo.created` |
+| SPDX + Trivy | document `.name` (`repo@digest`) | `creationInfo.created` |
 
-If no digest can be resolved, ingest fails closed — an SBOM without a pinned subject can't participate in digest-boundary delta causality, which is the whole point.
+Rather than branch on the generator, `Resolve` tries the known locations for the detected format in priority order and takes the first `sha256:` digest. Generator tool/version come from `metadata.tools` (CycloneDX) / `creationInfo.creators` (SPDX). All of this is best-effort *except* the digest, whose absence is `ErrNoDigest`.
 
 ```go
-// pkg/sbom/subject.go
+// pkg/sbom/sbom.go
 package sbom
 
-// Subject is the image an SBOM describes, plus the generator that produced it.
+// Subject is what an SBOM describes plus the provenance needed to reason about
+// its freshness. All fields except Digest are best-effort.
 type Subject struct {
-	ImageRef string // e.g. registry.example.com/team/api:1.4.2  (may be private)
-	Digest   string // sha256:...
-	Format   string // cyclonedx | spdx
-	SpecVer  string // e.g. 1.6
-	Tool     string // generator name from metadata (e.g. "syft"); bounds cataloging freshness
-	ToolVer  string // generator version
+	ImageRef    string    // may be weak/absent; caller override wins
+	Digest      string    // sha256:...  (required; absence is ErrNoDigest)
+	Format      Format    // cyclonedx | spdx
+	SpecVersion string    // e.g. "1.7" | "SPDX-2.3"
+	Tool        string    // generator, e.g. "syft" | "trivy"
+	ToolVersion string    // bounds cataloging freshness
+	GeneratedAt time.Time // zero → caller falls back to ingest-receive time
 }
 
-// Resolve extracts the subject from raw SBOM bytes, trying CycloneDX then SPDX.
-// Returns an error if no image digest can be determined. Generator tool/version
-// are best-effort (CycloneDX metadata.tools, SPDX creationInfo.creators) —
-// recorded for auditability of the cataloging boundary, never required.
-func Resolve(raw []byte) (*Subject, error) { /* format detect → digest + generator extract */ }
+// Resolve detects the format and extracts the Subject from raw bytes. It never
+// converts; it reads what the document states. (pkg/sbom/extract.go)
+func Resolve(raw []byte) (*Subject, error)
 ```
 
 ### Handler sketch
@@ -410,8 +476,8 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.UpsertSBOM(ctx, &store.SBOM{
 		ID: id, TenantID: tenant.ID,
 		ImageRef: subj.ImageRef, Digest: subj.Digest,
-		Format: subj.Format, SpecVersion: subj.SpecVer,
-		Tool: subj.Tool, ToolVersion: subj.ToolVer, // cataloging-freshness provenance
+		Format: string(subj.Format), SpecVersion: subj.SpecVersion,
+		Tool: subj.Tool, ToolVersion: subj.ToolVersion, // cataloging-freshness provenance
 		VerificationStatus: "unverified",
 		Status:             "active",
 	}); err != nil {
@@ -429,13 +495,14 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 
 ## Daily Scan Job (Cloud Run Job)
 
-Runs once daily. For each active SBOM, runs every available scanner, normalizes, and writes current state + change events in one transaction per (sbom, scanner). Pure CPU — the only external I/O is reading the SBOM from GCS and writing to Postgres.
+Runs once daily. For each active SBOM: **canonicalize to CycloneDX**, run every available scanner on the canonical form, normalize, and write current state + change events in one transaction per (sbom, scanner). Pure CPU — the only external I/O is reading the SBOM from GCS and writing to Postgres.
+
+Canonicalization is the fix the spike surfaced ([Canonicalize to CycloneDX](#canonicalize-to-cyclonedx)): scanning is **not** format-neutral, so every SBOM is converted to CycloneDX here — in the job, never at ingest — before it reaches the scanners.
 
 ```go
-// cmd/scan-job/main.go  (sketch)
-func run(ctx context.Context, st *store.Store, gcs *gcsClient) error {
-	scanners := scanner.DefaultRegistry().Available()
-	convs := converter.DefaultRegistry()
+// cmd/devradar-scan/main.go  (sketch)
+func run(ctx context.Context, st *store.Store, gcs *gcsClient,
+	canon sbom.Canonicalizer, scanners []scanner.Scanner, convs *converter.Registry) error {
 
 	sboms, err := st.ListActiveSBOMs(ctx) // streamed / paged in practice
 	if err != nil {
@@ -443,11 +510,20 @@ func run(ctx context.Context, st *store.Store, gcs *gcsClient) error {
 	}
 
 	for _, sb := range sboms {
-		local, err := gcs.Download(ctx, sb.ObjectPath) // to a temp file
+		raw, err := gcs.Download(ctx, sb.ObjectPath)
 		if err != nil {
 			st.RecordScanFailure(ctx, sb.ID, "", "download", err) // failure surface, not swallowed
 			continue
 		}
+
+		// Canonicalize SPDX → CycloneDX (pass-through if already CDX). A convert
+		// failure is a per-SBOM failure, never a lost SBOM.
+		cdx, err := canon.Canonicalize(ctx, raw, sbom.Format(sb.Format))
+		if err != nil {
+			st.RecordScanFailure(ctx, sb.ID, "", "canonicalize", err)
+			continue
+		}
+		local := writeTemp(cdx)
 
 		for _, sc := range scanners {
 			outPath := tempOut(sb.ID, sc.Name())
@@ -471,8 +547,24 @@ func run(ctx context.Context, st *store.Store, gcs *gcsClient) error {
 				continue
 			}
 
+			// Tripwire: a scanner returning zero findings on a non-trivial SBOM
+			// signals a conversion/compat regression (e.g. the Trivy↔Syft-SPDX
+			// gap), not a clean image. Record it; don't write a misleading empty
+			// scan that would fire "all resolved" events.
+			if len(vulns) == 0 && sb.PackageCount > zeroFindingFloor {
+				st.RecordScanFailure(ctx, sb.ID, sc.Name(), "zero-findings", errZeroOnNonEmpty)
+				continue
+			}
+
 			// One transaction: summary row + current-state upsert + change events.
-			if err := st.ApplyScan(ctx, sb, sc.Name(), scannerDBVersion(sc), vulns); err != nil {
+			// All four version axes travel with the scan so the delta engine can
+			// classify each event's cause (image | db | tooling).
+			ver := scan.Versions{
+				DBVersion:            scannerDBVersion(sc),
+				ScannerVersion:       sc.Version(),
+				CanonicalizerVersion: canon.Version(),
+			}
+			if err := st.ApplyScan(ctx, sb, sc.Name(), ver, vulns); err != nil {
 				st.RecordScanFailure(ctx, sb.ID, sc.Name(), "persist", err)
 			}
 		}
@@ -485,23 +577,44 @@ func run(ctx context.Context, st *store.Store, gcs *gcsClient) error {
 
 This is where current state and the event log are written. The logic, per `(sbom, scanner)`:
 
-1. Load the previous current-state set for this `(sbom_id, scanner)`.
+1. Load the previous current-state set for this `(sbom_id, scanner)`, and the previous `scan_run`'s version axes.
 2. Compute the incoming set from `vulns`, keyed by `GetID()`.
-3. **Added** — in incoming, not in previous → insert into `findings`, append `finding_events(type='added')`.
-4. **Resolved** — in previous, not in incoming → delete from `findings`, append `finding_events(type='resolved')`.
-5. **Changed** — in both but severity/score/fixed differs → update `findings`, append `finding_events(type='rerated' | 'fixed')`.
-6. **Unchanged** — in both, identical → **no write**. This is the common case and the reason the event log stays small.
-7. Always insert one `scan_runs` summary row (counts + `db_version`), so every scan is provable even on a zero-event day.
+3. **Classify the cause** for this run's deltas by comparing what changed since the prior run (see below).
+4. **Added** — in incoming, not in previous → insert into `devradar_finding`, append `devradar_finding_event(type='added', cause=…)`.
+5. **Resolved** — in previous, not in incoming → delete from `devradar_finding`, append `devradar_finding_event(type='resolved', cause=…)`.
+6. **Changed** — in both but severity/score/fixed differs → update `devradar_finding`, append `devradar_finding_event(type='rerated' | 'fixed', cause=…)`.
+7. **Unchanged** — in both, identical → **no write**. This is the common case and the reason the event log stays small.
+8. Always insert one `devradar_scan_run` summary row (counts + all three version axes), so every scan is provable even on a zero-event day.
 
-Because the incoming set is derived from a frozen SBOM, an `added` event on an unchanged digest is definitionally DB-driven; the event stores the `db_version` that produced it, making the cause auditable.
+#### Cause classification — the four version axes
 
-Idempotency: the whole method is safe to re-run (Cloud Run Job retries). Re-running the same (sbom, scanner, db_version) recomputes the identical incoming set → produces zero new events. Current-state writes are UPSERTs; event inserts are guarded by a natural key (below).
+A finding set is fully determined by four inputs, which change on different clocks. Every event records **which one changed** so the change is attributable — and so alerting can ignore changes the tenant didn't cause:
+
+| Axis | Source | Changes when | `cause` when it's what moved |
+|---|---|---|---|
+| SBOM inventory | `devradar_sbom.id` / `digest` | new image digest | `image` |
+| Vulnerability DB | `db_version` | ~daily | `db` |
+| Scanner binary (matcher logic) | `scanner_version` | our upgrade | `tooling` |
+| Canonicalizer | `canonicalizer_version` | our upgrade | `tooling` |
+
+The rule, in priority order, for a given `(sbom, scanner)` versus its prior run:
+- The SBOM is immutable and keyed per digest, so a *new* SBOM is a different `sbom_id` — deltas on a new digest are **`image`**.
+- Same `sbom_id`, changed `db_version` → **`db`** (a real new disclosure or re-rating; the image is frozen).
+- Same `sbom_id`, same `db_version`, changed `scanner_version` or `canonicalizer_version` → **`tooling`** (our matcher/converter changed the answer, not the world).
+
+This matters because a scanner upgrade can add or drop findings on an identical SBOM + identical DB — grype/trivy matching logic evolves independently of the DB. Without this, upgrading grype would emit a wave of `added` events and **page every tenant** for a change that is neither their image nor the CVE data. `tooling`-caused events are still recorded (full audit trail, reproducibility preserved) but are excluded from alerting by the `cause IN ('image','db')` filter. Expect a one-time, non-alerting wave of `tooling` deltas across the corpus on each deliberate scanner upgrade — explainable precisely because it's tagged.
+
+Because the SBOM is frozen, this classification is unambiguous: only one axis can be "the newest thing that changed" for any given run.
+
+Idempotency: the whole method is safe to re-run (Cloud Run Job retries). Re-running the same `(sbom, scanner, db_version, scanner_version)` recomputes the identical incoming set → produces zero new events. Current-state writes are UPSERTs; event inserts are guarded by a natural key (the `UNIQUE` above).
+
+Reproducibility: `(sbom.id, db_version, scanner_version, canonicalizer_version)` fully determines a finding set — "show me this image as of DB X, grype Y" is answerable forever from `devradar_scan_run`.
 
 ---
 
 ## PostgreSQL Schema
 
-DevRadar shares one Postgres database (`thingz` on `thingzio-pg`) with DevPulse and DevTrace. Isolation follows the platform contract: **every table is prefixed `devradar_`**, and DevRadar connects as its own DB user (`devradar`). See [Shared-Infrastructure Contract](#shared-infrastructure-contract) for the instance-level detail.
+DevRadar shares one Postgres database (`thingz` on `thingzio-pg`) with DevPulse and DevTrace. Isolation follows the platform contract, and this is a **hard invariant**: **every DB object DevRadar creates — tables, indexes, sequences, views, materialized views, functions, types — is prefixed `devradar_`** (indexes as `idx_devradar_*`), so nothing can collide with `devpulse_*` or `devtrace_*` in the shared database. DevRadar also connects as its own DB user (`devradar`). See [Shared-Infrastructure Contract](#shared-infrastructure-contract) for the instance-level detail.
 
 **Tenant isolation is application-level** (`WHERE tenant_id = $1` on every tenant-scoped query), mirroring DevTrace — *not* DevPulse's Row-Level Security. This is a deliberate choice: DevRadar's scan job is inherently **cross-tenant** (it iterates every active SBOM), so a per-request `app.tenant_id` GUC would fight the batch writer. App-level scoping works naturally with a pooled connection and a job that reads across all tenants, at the cost of relying on every *read* query carrying the predicate — see [Tenant Isolation](#tenant-isolation) for the reasoning and the guardrails. `devradar_finding_event` is partitioned monthly from day one.
 
@@ -566,18 +679,24 @@ CREATE INDEX idx_devradar_sbom_active ON devradar_sbom(status) WHERE status = 'a
 CREATE INDEX idx_devradar_sbom_image_ref ON devradar_sbom(tenant_id, image_ref);
 
 -- One row per SBOM per scanner per run. Proof-of-scan + DB-version attribution.
+-- One row per SBOM per scanner per run. Records ALL FOUR version axes that
+-- determine a finding set, so every result is fully reproducible and every
+-- change is attributable to exactly one cause (see ApplyScan).
 CREATE TABLE devradar_scan_run (
-    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    sbom_id      TEXT NOT NULL REFERENCES devradar_sbom(id) ON DELETE CASCADE,
-    scanner      TEXT NOT NULL,                        -- grype | trivy
-    db_version   TEXT NOT NULL,                        -- pinned scanner DB version
-    scanned_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    sbom_id              TEXT NOT NULL REFERENCES devradar_sbom(id) ON DELETE CASCADE,
+    scanner              TEXT NOT NULL,                 -- grype | trivy
+    db_version           TEXT NOT NULL,                 -- vuln DB snapshot (changes ~daily)
+    scanner_version      TEXT NOT NULL,                 -- scanner binary — the MATCHER logic (changes on upgrade)
+    canonicalizer_version TEXT NOT NULL,                -- SPDX->CDX converter identity
+    scanned_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
     finding_count  INT NOT NULL,
     critical_count INT NOT NULL,
     high_count     INT NOT NULL,
     medium_count   INT NOT NULL,
     low_count      INT NOT NULL,
-    UNIQUE (sbom_id, scanner, db_version, scanned_at)
+    -- (sbom_id, digest via sbom) + these three versions fully determine the result.
+    UNIQUE (sbom_id, scanner, db_version, scanner_version, scanned_at)
 );
 
 -- CURRENT state: one row per unique finding per (sbom, scanner). UPSERT target.
@@ -614,18 +733,22 @@ CREATE TABLE devradar_finding_event (
     score        REAL NOT NULL,
     prev_severity TEXT,                                -- for rerated
     prev_score    REAL,
-    db_version   TEXT NOT NULL,                        -- scanner DB that produced the change
+    cause        TEXT NOT NULL,                         -- image | db | tooling  (what changed to cause this)
+    db_version   TEXT NOT NULL,                         -- vuln DB that produced the change
+    scanner_version TEXT NOT NULL,                      -- scanner binary that produced the change
     scan_run_id  UUID NOT NULL,
     occurred_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    -- Idempotency: a given change is recorded once per DB version.
-    UNIQUE (sbom_id, scanner, finding_id, event_type, db_version, occurred_at)
+    -- Idempotency: a given change is recorded once per (db, scanner) version pair.
+    UNIQUE (sbom_id, scanner, finding_id, event_type, db_version, scanner_version, occurred_at)
 ) PARTITION BY RANGE (occurred_at);
 
 -- Monthly partitions (create ahead via pg_partman or a scheduled job).
 CREATE TABLE devradar_finding_event_2026_07 PARTITION OF devradar_finding_event
     FOR VALUES FROM ('2026-07-01') TO ('2026-08-01');
 CREATE INDEX idx_devradar_fe_tenant_time ON devradar_finding_event(tenant_id, occurred_at DESC);
-CREATE INDEX idx_devradar_fe_alerting ON devradar_finding_event(tenant_id, event_type, severity, occurred_at DESC);
+-- Alerting reads only tenant-facing causes (image|db), never tooling-driven noise.
+CREATE INDEX idx_devradar_fe_alerting ON devradar_finding_event(tenant_id, event_type, severity, occurred_at DESC)
+    WHERE cause IN ('image','db');
 
 -- Failure surface: per-SBOM/per-scanner errors, not swallowed. Drives ops alerting.
 CREATE TABLE devradar_scan_failure (
@@ -659,12 +782,15 @@ Triggered by the scan job (or a short poll over recent events). When an `added` 
 
 ```sql
 -- New actionable events since the last alert watermark for a tenant.
-SELECT e.exposure, e.package, e.severity, e.score, s.image_ref, e.occurred_at
+-- cause IN ('image','db') excludes tooling-driven deltas — a grype/trivy upgrade
+-- must never page a tenant for a change that isn't in their image or the CVE data.
+SELECT e.exposure, e.package, e.severity, e.score, s.image_ref, e.cause, e.occurred_at
 FROM devradar_finding_event e
 JOIN devradar_sbom s ON s.id = e.sbom_id
 WHERE e.tenant_id = $1
   AND e.event_type = 'added'
   AND e.severity IN ('critical','high')
+  AND e.cause IN ('image','db')     -- never alert on tooling-driven changes
   AND e.occurred_at > $2            -- last alert watermark
 ORDER BY e.occurred_at;
 ```
@@ -828,11 +954,11 @@ pkg/
   tenant/                          # tenant, session, api-token models (mirror devtrace/pkg/tenant)
   sbom/                            # format detect + subject/digest/generator extraction
   scanner/                         # Scanner interface, exec backends (grype, trivy), registry
-  converter/                       # Converter interface + grype/trivy normalizers (from vimp)
-  parser/                          # gabs helpers (from vimp)
+  converter/                       # Converter interface + grype/trivy normalizers (vimp pattern, native impl)
+  parser/                          # gabs helpers (vimp pattern, native impl)
   claude/          client.go       # nil-safe Anthropic Messages client (delta narratives)
   data/
-    vuln.go                        # normalized Vulnerability (from vimp)
+    vuln.go                        # normalized Vulnerability (vimp pattern, native impl)
     postgres/                      # Store, PoolConfig, advisory-lock migrate, per-domain query files
       sql/migrations/*.sql         # NNN_name.sql; 001 squashed idempotent schema (devradar_ tables)
   logging/         cli.go          # slog JSON to stderr, version/source tagged
@@ -842,4 +968,8 @@ infra/saas/                        # Terraform: references shared thingzio-pg + 
 .goreleaser.yaml  Makefile         # ko build + self-documenting targets
 ```
 
-Reuse surface from **vimp**: `scanner`, `converter`, `parser`, `data/vuln.go`. Reuse surface from **devtrace/devpulse**: `config`, `data/postgres` (Store + migrate runner), `tenant`, `middleware`, `server` scaffolding, `logging`, `claude`, Makefile/CI/Terraform skeleton. DevRadar-specific: `sbom` (subject extraction), the event-model store queries, and the SBOM-scanning scan job.
+**Pattern sources (lessons, not dependencies — DevRadar imports neither project):**
+- From **vimp**: the shape of `scanner`, `converter`, `parser`, and `data/vuln.go` (multi-scanner registry + normalized finding). Reimplemented natively; no `github.com/mchmarny/vimp` import.
+- From **devtrace/devpulse**: the shape of `config`, `data/postgres` (Store + migrate runner), `tenant`, `middleware`, `server`, `logging`, `claude`, and the Makefile/CI/Terraform skeleton. Copied/adapted into this module, not imported.
+
+DevRadar-specific and original: `sbom` (subject extraction + canonicalization), the event-model store queries, and the SBOM-scanning scan job.

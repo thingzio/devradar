@@ -1,0 +1,207 @@
+package sbom
+
+import (
+	"strings"
+	"time"
+
+	"github.com/Jeffail/gabs/v2"
+)
+
+// Resolve detects the format of the raw SBOM bytes and extracts the Subject.
+// It never converts; it reads what the document states. Returns ErrUnknownFormat
+// if the bytes are neither CycloneDX nor SPDX, or ErrNoDigest if no image digest
+// can be resolved.
+//
+// The per-format extraction paths were established empirically (pkg/sbom/testdata):
+//
+//	CycloneDX + Syft   digest: metadata.component.version
+//	CycloneDX + Trivy  digest: metadata.component.properties[aquasecurity:trivy:RepoDigest]
+//	SPDX + Syft        digest: packages[SPDXID ~ DocumentRoot-Image].versionInfo
+//	SPDX + Trivy       digest: document .name (repo@digest)
+//
+// Rather than branch on the generator, Resolve tries the known locations for the
+// detected format in priority order and takes the first sha256 digest it finds.
+func Resolve(raw []byte) (*Subject, error) {
+	c, err := gabs.ParseJSON(raw)
+	if err != nil {
+		return nil, ErrUnknownFormat
+	}
+
+	switch detect(c) {
+	case FormatCycloneDX:
+		return resolveCycloneDX(c)
+	case FormatSPDX:
+		return resolveSPDX(c)
+	default:
+		return nil, ErrUnknownFormat
+	}
+}
+
+// detect identifies the document format from unambiguous top-level markers.
+func detect(c *gabs.Container) Format {
+	if c.Exists("bomFormat") && str(c, "bomFormat") == "CycloneDX" {
+		return FormatCycloneDX
+	}
+	if c.Exists("spdxVersion") {
+		return FormatSPDX
+	}
+	return ""
+}
+
+// ── CycloneDX ─────────────────────────────────────────────────────────────────
+
+func resolveCycloneDX(c *gabs.Container) (*Subject, error) {
+	s := &Subject{
+		Format:      FormatCycloneDX,
+		SpecVersion: str(c, "specVersion"),
+		GeneratedAt: parseTime(str(c, "metadata", "timestamp")),
+	}
+	s.Tool, s.ToolVersion = cyclonedxTool(c)
+
+	name := str(c, "metadata", "component", "name")
+	version := str(c, "metadata", "component", "version")
+
+	// Syft: metadata.component.version carries the digest; name is the repo.
+	if d := asDigest(version); d != "" {
+		s.Digest = d
+		s.ImageRef = name
+	}
+	// Trivy: name is "repo@sha256:..."; digest also in a RepoDigest property.
+	if s.Digest == "" {
+		if ref, d := splitRefDigest(name); d != "" {
+			s.Digest, s.ImageRef = d, ref
+		}
+	}
+	if s.Digest == "" {
+		if d := cyclonedxProp(c, "aquasecurity:trivy:RepoDigest"); d != "" {
+			ref, dig := splitRefDigest(d)
+			s.Digest = dig
+			if s.ImageRef == "" {
+				s.ImageRef = ref
+			}
+		}
+	}
+	if s.Digest == "" {
+		return nil, ErrNoDigest
+	}
+	return s, nil
+}
+
+func cyclonedxTool(c *gabs.Container) (name, version string) {
+	// CycloneDX 1.5+: metadata.tools.components[]; older: metadata.tools[].
+	for _, t := range c.Search("metadata", "tools", "components").Children() {
+		return str(t, "name"), str(t, "version")
+	}
+	for _, t := range c.Search("metadata", "tools").Children() {
+		return str(t, "name"), str(t, "version")
+	}
+	return "", ""
+}
+
+func cyclonedxProp(c *gabs.Container, name string) string {
+	for _, p := range c.Search("metadata", "component", "properties").Children() {
+		if str(p, "name") == name {
+			return str(p, "value")
+		}
+	}
+	return ""
+}
+
+// ── SPDX ──────────────────────────────────────────────────────────────────────
+
+func resolveSPDX(c *gabs.Container) (*Subject, error) {
+	s := &Subject{
+		Format:      FormatSPDX,
+		SpecVersion: str(c, "spdxVersion"),
+		GeneratedAt: parseTime(str(c, "creationInfo", "created")),
+	}
+	s.Tool, s.ToolVersion = spdxTool(c)
+
+	// Trivy SPDX: document .name is "repo@sha256:...".
+	if ref, d := splitRefDigest(str(c, "name")); d != "" {
+		s.Digest, s.ImageRef = d, ref
+	}
+
+	// Syft SPDX: the root image package (SPDXID ~ DocumentRoot-Image) carries
+	// the manifest digest in versionInfo.
+	if s.Digest == "" {
+		for _, p := range c.Search("packages").Children() {
+			id := str(p, "SPDXID")
+			if !strings.Contains(id, "DocumentRoot-Image") && !strings.Contains(id, "ContainerImage") {
+				continue
+			}
+			if d := asDigest(str(p, "versionInfo")); d != "" {
+				s.Digest = d
+				if s.ImageRef == "" {
+					s.ImageRef = str(p, "name")
+				}
+				break
+			}
+		}
+	}
+	if s.Digest == "" {
+		return nil, ErrNoDigest
+	}
+	return s, nil
+}
+
+func spdxTool(c *gabs.Container) (name, version string) {
+	// creationInfo.creators: ["Tool: syft-1.46.0", "Organization: ..."].
+	for _, cr := range c.Search("creationInfo", "creators").Children() {
+		v := cr.Data().(string)
+		rest, ok := strings.CutPrefix(v, "Tool: ")
+		if !ok {
+			continue
+		}
+		if n, ver, found := strings.Cut(rest, "-"); found {
+			return n, ver
+		}
+		return rest, ""
+	}
+	return "", ""
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+// asDigest returns s if it is a bare "sha256:<hex>" digest, else "".
+func asDigest(s string) string {
+	if strings.HasPrefix(s, "sha256:") && len(s) == len("sha256:")+64 {
+		return s
+	}
+	return ""
+}
+
+// splitRefDigest splits "repo@sha256:..." into (repo, digest). If s has no
+// "@sha256:" it returns ("", "") — a bare repo carries no digest.
+func splitRefDigest(s string) (ref, digest string) {
+	ref, dig, found := strings.Cut(s, "@")
+	if !found {
+		return "", ""
+	}
+	if d := asDigest(dig); d != "" {
+		return ref, d
+	}
+	return "", ""
+}
+
+// str reads a nested string path, returning "" if absent or not a string.
+func str(c *gabs.Container, path ...string) string {
+	v, ok := c.Search(path...).Data().(string)
+	if !ok {
+		return ""
+	}
+	return v
+}
+
+// parseTime parses an RFC3339 timestamp, returning the zero time on failure so
+// callers can fall back to ingest-receive time.
+func parseTime(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
