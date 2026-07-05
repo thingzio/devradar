@@ -42,3 +42,13 @@ output "db_user" {
   description = "DevRadar's DB user in the shared instance"
   value       = google_sql_user.app.name
 }
+
+output "project_id" {
+  description = "GCP project ID"
+  value       = var.project_id
+}
+
+output "region" {
+  description = "GCP region"
+  value       = var.region
+}

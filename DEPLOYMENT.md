@@ -80,18 +80,25 @@ printf '%s' 'YOUR_ANTHROPIC_KEY' | \
 
 ### 3. Configure GitHub Actions (keyless deploy via WIF)
 
-In the `thingzio/devradar` repo, create an **environment named `saas`** and set
-these repository (or environment) **variables** from the Terraform outputs:
+Run the helper — it reads the Terraform outputs and writes the `saas`
+environment variables via the `gh` CLI (creating the environment if needed):
 
-| Variable | Value (source) |
-|---|---|
-| `WIF_PROVIDER` | `terraform output -raw wif_provider` |
-| `DEPLOYER_SA` | `terraform output -raw deployer_sa` |
-| `REGION` | `us-west1` |
-| `PROJECT_ID` | `thingzio` |
+```bash
+gh auth status          # must be authenticated
+tools/setup-gh-env
+```
 
-No JSON key is stored — GitHub Actions authenticates to GCP via Workload Identity
-Federation, scoped to this repo.
+This sets `WIF_PROVIDER`, `DEPLOYER_SA`, `REGION`, `PROJECT_ID` — everything the
+`release`/`deploy` workflows need. No JSON key is stored; GitHub Actions
+authenticates to GCP via Workload Identity Federation, scoped to this repo.
+
+<details><summary>Setting them by hand instead</summary>
+
+Create an **environment named `saas`** and set each variable from the outputs:
+`WIF_PROVIDER` = `terraform output -raw wif_provider`, `DEPLOYER_SA` =
+`terraform output -raw deployer_sa`, `REGION` = `us-west1`, `PROJECT_ID` =
+`thingzio`.
+</details>
 
 ### 4. First release
 
