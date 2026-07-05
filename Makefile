@@ -38,16 +38,29 @@ tidy: ## Formats code, tidies deps, and refreshes the vendor tree
 	go mod tidy
 	go mod vendor
 
+.PHONY: upgrade
+upgrade: ## Upgrades all dependencies to latest and refreshes vendor
+	go get -u ./...
+	go mod tidy
+	go mod vendor
+
 # =============================================================================
 # Quality
 # =============================================================================
 
 .PHONY: lint
-lint: ## Lints Go code (go vet + golangci-lint) — same as CI
+lint: lint-go lint-yaml ## Lints Go + YAML (same as CI)
+
+.PHONY: lint-go
+lint-go: ## Lints Go code (go vet + golangci-lint)
 	go vet ./...
 	@command -v golangci-lint >/dev/null 2>&1 || { \
 		echo "ERROR: golangci-lint not installed (CI pins $(GOLANGCI_VERSION)); install: https://golangci-lint.run"; exit 1; }
 	golangci-lint run --timeout=$(LINT_TIMEOUT)
+
+.PHONY: lint-yaml
+lint-yaml: ## Lints YAML files (yamllint); skipped if yamllint absent
+	@command -v yamllint >/dev/null 2>&1 && yamllint -c .yamllint.yaml . || echo "yamllint not installed; skipping YAML lint"
 
 .PHONY: test
 test: ## Runs unit + integration tests (integration needs 'make db-up')
@@ -176,6 +189,10 @@ tf-validate: ## Validates Terraform without backend/creds
 clean: ## Removes build artifacts and the local blob store
 	rm -rf ./dist ./cover.out $(LOCAL_SBOMS)
 	go clean ./...
+
+.PHONY: clean-all
+clean-all: clean ## Deep clean including the Go module cache
+	go clean -modcache
 
 # =============================================================================
 # Help
