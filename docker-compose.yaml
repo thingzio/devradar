@@ -1,0 +1,19 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: devradar
+      POSTGRES_USER: devradar
+      POSTGRES_PASSWORD: devradar
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "devradar"]
+      interval: 2s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
