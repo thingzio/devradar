@@ -68,7 +68,7 @@ func ListAPITokens(ctx context.Context, db *sql.DB, tenantID string) ([]APIToken
 	if err != nil {
 		return nil, fmt.Errorf("list api tokens: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []APITokenInfo
 	for rows.Next() {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"testing"
 	"time"
 
@@ -162,7 +163,7 @@ func TestImageTimeline_AcrossDigests(t *testing.T) {
 	}
 
 	// Unknown ref → ErrNotFound.
-	if _, err := st.ImageTimeline(ctx, tenantID, "example.com/nope", "medium", 100); err != postgres.ErrNotFound {
+	if _, err := st.ImageTimeline(ctx, tenantID, "example.com/nope", "medium", 100); !errors.Is(err, postgres.ErrNotFound) {
 		t.Errorf("unknown ref: err = %v, want ErrNotFound", err)
 	}
 
@@ -171,7 +172,7 @@ func TestImageTimeline_AcrossDigests(t *testing.T) {
 	_ = st.DB().QueryRowContext(ctx,
 		`INSERT INTO devradar_tenant (email) VALUES ($1) RETURNING id`,
 		"other-"+suffix+"@example.com").Scan(&otherID)
-	if _, err := st.ImageTimeline(ctx, otherID, imageRef, "medium", 100); err != postgres.ErrNotFound {
+	if _, err := st.ImageTimeline(ctx, otherID, imageRef, "medium", 100); !errors.Is(err, postgres.ErrNotFound) {
 		t.Errorf("cross-tenant timeline: err = %v, want ErrNotFound", err)
 	}
 }

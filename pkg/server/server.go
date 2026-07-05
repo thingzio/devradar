@@ -7,6 +7,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -54,13 +55,13 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("store: %w", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	blobs, err := gcs.FromEnv(ctx)
 	if err != nil {
 		return fmt.Errorf("blob store: %w", err)
 	}
-	defer blobs.Close()
+	defer func() { _ = blobs.Close() }()
 
 	// Magic-link email sender. Without SEND_API_KEY the link is logged, not sent.
 	var email drnet.Sender
@@ -139,7 +140,7 @@ func recoverPanics(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				if rec == http.ErrAbortHandler {
+				if err, ok := rec.(error); ok && errors.Is(err, http.ErrAbortHandler) {
 					panic(rec)
 				}
 				slog.Error("handler panic", "panic", rec, "path", r.URL.Path,

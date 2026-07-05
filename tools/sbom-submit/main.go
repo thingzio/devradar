@@ -57,8 +57,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("submit: %v", err)
 	}
-	defer resp.Body.Close()
 	out, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
 	fmt.Printf("HTTP %d: %s\n", resp.StatusCode, out)
 	if resp.StatusCode >= 300 {
 		os.Exit(1)

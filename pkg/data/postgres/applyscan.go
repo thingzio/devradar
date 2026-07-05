@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -134,7 +135,7 @@ func loadCurrentFindings(ctx context.Context, tx *sql.Tx, sbomID, scanner string
 	if err != nil {
 		return nil, fmt.Errorf("load findings: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	out := map[string]data.Vulnerability{}
 	for rows.Next() {
@@ -157,7 +158,7 @@ func loadPrevVersions(ctx context.Context, tx *sql.Tx, sbomID, scanner string) (
 		FROM devradar_scan_run WHERE sbom_id = $1 AND scanner = $2
 		ORDER BY scanned_at DESC LIMIT 1`, sbomID, scanner).
 		Scan(&v.DBVersion, &v.ScannerVersion, &v.CanonicalizerVersion)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return Versions{}, nil
 	}
 	if err != nil {

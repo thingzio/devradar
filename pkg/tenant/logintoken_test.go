@@ -2,6 +2,7 @@ package tenant_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -42,7 +43,7 @@ func TestLoginToken_Lifecycle(t *testing.T) {
 	}
 
 	// Single-use: the same token cannot be consumed twice.
-	if _, err := tenant.ConsumeLoginToken(ctx, db, raw); err != tenant.ErrLoginTokenInvalid {
+	if _, err := tenant.ConsumeLoginToken(ctx, db, raw); !errors.Is(err, tenant.ErrLoginTokenInvalid) {
 		t.Errorf("second consume: err = %v, want ErrLoginTokenInvalid", err)
 	}
 
@@ -67,14 +68,14 @@ func TestLoginToken_Expired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if _, err := tenant.ConsumeLoginToken(ctx, db, raw); err != tenant.ErrLoginTokenInvalid {
+	if _, err := tenant.ConsumeLoginToken(ctx, db, raw); !errors.Is(err, tenant.ErrLoginTokenInvalid) {
 		t.Errorf("expired consume: err = %v, want ErrLoginTokenInvalid", err)
 	}
 }
 
 func TestLoginToken_UnknownRejected(t *testing.T) {
 	st := testDB(t)
-	if _, err := tenant.ConsumeLoginToken(context.Background(), st.DB(), "not-a-real-token"); err != tenant.ErrLoginTokenInvalid {
+	if _, err := tenant.ConsumeLoginToken(context.Background(), st.DB(), "not-a-real-token"); !errors.Is(err, tenant.ErrLoginTokenInvalid) {
 		t.Errorf("unknown token: err = %v, want ErrLoginTokenInvalid", err)
 	}
 }

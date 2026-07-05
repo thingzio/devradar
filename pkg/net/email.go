@@ -64,7 +64,7 @@ func sendEmailTo(ctx context.Context, apiURL, apiKey, from, to, subject, html, t
 	if err != nil {
 		return fmt.Errorf("send email: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusOK {
 		return nil
 	}

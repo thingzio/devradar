@@ -2,6 +2,7 @@ package converter
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -111,7 +112,7 @@ func TestRegistry_Detect(t *testing.T) {
 	}
 
 	unknown, _ := gabs.ParseJSON([]byte(`{"foo":"bar"}`))
-	if _, err := r.Detect(unknown); err != ErrNoConverter {
+	if _, err := r.Detect(unknown); !errors.Is(err, ErrNoConverter) {
 		t.Errorf("detect unknown: want ErrNoConverter, got %v", err)
 	}
 }

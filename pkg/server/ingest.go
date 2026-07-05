@@ -32,7 +32,7 @@ func maybeGunzip(b []byte, limit int) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sbom gzip is invalid")
 	}
-	defer zr.Close()
+	defer func() { _ = zr.Close() }()
 	out, err := io.ReadAll(io.LimitReader(zr, int64(limit)+1))
 	if err != nil {
 		return nil, fmt.Errorf("sbom gzip is corrupt")

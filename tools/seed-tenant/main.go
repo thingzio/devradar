@@ -26,7 +26,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	db := store.DB()
 	tn, err := tenant.UpsertTenantByEmail(ctx, db, "dev@example.com")

@@ -60,12 +60,12 @@ func (c *SyftCanonicalizer) convert(ctx context.Context, raw []byte) ([]byte, er
 	if err != nil {
 		return nil, fmt.Errorf("stage spdx: %w", err)
 	}
-	defer os.Remove(f.Name())
+	defer func() { _ = os.Remove(f.Name()) }()
 	if _, err := f.Write(raw); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("write spdx: %w", err)
 	}
-	f.Close()
+	_ = f.Close()
 
 	var out, errb bytes.Buffer
 	cmd := exec.CommandContext(ctx, "syft", "convert", f.Name(), "-q", "-o", "cyclonedx-json")

@@ -6,6 +6,7 @@ LINT_TIMEOUT       ?= $(shell yq -r '.quality.lint_timeout' .settings.yaml 2>/de
 TEST_TIMEOUT       ?= $(shell yq -r '.quality.test_timeout' .settings.yaml 2>/dev/null || echo "10m")
 BUILD_TIMEOUT      ?= $(shell yq -r '.quality.build_timeout' .settings.yaml 2>/dev/null || echo "10m0s")
 COVERAGE_THRESHOLD ?= $(shell yq -r '.quality.coverage_threshold' .settings.yaml 2>/dev/null || echo "45")
+GOLANGCI_VERSION   ?= $(shell yq -r '.linting.golangci_lint' .settings.yaml 2>/dev/null || echo "v2.12.1")
 
 # Local development connection + shared blob store dir (so serve and scan share
 # one SBOM store without GCS).
@@ -42,9 +43,11 @@ tidy: ## Formats code, tidies deps, and refreshes the vendor tree
 # =============================================================================
 
 .PHONY: lint
-lint: ## Lints Go code (go vet + golangci-lint)
+lint: ## Lints Go code (go vet + golangci-lint) — same as CI
 	go vet ./...
-	@command -v golangci-lint >/dev/null 2>&1 && golangci-lint run --timeout=$(LINT_TIMEOUT) || echo "golangci-lint not installed; ran go vet only"
+	@command -v golangci-lint >/dev/null 2>&1 || { \
+		echo "ERROR: golangci-lint not installed (CI pins $(GOLANGCI_VERSION)); install: https://golangci-lint.run"; exit 1; }
+	golangci-lint run --timeout=$(LINT_TIMEOUT)
 
 .PHONY: test
 test: ## Runs unit + integration tests (integration needs 'make db-up')

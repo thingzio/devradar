@@ -40,8 +40,8 @@ func runCmd(ctx context.Context, cmd *exec.Cmd, outPath string) error {
 	case waitErr := <-done:
 		info, statErr := os.Stat(outPath)
 		if statErr != nil || info.Size() < 2 {
-			return fmt.Errorf("%s produced no output (err=%v, stderr=%s)",
-				cmd.Path, waitErr, truncate(stderr.String(), 500))
+			return fmt.Errorf("%s produced no output (stderr=%s): %w",
+				cmd.Path, truncate(stderr.String(), 500), waitErr)
 		}
 		if err := validateJSON(outPath); err != nil {
 			return fmt.Errorf("%s output is not valid JSON: %w", cmd.Path, err)
@@ -66,7 +66,7 @@ func validateJSON(path string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var raw json.RawMessage
 	return json.NewDecoder(f).Decode(&raw)
 }

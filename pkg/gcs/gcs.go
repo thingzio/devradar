@@ -65,7 +65,7 @@ func (c *Client) Fetch(ctx context.Context, objectPath string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", objectPath, err)
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	b, err := io.ReadAll(r)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", objectPath, err)

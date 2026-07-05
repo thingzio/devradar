@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -59,7 +60,7 @@ func (s *Store) ListImages(ctx context.Context, tenantID, minSeverity string) ([
 	if err != nil {
 		return nil, fmt.Errorf("list images: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []Image
 	for rows.Next() {
@@ -127,7 +128,7 @@ func (s *Store) FindingsBySBOM(ctx context.Context, tenantID, sbomID, minSeverit
 	if err != nil {
 		return nil, fmt.Errorf("findings: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []Finding
 	for rows.Next() {
@@ -170,7 +171,7 @@ func (s *Store) EventsBySBOM(ctx context.Context, tenantID, sbomID, minSeverity 
 	if err != nil {
 		return nil, fmt.Errorf("events: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []Event
 	for rows.Next() {
@@ -228,7 +229,7 @@ func (s *Store) ImageTimeline(ctx context.Context, tenantID, imageRef, minSeveri
 	if err != nil {
 		return nil, fmt.Errorf("image timeline: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []TimelineEvent
 	for rows.Next() {
@@ -281,7 +282,7 @@ func (s *Store) GetSBOM(ctx context.Context, tenantID, sbomID, minSeverity strin
 		&d.SBOMID, &d.ImageRef, &d.Digest, &d.Format, &spec, &tool, &toolVer,
 		&d.Status, &d.SubmittedAt, &gen,
 		&c.Critical, &c.High, &c.Medium, &c.Low, &c.Negligible, &c.Unknown, &c.Total)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {

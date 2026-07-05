@@ -61,7 +61,7 @@ func (s *Store) ListActiveSBOMs(ctx context.Context) ([]*SBOM, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list active sboms: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []*SBOM
 	for rows.Next() {

@@ -72,13 +72,13 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("store: %w", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	blobs, err := gcs.FromEnv(ctx)
 	if err != nil {
 		return fmt.Errorf("blob store: %w", err)
 	}
-	defer blobs.Close()
+	defer func() { _ = blobs.Close() }()
 
 	scanners := scanner.DefaultRegistry().Available()
 	if len(scanners) == 0 {
@@ -214,12 +214,12 @@ func writeTemp(id string, b []byte) (path string, cleanup func(), err error) {
 		return "", func() {}, err
 	}
 	if _, err := f.Write(b); err != nil {
-		f.Close()
-		os.Remove(f.Name())
+		_ = f.Close()
+		_ = os.Remove(f.Name())
 		return "", func() {}, err
 	}
-	f.Close()
-	return f.Name(), func() { os.Remove(f.Name()) }, nil
+	_ = f.Close()
+	return f.Name(), func() { _ = os.Remove(f.Name()) }, nil
 }
 
 // tempOut returns a path for scanner output + a cleanup func.
@@ -229,8 +229,8 @@ func tempOut(id, scanner string) (path string, cleanup func(), err error) {
 		return "", func() {}, err
 	}
 	name := f.Name()
-	f.Close()
-	return name, func() { os.Remove(name) }, nil
+	_ = f.Close()
+	return name, func() { _ = os.Remove(name) }, nil
 }
 
 // safe strips path separators from an id used in a temp filename.

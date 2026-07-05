@@ -1,6 +1,7 @@
 package sbom
 
 import (
+	"errors"
 	"strings"
 	"time"
 
@@ -47,7 +48,7 @@ func ResolveWithRef(raw []byte, imageRef string) (*Subject, error) {
 	if err == nil {
 		return subj, nil
 	}
-	if err != ErrNoDigest || imageRef == "" {
+	if !errors.Is(err, ErrNoDigest) || imageRef == "" {
 		return nil, err
 	}
 	_, digest := splitRefDigest(imageRef)
