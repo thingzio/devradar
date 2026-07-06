@@ -164,8 +164,9 @@ func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fixableOnly := r.URL.Query().Get("fixable") == "true"
+	showSuppressed := r.URL.Query().Get("suppressed") == "true"
 	findings, next, err := s.store.FindingsBySBOM(r.Context(), tn.ID, r.PathValue("id"), min,
-		fixableOnly, r.URL.Query().Get("cursor"), pageLimit(r))
+		fixableOnly, showSuppressed, r.URL.Query().Get("cursor"), pageLimit(r))
 	if err != nil {
 		writeReadErr(w, err, "failed to load findings")
 		return
