@@ -21,7 +21,9 @@ var templateFS embed.FS
 //go:embed static
 var staticFS embed.FS
 
-var templates = template.Must(template.ParseFS(templateFS, "templates/*.html"))
+var templates = template.Must(template.New("").Funcs(template.FuncMap{
+	"list": func(items ...string) []string { return items },
+}).ParseFS(templateFS, "templates/*.html"))
 
 const (
 	sessionTTL    = 7 * 24 * time.Hour
@@ -41,6 +43,7 @@ func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("POST /auth/logout", s.handleLogout)
 
 	authed := middleware.RequireAuth(db, loginPath)
+	mux.Handle("GET /dashboard", authed(http.HandlerFunc(s.handleDashboard)))
 	mux.Handle("GET /tokens", authed(http.HandlerFunc(s.handleTokensPage)))
 	mux.Handle("POST /tokens", authed(http.HandlerFunc(s.handleCreateToken)))
 	mux.Handle("POST /tokens/{id}/revoke", authed(http.HandlerFunc(s.handleRevokeToken)))
@@ -48,17 +51,19 @@ func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
 }
 
 func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
-	// Already signed in → straight to tokens.
+	// Already signed in → straight to the dashboard.
 	if c, err := r.Cookie(middleware.SessionCookieName()); err == nil {
 		if _, err := tenant.ValidateSession(r.Context(), s.store.DB(), c.Value); err == nil {
-			http.Redirect(w, r, "/tokens", http.StatusFound)
+			http.Redirect(w, r, "/dashboard", http.StatusFound)
 			return
 		}
 	}
 	render(w, "landing.html", map[string]any{
-		"Error":   r.URL.Query().Get("error"),
-		"Sent":    r.URL.Query().Get("sent") == "1",
-		"Version": s.opts.Version,
+		"Title":    "Sign in",
+		"SignedIn": false,
+		"Error":    r.URL.Query().Get("error"),
+		"Sent":     r.URL.Query().Get("sent") == "1",
+		"Version":  s.opts.Version,
 	})
 }
 
@@ -119,7 +124,7 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	middleware.SetSessionCookie(w, sess, int(sessionTTL.Seconds()))
-	http.Redirect(w, r, "/tokens", http.StatusFound)
+	http.Redirect(w, r, "/dashboard", http.StatusFound)
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -138,6 +143,8 @@ func (s *Server) handleTokensPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	render(w, "tokens.html", map[string]any{
+		"Title":       "Tokens & settings",
+		"SignedIn":    true,
 		"Email":       tn.Email,
 		"Tokens":      tokens,
 		"NewToken":    r.URL.Query().Get("new"), // shown once after creation

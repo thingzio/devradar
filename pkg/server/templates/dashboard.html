@@ -1,0 +1,67 @@
+{{template "head" .}}
+{{template "nav" .}}
+<main class="page-content">
+  <h1 class="page-title">Dashboard</h1>
+  <p class="sub">Vulnerability overview across your tracked images.</p>
+
+  {{if .HasData}}
+  <section class="stats">
+    <div class="stat"><span class="stat-n">{{.ImageCount}}</span><span class="stat-l">Images</span></div>
+    <div class="stat"><span class="stat-n">{{.TotalCount}}</span><span class="stat-l">Findings</span></div>
+    <div class="stat"><span class="stat-n danger-n">{{.CriticalCT}}</span><span class="stat-l">Critical</span></div>
+    <div class="stat"><span class="stat-n ok-n">{{.FixablePct}}%</span><span class="stat-l">Fixable now</span></div>
+  </section>
+  {{end}}
+
+  <div class="card">
+    <div class="card-head">
+      <h2>Tracked images</h2>
+      <form class="inline sev" method="get" action="/dashboard">
+        <label class="muted" for="sev">Min severity</label>
+        <select id="sev" name="min_severity" onchange="this.form.submit()">
+          {{$cur := .MinSeverity}}
+          {{range (list "critical" "high" "medium" "low" "negligible")}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}
+        </select>
+      </form>
+    </div>
+
+    <table class="images">
+      <thead>
+        <tr>
+          <th>Image</th>
+          <th class="col-bar">Severity breakdown</th>
+          <th class="num">Total</th>
+          <th class="num">Fixable</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Images}}
+        <tr>
+          <td>
+            <a href="/images?repo={{.Repository}}" class="img-name" title="{{.Repository}}">{{.Short}}</a>
+            <div class="img-meta">
+              {{if .Versions}}{{range .Versions}}<span class="tag">{{.}}</span>{{end}}{{end}}
+              {{if gt .SBOMCount 1}}<span class="muted">{{.SBOMCount}} SBOMs</span>{{end}}
+              {{if gt .Failures 0}}<span class="flag" title="{{.Failures}} scan issue(s) — a scanner errored or returned nothing">&#9888; scan issue</span>{{end}}
+            </div>
+          </td>
+          <td class="col-bar">
+            {{if .Bar}}
+            <div class="bar" title="critical {{.Critical}} · high {{.High}} · medium {{.Medium}} · low {{.Low}}">
+              {{range .Bar}}<span class="{{.Class}}" style="width:{{.Pct}}%"></span>{{end}}
+            </div>
+            {{else}}<span class="muted">no findings ≥ threshold</span>{{end}}
+          </td>
+          <td class="num">{{.Total}}</td>
+          <td class="num">{{if gt .Total 0}}<span class="fix">{{.FixablePct}}%</span>{{else}}<span class="muted">—</span>{{end}}</td>
+          <td class="num"><a href="/images?repo={{.Repository}}" class="muted">view →</a></td>
+        </tr>
+        {{else}}
+        <tr><td colspan="5" class="muted">No images tracked yet. Submit an SBOM to get started (see <a href="/tokens">API tokens</a>).</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</main>
+{{template "foot" .}}

@@ -20,6 +20,7 @@ type RepoImage struct {
 	Versions    []string       `json:"versions,omitempty"` // distinct tags seen (may be empty)
 	LatestAt    time.Time      `json:"latest_at"`          // newest submission for the repo
 	Counts      SeverityCounts `json:"counts"`             // rollup across the repo's findings
+	Fixable     int            `json:"fixable"`            // findings with a fix available (any severity)
 	Failures    int            `json:"failures,omitempty"`
 }
 
@@ -55,6 +56,7 @@ func (s *Store) ListRepoImages(ctx context.Context, tenantID, minSeverity, curso
 		       COUNT(*) FILTER (WHERE f.severity = 'negligible')            AS neg,
 		       COUNT(*) FILTER (WHERE f.severity = 'unknown')               AS unk,
 		       COUNT(f.finding_id)                                          AS total,
+		       COUNT(*) FILTER (WHERE f.is_fixed)                           AS fixable,
 		       (SELECT COUNT(*) FROM devradar_scan_failure sf
 		          JOIN devradar_sbom sb2 ON sb2.id = sf.sbom_id
 		         WHERE sb2.tenant_id = sb.tenant_id AND sb2.repository = sb.repository) AS failures
@@ -77,7 +79,7 @@ func (s *Store) ListRepoImages(ctx context.Context, tenantID, minSeverity, curso
 		var c SeverityCounts
 		if err := rows.Scan(&im.Repository, &im.SBOMCount, &im.DigestCount, pq.Array(&im.Versions),
 			&im.LatestAt, &c.Critical, &c.High, &c.Medium, &c.Low, &c.Negligible, &c.Unknown,
-			&c.Total, &im.Failures); err != nil {
+			&c.Total, &im.Fixable, &im.Failures); err != nil {
 			return nil, "", fmt.Errorf("scan repo image: %w", err)
 		}
 		im.Counts = applyThreshold(c, minSeverity)

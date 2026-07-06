@@ -1,0 +1,36 @@
+{{define "head"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} — DevRadar</title>
+  <meta name="description" content="Container vulnerability tracking — submit an SBOM, track how its vulnerabilities change over time.">
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>{{end}}
+
+{{define "nav"}}
+<nav class="top-nav">
+  <a href="{{if .SignedIn}}/dashboard{{else}}/{{end}}" class="top-nav-brand">
+    <svg class="nav-logo" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><line x1="12" y1="12" x2="19" y2="5"/></svg>
+    Dev<span class="accent">Radar</span>
+  </a>
+  {{if .SignedIn}}
+  <span class="nav-right">
+    <a href="/dashboard">Dashboard</a>
+    <a href="/tokens">Tokens &amp; settings</a>
+    <span class="muted">{{.Email}}</span>
+    <form class="inline" method="post" action="/auth/logout"><button class="btn secondary">Sign out</button></form>
+  </span>
+  {{end}}
+</nav>
+{{end}}
+
+{{define "foot"}}
+<footer class="page-footer">
+  <span>Container vulnerability tracking</span>
+  <span>VERSION {{if .Version}}{{.Version}}{{else}}DEV{{end}}</span>
+</footer>
+</body>
+</html>
+{{end}}

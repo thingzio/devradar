@@ -1,38 +1,27 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>DevRadar — Container Vulnerability Tracking</title>
-  <meta name="description" content="Submit an SBOM, track how its vulnerabilities change over time.">
-  <link rel="stylesheet" href="/static/css/app.css">
-</head>
-<body>
-  <main class="wrap">
-    <h1>Dev<span class="accent">Radar</span></h1>
-    <p class="sub">Container vulnerability tracking — submit an SBOM, track what changes over time.</p>
+{{template "head" .}}
+{{template "nav" .}}
+<main class="page-content narrow">
+  <h1 class="page-title">Dev<span class="accent">Radar</span></h1>
+  <p class="sub">Container vulnerability tracking — submit an SBOM, track what changes over time.</p>
 
-    {{if .Error}}<div class="msg err">
-      {{if eq .Error "email"}}Please enter a valid email address.
-      {{else if eq .Error "link"}}That sign-in link is invalid or expired — request a new one.
-      {{else if eq .Error "suspended"}}This account is suspended.
-      {{else}}Something went wrong. Please try again.{{end}}
-    </div>{{end}}
+  {{if .Error}}<div class="msg err">
+    {{if eq .Error "email"}}Please enter a valid email address.
+    {{else if eq .Error "link"}}That sign-in link is invalid or expired — request a new one.
+    {{else if eq .Error "suspended"}}This account is suspended.
+    {{else}}Something went wrong. Please try again.{{end}}
+  </div>{{end}}
 
-    {{if .Sent}}
-    <div class="msg ok">Check your email — we sent you a sign-in link. It expires in 15 minutes.</div>
-    {{else}}
-    <div class="card">
-      <p style="margin-top:0">Enter your email and we'll send you a one-time sign-in link — no password.</p>
-      <form class="row" method="post" action="/auth/login">
-        <input type="email" name="email" placeholder="you@example.com" required autofocus>
-        <button class="btn" type="submit">Send sign-in link</button>
-      </form>
-      <p class="muted" style="margin-bottom:0">Sign in to create API tokens for submitting SBOMs from your CI.</p>
-    </div>
-    {{end}}
-
-    <div class="foot">VERSION {{if .Version}}{{.Version}}{{else}}DEV{{end}}</div>
-  </main>
-</body>
-</html>
+  {{if .Sent}}
+  <div class="msg ok">Check your email — we sent you a sign-in link. It expires in 15 minutes.</div>
+  {{else}}
+  <div class="card">
+    <p style="margin-top:0">Enter your email and we'll send you a one-time sign-in link — no password.</p>
+    <form class="row" method="post" action="/auth/login">
+      <input type="email" name="email" placeholder="you@example.com" required autofocus>
+      <button class="btn" type="submit">Send sign-in link</button>
+    </form>
+    <p class="muted" style="margin-bottom:0">Sign in to create API tokens for submitting SBOMs from your CI.</p>
+  </div>
+  {{end}}
+</main>
+{{template "foot" .}}
