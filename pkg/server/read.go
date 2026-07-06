@@ -163,12 +163,14 @@ func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid min_severity")
 		return
 	}
-	findings, err := s.store.FindingsBySBOM(r.Context(), tn.ID, r.PathValue("id"), min)
+	fixableOnly := r.URL.Query().Get("fixable") == "true"
+	findings, next, err := s.store.FindingsBySBOM(r.Context(), tn.ID, r.PathValue("id"), min,
+		fixableOnly, r.URL.Query().Get("cursor"), pageLimit(r))
 	if err != nil {
 		writeReadErr(w, err, "failed to load findings")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"min_severity": min, "findings": findings})
+	writeJSON(w, http.StatusOK, page(map[string]any{"min_severity": min, "findings": findings}, next))
 }
 
 // handleEvents returns the change history for one of the tenant's SBOMs,

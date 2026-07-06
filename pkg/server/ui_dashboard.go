@@ -56,7 +56,7 @@ type dashboardView struct {
 // risk-ranked table of tracked images, each with a stacked severity bar.
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	tn := middleware.TenantFromContext(r.Context())
-	min := defaultStr(tn.MinSeverity, data.DefaultMinSeverity)
+	min := tenantMinSeverity(tn)
 	if q := r.URL.Query().Get("min_severity"); q != "" && data.ValidMinSeverity(q) {
 		min = q
 	}

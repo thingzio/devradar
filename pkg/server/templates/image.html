@@ -64,7 +64,7 @@
         {{range .SBOMs}}
         <tr>
           <td>{{if .Version}}<span class="tag">{{.Version}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
-          <td><code>{{.ShortDigest}}</code></td>
+          <td><a href="/sboms/{{.SBOMID}}"><code>{{.ShortDigest}}</code></a></td>
           <td class="nowrap">{{.GeneratedAt}}</td>
           <td class="num">{{.PackageCount}}</td>
           <td class="muted">{{if .Tool}}{{.Tool}}{{else}}—{{end}}</td>

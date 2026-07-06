@@ -117,34 +117,143 @@ type Finding struct {
 	IsFixed  bool    `json:"is_fixed"`
 }
 
+// severityRankSQL orders findings worst-first; shared by the query and the
+// keyset predicate so they can't drift.
+const severityRankSQL = `CASE severity
+	WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2
+	WHEN 'low' THEN 3 WHEN 'negligible' THEN 4 ELSE 5 END`
+
 // FindingsBySBOM returns current findings for one SBOM at or above minSeverity
-// (unknown always included). Tenant-scoped; ErrNotFound if not owned.
-func (s *Store) FindingsBySBOM(ctx context.Context, tenantID, sbomID, minSeverity string) ([]Finding, error) {
+// (unknown always included), worst-severity first, keyset-paginated on
+// (severity_rank, exposure, finding_id) so a large finding set pages cleanly.
+// fixableOnly restricts to findings with an available fix. Tenant-scoped;
+// ErrNotFound if not owned.
+func (s *Store) FindingsBySBOM(ctx context.Context, tenantID, sbomID, minSeverity string, fixableOnly bool, cursor string, limit int) (items []Finding, next string, err error) {
 	if err := s.assertSBOMOwner(ctx, tenantID, sbomID); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT scanner, exposure, package, version, severity, score, is_fixed
+	eff, fetch := clampLimit(limit)
+	cur, hasCur := decodeCursor(cursor)
+
+	args := []any{sbomID, pq.Array(data.AllowedSeverities(minSeverity))}
+	conds := ""
+	if fixableOnly {
+		conds += " AND is_fixed"
+	}
+	if hasCur {
+		// Seek past the cursor row in (rank, exposure, finding_id) order.
+		conds += fmt.Sprintf(" AND (%s, exposure, finding_id) > ($%d, $%d, $%d)",
+			severityRankSQL, len(args)+1, len(args)+2, len(args)+3)
+		args = append(args, cur.N, cur.Str, cur.ID)
+	}
+	args = append(args, fetch)
+	limitPos := fmt.Sprintf("$%d", len(args))
+
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
+		SELECT scanner, exposure, package, version, severity, score, is_fixed, finding_id, %s AS rank
 		FROM devradar_finding
-		WHERE sbom_id = $1 AND severity = ANY($2)
-		ORDER BY CASE severity
-			WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2
-			WHEN 'low' THEN 3 WHEN 'negligible' THEN 4 ELSE 5 END, exposure`,
-		sbomID, pq.Array(data.AllowedSeverities(minSeverity)))
+		WHERE sbom_id = $1 AND severity = ANY($2)%s
+		ORDER BY rank, exposure, finding_id
+		LIMIT %s`, severityRankSQL, conds, limitPos), args...)
 	if err != nil {
-		return nil, fmt.Errorf("findings: %w", err)
+		return nil, "", fmt.Errorf("findings: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []Finding
+	type key struct {
+		rank int64
+		exp  string
+		id   string
+	}
+	var keys []key
 	for rows.Next() {
 		var f Finding
-		if err := rows.Scan(&f.Scanner, &f.Exposure, &f.Package, &f.Version, &f.Severity, &f.Score, &f.IsFixed); err != nil {
-			return nil, fmt.Errorf("scan finding: %w", err)
+		var k key
+		if err := rows.Scan(&f.Scanner, &f.Exposure, &f.Package, &f.Version, &f.Severity, &f.Score, &f.IsFixed, &k.id, &k.rank); err != nil {
+			return nil, "", fmt.Errorf("scan finding: %w", err)
 		}
-		out = append(out, f)
+		k.exp = f.Exposure
+		items = append(items, f)
+		keys = append(keys, k)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	if len(items) > eff {
+		items = items[:eff]
+		k := keys[eff-1]
+		next = encodeCursorNS(k.rank, k.exp, k.id)
+	}
+	return items, next, nil
+}
+
+// PackageFinding rolls up findings for one package: the count and its worst
+// severity, so a long finding list reads as a handful of upgrade decisions.
+type PackageFinding struct {
+	Package    string `json:"package"`
+	Count      int    `json:"count"`
+	Fixable    int    `json:"fixable"`
+	WorstSev   string `json:"worst_severity"`
+	FixablePct int    `json:"-"`
+}
+
+// PackageRollup groups an SBOM's findings by package (worst severity first, then
+// count), returning the top `limit` packages. Tenant-scoped; ErrNotFound if not
+// owned. Not paginated — it's a bounded summary (top N), not a full listing.
+func (s *Store) PackageRollup(ctx context.Context, tenantID, sbomID, minSeverity string, limit int) ([]PackageFinding, error) {
+	if err := s.assertSBOMOwner(ctx, tenantID, sbomID); err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
+		SELECT package,
+		       COUNT(*)                        AS n,
+		       COUNT(*) FILTER (WHERE is_fixed) AS fixable,
+		       MIN(%s)                         AS worst_rank
+		FROM devradar_finding
+		WHERE sbom_id = $1 AND severity = ANY($2)
+		GROUP BY package
+		ORDER BY worst_rank, n DESC, package
+		LIMIT $3`, severityRankSQL),
+		sbomID, pq.Array(data.AllowedSeverities(minSeverity)), limit)
+	if err != nil {
+		return nil, fmt.Errorf("package rollup: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []PackageFinding
+	for rows.Next() {
+		var p PackageFinding
+		var rank int
+		if err := rows.Scan(&p.Package, &p.Count, &p.Fixable, &rank); err != nil {
+			return nil, fmt.Errorf("scan package rollup: %w", err)
+		}
+		p.WorstSev = severityForRank(rank)
+		if p.Count > 0 {
+			p.FixablePct = p.Fixable * 100 / p.Count
+		}
+		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+func severityForRank(rank int) string {
+	switch rank {
+	case 0:
+		return "critical"
+	case 1:
+		return "high"
+	case 2:
+		return "medium"
+	case 3:
+		return "low"
+	case 4:
+		return "negligible"
+	default:
+		return "unknown"
+	}
 }
 
 // Event is a tenant-facing change-log row.

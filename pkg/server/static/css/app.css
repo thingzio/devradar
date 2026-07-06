@@ -213,6 +213,19 @@ table.images td { vertical-align: middle; }
 .sev-b-low      { background: var(--sev-low); }
 .sev-b-negligible, .sev-b-unknown { background: var(--surface-hover); color: var(--muted); }
 
+/* ── SBOM detail ───────────────────────────────────────────────────────────── */
+.mono { font-family: var(--font-mono); font-weight: 400; font-size: 0.85em; }
+.page-title .mono { font-size: 1rem; }
+.stats-sev { grid-template-columns: repeat(4, 1fr); }
+.filters { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.chip-toggle {
+  display: inline-block; padding: 0.35rem 0.8rem; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--muted); font-size: 0.85rem; cursor: pointer;
+}
+.chip-toggle:hover { text-decoration: none; border-color: var(--accent); color: var(--accent); }
+.chip-toggle.on { background: color-mix(in srgb, var(--ok) 15%, transparent); border-color: color-mix(in srgb, var(--ok) 40%, transparent); color: var(--ok); }
+table.findings td { vertical-align: middle; }
+
 /* ── Footer ────────────────────────────────────────────────────────────────── */
 .page-footer {
   max-width: 76rem; margin: 2rem auto 0; padding: 1.5rem 30px;

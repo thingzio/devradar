@@ -45,6 +45,7 @@ func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
 	authed := middleware.RequireAuth(db, loginPath)
 	mux.Handle("GET /dashboard", authed(http.HandlerFunc(s.handleDashboard)))
 	mux.Handle("GET /images", authed(http.HandlerFunc(s.handleImageDetail)))
+	mux.Handle("GET /sboms/{id}", authed(http.HandlerFunc(s.handleSBOMDetail)))
 	mux.Handle("GET /tokens", authed(http.HandlerFunc(s.handleTokensPage)))
 	mux.Handle("POST /tokens", authed(http.HandlerFunc(s.handleCreateToken)))
 	mux.Handle("POST /tokens/{id}/revoke", authed(http.HandlerFunc(s.handleRevokeToken)))
@@ -149,7 +150,7 @@ func (s *Server) handleTokensPage(w http.ResponseWriter, r *http.Request) {
 		"Email":       tn.Email,
 		"Tokens":      tokens,
 		"NewToken":    r.URL.Query().Get("new"), // shown once after creation
-		"MinSeverity": defaultStr(tn.MinSeverity, data.DefaultMinSeverity),
+		"MinSeverity": tenantMinSeverity(tn),
 		"Severities":  []string{"critical", "high", "medium", "low", "negligible"},
 		"Version":     s.opts.Version,
 	})
@@ -202,11 +203,13 @@ func render(w http.ResponseWriter, name string, dataV any) {
 	}
 }
 
-func defaultStr(s, def string) string {
-	if s == "" {
-		return def
+// tenantMinSeverity resolves a tenant's effective default threshold, falling
+// back to the platform default when unset.
+func tenantMinSeverity(tn *tenant.Tenant) string {
+	if tn.MinSeverity == "" {
+		return data.DefaultMinSeverity
 	}
-	return s
+	return tn.MinSeverity
 }
 
 // looksLikeEmail is a minimal sanity check — real validation is that the link is

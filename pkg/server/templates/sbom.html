@@ -1,0 +1,103 @@
+{{template "head" .}}
+{{template "nav" .}}
+<main class="page-content">
+  <p class="crumb"><a href="/dashboard">Dashboard</a> / <a href="/images?repo={{.Repository}}">{{.Short}}</a></p>
+  <h1 class="page-title">{{.Short}} <span class="muted mono">{{.ShortDigest}}</span></h1>
+  <div class="chips">
+    {{if .VersionTag}}<span class="tag">{{.VersionTag}}</span>{{end}}
+    <code>{{.Digest}}</code>
+  </div>
+  <p class="sub">
+    Generated {{if .GeneratedAt}}{{.GeneratedAt}}{{else}}—{{end}}
+    · Submitted {{.SubmittedAt}}
+    {{if .Tool}}· {{.Tool}} {{.ToolVersion}}{{end}}
+  </p>
+
+  <section class="stats stats-sev">
+    <div class="stat"><span class="stat-n">{{.Counts.Total}}</span><span class="stat-l">Findings</span></div>
+    <div class="stat"><span class="stat-n danger-n">{{.Counts.Critical}}</span><span class="stat-l">Critical</span></div>
+    <div class="stat"><span class="stat-n">{{.Counts.High}}</span><span class="stat-l">High</span></div>
+    <div class="stat"><span class="stat-n">{{.Counts.Relevant}}</span><span class="stat-l">≥ threshold</span></div>
+  </section>
+
+  {{if .Failures}}
+  <div class="card">
+    <div class="card-head"><h2>&#9888; Scan health</h2></div>
+    <p class="muted" style="margin-top:0">A scanner errored or returned nothing for this SBOM — findings may be from fewer scanners than configured.</p>
+    <table>
+      <thead><tr><th>When</th><th>Scanner</th><th>Stage</th><th>Detail</th></tr></thead>
+      <tbody>
+        {{range .Failures}}
+        <tr><td class="nowrap">{{.When}}</td><td>{{.Scanner}}</td><td><code>{{.Stage}}</code></td><td class="muted">{{.Error}}</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+
+  {{if .Packages}}
+  <div class="card">
+    <div class="card-head"><h2>By package</h2></div>
+    <p class="muted" style="margin-top:0">Findings grouped by package, worst first — each row is one upgrade decision.</p>
+    <table>
+      <thead><tr><th>Package</th><th>Worst</th><th class="num">Findings</th><th class="num">Fixable</th></tr></thead>
+      <tbody>
+        {{range .Packages}}
+        <tr>
+          <td>{{.Package}}</td>
+          <td><span class="sev-badge sev-b-{{.WorstSev}}">{{.WorstSev}}</span></td>
+          <td class="num">{{.Count}}</td>
+          <td class="num">{{if gt .Fixable 0}}<span class="fix">{{.Fixable}}</span>{{else}}<span class="muted">0</span>{{end}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+
+  <div class="card">
+    <div class="card-head">
+      <h2>Findings</h2>
+      <div class="filters">
+        <a class="chip-toggle {{if .FixableOnly}}on{{end}}" href="/sboms/{{.SBOMID}}?min_severity={{.MinSeverity}}{{if not .FixableOnly}}&fixable=true{{end}}">
+          {{if .FixableOnly}}✓ Fixable only{{else}}Fixable only{{end}}
+        </a>
+        <form class="inline sev" method="get" action="/sboms/{{.SBOMID}}">
+          {{if .FixableOnly}}<input type="hidden" name="fixable" value="true">{{end}}
+          <label class="muted" for="sev">Min severity</label>
+          <select id="sev" name="min_severity" onchange="this.form.submit()">
+            {{$cur := .MinSeverity}}
+            {{range (list "critical" "high" "medium" "low" "negligible")}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}
+          </select>
+        </form>
+      </div>
+    </div>
+
+    {{if .Findings}}
+    <table class="findings">
+      <thead>
+        <tr><th>Severity</th><th>CVE</th><th>Package</th><th>Version</th><th class="num">CVSS</th><th>Fix</th><th>Scanner</th></tr>
+      </thead>
+      <tbody>
+        {{range .Findings}}
+        <tr>
+          <td><span class="sev-badge sev-b-{{.Severity}}">{{.Severity}}</span></td>
+          <td><a href="https://nvd.nist.gov/vuln/detail/{{.Exposure}}" target="_blank" rel="noopener">{{.Exposure}}</a></td>
+          <td>{{.Package}}</td>
+          <td class="mono">{{.Version}}</td>
+          <td class="num">{{.Score}}</td>
+          <td>{{if .IsFixed}}<span class="fix">available</span>{{else}}<span class="muted">none</span>{{end}}</td>
+          <td class="muted">{{.Scanner}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+    {{if .NextCursor}}
+    <p class="loadmore"><a href="/sboms/{{.SBOMID}}?min_severity={{.MinSeverity}}{{if .FixableOnly}}&fixable=true{{end}}&cursor={{.NextCursor}}">Load more →</a></p>
+    {{end}}
+    {{else}}
+    <p class="muted">No findings{{if .FixableOnly}} with an available fix{{end}} at or above the current severity threshold.</p>
+    {{end}}
+  </div>
+</main>
+{{template "foot" .}}

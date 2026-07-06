@@ -18,9 +18,10 @@ const (
 // tiebreaker id — so the next page seeks past it with a (ts, id) row comparison
 // rather than OFFSET (which degrades and can skip/duplicate rows under writes).
 type keysetCursor struct {
-	TS time.Time `json:"t,omitzero"`
-	N  int64     `json:"n,omitempty"`
-	ID string    `json:"i"`
+	TS  time.Time `json:"t,omitzero"`
+	N   int64     `json:"n,omitempty"`
+	Str string    `json:"s,omitempty"` // secondary string key (e.g. exposure)
+	ID  string    `json:"i"`
 }
 
 // encodeCursor returns an opaque base64 token for a time-keyed list, or "" when
@@ -37,6 +38,16 @@ func encodeCursor(ts time.Time, id string) string {
 // risk score), with id as the unique tiebreaker.
 func encodeCursorN(n int64, id string) string {
 	b, err := json.Marshal(keysetCursor{N: n, ID: id})
+	if err != nil {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// encodeCursorNS returns a token for a list ordered by (int, string, id) — e.g.
+// findings ordered by (severity_rank, exposure, finding_id).
+func encodeCursorNS(n int64, str, id string) string {
+	b, err := json.Marshal(keysetCursor{N: n, Str: str, ID: id})
 	if err != nil {
 		return ""
 	}

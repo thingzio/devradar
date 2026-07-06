@@ -177,6 +177,99 @@ func TestImageTimeline_AcrossDigests(t *testing.T) {
 	}
 }
 
+// TestFindings_PagingFilterRollup verifies findings page in worst-first order
+// without gaps/overlaps, the fixable filter restricts the set, and the package
+// rollup groups worst-severity-first.
+func TestFindings_PagingFilterRollup(t *testing.T) {
+	st, err := postgres.NewFromEnv(context.Background())
+	if err != nil {
+		t.Skipf("skipping (no database): %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	suffix := hex.EncodeToString(b)
+	var tenantID string
+	if err := st.DB().QueryRowContext(ctx,
+		`INSERT INTO devradar_tenant (email) VALUES ($1) RETURNING id`,
+		"find-"+suffix+"@example.com").Scan(&tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	sbomID := "find-" + suffix
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_sbom (id, tenant_id, image_ref, repository, digest, format, object_path)
+		VALUES ($1,$2,'reg/app','reg/app',$3,'cyclonedx','gs://x')`,
+		sbomID, tenantID, "sha256:"+suffix); err != nil {
+		t.Fatalf("seed sbom: %v", err)
+	}
+	// 6 findings: 2 critical (1 fixed), 2 high, 2 medium (1 fixed).
+	seed := func(cve, sev string, fixed bool) {
+		if _, err := st.DB().ExecContext(ctx, `
+			INSERT INTO devradar_finding (sbom_id, scanner, finding_id, exposure, package, version, severity, score, is_fixed)
+			VALUES ($1,'grype',$2,$3,'pkg-'||$3,'1.0',$4,5.0,$5)`,
+			sbomID, cve+suffix, cve, sev, fixed); err != nil {
+			t.Fatalf("seed finding: %v", err)
+		}
+	}
+	seed("CVE-c1", "critical", true)
+	seed("CVE-c2", "critical", false)
+	seed("CVE-h1", "high", false)
+	seed("CVE-h2", "high", false)
+	seed("CVE-m1", "medium", true)
+	seed("CVE-m2", "medium", false)
+
+	// Page 2 at a time through all 6; assert worst-first, no dup/gap.
+	var got []string
+	cursor := ""
+	for range 5 {
+		page, next, err := st.FindingsBySBOM(ctx, tenantID, sbomID, "negligible", false, cursor, 2)
+		if err != nil {
+			t.Fatalf("findings page: %v", err)
+		}
+		for _, f := range page {
+			got = append(got, f.Severity)
+		}
+		if next == "" {
+			break
+		}
+		cursor = next
+	}
+	if len(got) != 6 {
+		t.Fatalf("paged findings = %d, want 6 (no gap/dup)", len(got))
+	}
+	want := []string{"critical", "critical", "high", "high", "medium", "medium"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("order[%d] = %s, want %s (worst-first)", i, got[i], want[i])
+		}
+	}
+
+	// Fixable filter: only the 2 fixed findings (1 crit, 1 med).
+	fx, _, err := st.FindingsBySBOM(ctx, tenantID, sbomID, "negligible", true, "", 50)
+	if err != nil {
+		t.Fatalf("fixable findings: %v", err)
+	}
+	if len(fx) != 2 {
+		t.Errorf("fixable findings = %d, want 2", len(fx))
+	}
+	for _, f := range fx {
+		if !f.IsFixed {
+			t.Errorf("fixable filter returned an unfixed finding: %s", f.Exposure)
+		}
+	}
+
+	// Package rollup: each CVE is its own package here (pkg-CVE-*), worst first.
+	pkgs, err := st.PackageRollup(ctx, tenantID, sbomID, "negligible", 10)
+	if err != nil {
+		t.Fatalf("rollup: %v", err)
+	}
+	if len(pkgs) == 0 || pkgs[0].WorstSev != "critical" {
+		t.Errorf("rollup should lead with a critical package, got %+v", pkgs)
+	}
+}
+
 // TestListRepoImages_RiskOrderAndPaging verifies images come back risk-ranked
 // (critical, then high, then total) from SQL, that keyset pagination walks that
 // order without gaps or overlaps, and that FleetStats is a whole-tenant rollup

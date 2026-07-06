@@ -63,7 +63,7 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 		return
 	}
-	min := defaultStr(tn.MinSeverity, data.DefaultMinSeverity)
+	min := tenantMinSeverity(tn)
 	if q := r.URL.Query().Get("min_severity"); q != "" && data.ValidMinSeverity(q) {
 		min = q
 	}
