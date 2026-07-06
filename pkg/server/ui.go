@@ -46,6 +46,8 @@ func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
 	mux.Handle("GET /dashboard", authed(http.HandlerFunc(s.handleDashboard)))
 	mux.Handle("GET /images", authed(http.HandlerFunc(s.handleImageDetail)))
 	mux.Handle("GET /sboms/{id}", authed(http.HandlerFunc(s.handleSBOMDetail)))
+	mux.Handle("GET /cves", authed(http.HandlerFunc(s.handleCVEList)))
+	mux.Handle("GET /cves/{cve}", authed(http.HandlerFunc(s.handleCVEDetail)))
 	mux.Handle("GET /tokens", authed(http.HandlerFunc(s.handleTokensPage)))
 	mux.Handle("POST /tokens", authed(http.HandlerFunc(s.handleCreateToken)))
 	mux.Handle("POST /tokens/{id}/revoke", authed(http.HandlerFunc(s.handleRevokeToken)))

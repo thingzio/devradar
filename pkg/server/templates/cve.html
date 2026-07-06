@@ -1,0 +1,39 @@
+{{template "head" .}}
+{{template "nav" .}}
+<main class="page-content">
+  <p class="crumb"><a href="/cves">← CVEs</a></p>
+  <h1 class="page-title">{{.CVE}}
+    {{if .KEV}}<span class="kev-badge" title="CISA Known Exploited Vulnerabilities">KEV</span>{{end}}
+  </h1>
+  <div class="chips">
+    {{if .EPSS}}<span class="tag">EPSS {{.EPSS}}</span>{{end}}
+    {{if .KEVAdded}}<span class="tag">KEV added {{.KEVAdded}}</span>{{end}}
+    <span class="muted">affects {{.ImageCount}} image{{if ne .ImageCount 1}}s{{end}}</span>
+    <a href="https://nvd.nist.gov/vuln/detail/{{.CVE}}" target="_blank" rel="noopener">NVD ↗</a>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Where it appears</h2></div>
+    <p class="muted" style="margin-top:0">Every image, version, and package where this CVE is present across your fleet.</p>
+    <table>
+      <thead>
+        <tr><th>Image</th><th>Version</th><th>Digest</th><th>Package</th><th>Severity</th><th class="num">CVSS</th><th>Fix</th><th>Scanner</th></tr>
+      </thead>
+      <tbody>
+        {{range .Occurrences}}
+        <tr>
+          <td><a href="/images?repo={{.Repository}}">{{.Repository}}</a></td>
+          <td>{{if .Version}}<span class="tag">{{.Version}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
+          <td><a href="/sboms/{{.SBOMID}}"><code>{{.ShortDig}}</code></a></td>
+          <td>{{.Package}} <span class="muted mono">{{.PkgVersion}}</span></td>
+          <td><span class="sev-badge sev-b-{{.Severity}}">{{.Severity}}</span></td>
+          <td class="num">{{.Score}}</td>
+          <td>{{if .IsFixed}}<span class="fix">available</span>{{else}}<span class="muted">none</span>{{end}}</td>
+          <td class="muted">{{.Scanner}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</main>
+{{template "foot" .}}

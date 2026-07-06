@@ -177,6 +177,105 @@ func TestImageTimeline_AcrossDigests(t *testing.T) {
 	}
 }
 
+// TestFleetCVEs_BlastRadiusRanking verifies CVEs are grouped across images,
+// ranked KEV-first then severity then blast radius, and that CVEDetail lists
+// every occurrence.
+func TestFleetCVEs_BlastRadiusRanking(t *testing.T) {
+	st, err := postgres.NewFromEnv(context.Background())
+	if err != nil {
+		t.Skipf("skipping (no database): %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	suffix := hex.EncodeToString(b)
+	var tenantID string
+	if err := st.DB().QueryRowContext(ctx,
+		`INSERT INTO devradar_tenant (email) VALUES ($1) RETURNING id`,
+		"cve-"+suffix+"@example.com").Scan(&tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+
+	// Helper: an image (repo) with a finding for a given CVE at a severity.
+	mk := func(repo, cve, sev string) {
+		digest := "sha256:" + repo + suffix
+		_, _ = st.DB().ExecContext(ctx, `
+			INSERT INTO devradar_sbom (id, tenant_id, image_ref, repository, digest, format, object_path)
+			VALUES ($1,$2,$3,$3,$4,'cyclonedx','gs://x') ON CONFLICT DO NOTHING`,
+			digest, tenantID, "reg/"+repo+"-"+suffix, digest)
+		if _, err := st.DB().ExecContext(ctx, `
+			INSERT INTO devradar_finding (sbom_id, scanner, finding_id, exposure, package, version, severity, score, is_fixed)
+			VALUES ($1,'grype',$2,$3,'pkg','1.0',$4,7.0,false) ON CONFLICT DO NOTHING`,
+			digest, cve+"/pkg/1.0", cve, sev); err != nil {
+			t.Fatalf("seed finding: %v", err)
+		}
+	}
+	cveWide := "CVE-" + suffix + "-WIDE" // medium, in 3 images
+	cveKEV := "CVE-" + suffix + "-KEV"   // high, in 1 image, but KEV
+	mk("a", cveWide, "medium")
+	mk("b", cveWide, "medium")
+	mk("c", cveWide, "medium")
+	mk("a", cveKEV, "high")
+	// Mark the KEV CVE as known-exploited.
+	if _, err := st.DB().ExecContext(ctx,
+		`INSERT INTO devradar_cve_enrichment (cve, kev, epss_score) VALUES ($1, true, 0.9)
+		 ON CONFLICT (cve) DO UPDATE SET kev=true`, cveKEV); err != nil {
+		t.Fatalf("seed enrichment: %v", err)
+	}
+
+	cves, _, err := st.FleetCVEs(ctx, tenantID, "negligible", "", 50)
+	if err != nil {
+		t.Fatalf("fleet cves: %v", err)
+	}
+	// Restrict to our two seeded CVEs (tenant is isolated, so that's all there is).
+	var wide, kev *postgres.FleetCVE
+	for i := range cves {
+		switch cves[i].CVE {
+		case cveWide:
+			wide = &cves[i]
+		case cveKEV:
+			kev = &cves[i]
+		}
+	}
+	if wide == nil || kev == nil {
+		t.Fatalf("expected both CVEs, got %+v", cves)
+	}
+	if wide.ImageCount != 3 {
+		t.Errorf("wide CVE image_count = %d, want 3", wide.ImageCount)
+	}
+	if !kev.KEV {
+		t.Errorf("kev CVE should be flagged KEV")
+	}
+	// KEV must outrank a wider-but-non-KEV CVE: kev appears before wide.
+	kevIdx, wideIdx := -1, -1
+	for i := range cves {
+		if cves[i].CVE == cveKEV {
+			kevIdx = i
+		}
+		if cves[i].CVE == cveWide {
+			wideIdx = i
+		}
+	}
+	if kevIdx > wideIdx {
+		t.Errorf("KEV CVE (idx %d) should rank above wide CVE (idx %d)", kevIdx, wideIdx)
+	}
+
+	// CVEDetail lists all 3 occurrences of the wide CVE.
+	d, err := st.CVEDetail(ctx, tenantID, cveWide)
+	if err != nil {
+		t.Fatalf("cve detail: %v", err)
+	}
+	if len(d.Occurrences) != 3 {
+		t.Errorf("wide CVE occurrences = %d, want 3", len(d.Occurrences))
+	}
+	// Unknown CVE → ErrNotFound.
+	if _, err := st.CVEDetail(ctx, tenantID, "CVE-nope-"+suffix); !errors.Is(err, postgres.ErrNotFound) {
+		t.Errorf("unknown cve: err = %v, want ErrNotFound", err)
+	}
+}
+
 // TestFindings_PagingFilterRollup verifies findings page in worst-first order
 // without gaps/overlaps, the fixable filter restricts the set, and the package
 // rollup groups worst-severity-first.

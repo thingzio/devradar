@@ -173,6 +173,7 @@ code {
   background: var(--danger); color: #fff; font-size: 0.72rem; font-weight: 700;
   letter-spacing: 0.03em;
 }
+td.small .tag { font-size: 0.72rem; }
 
 /* ── Image table + severity bar ────────────────────────────────────────────── */
 table.images td { vertical-align: middle; }
