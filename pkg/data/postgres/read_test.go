@@ -177,6 +177,88 @@ func TestImageTimeline_AcrossDigests(t *testing.T) {
 	}
 }
 
+// TestListRepoImages_RiskOrderAndPaging verifies images come back risk-ranked
+// (critical, then high, then total) from SQL, that keyset pagination walks that
+// order without gaps or overlaps, and that FleetStats is a whole-tenant rollup
+// independent of the page.
+func TestListRepoImages_RiskOrderAndPaging(t *testing.T) {
+	st, err := postgres.NewFromEnv(context.Background())
+	if err != nil {
+		t.Skipf("skipping (no database): %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	suffix := hex.EncodeToString(b)
+	var tenantID string
+	if err := st.DB().QueryRowContext(ctx,
+		`INSERT INTO devradar_tenant (email) VALUES ($1) RETURNING id`,
+		"rank-"+suffix+"@example.com").Scan(&tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+
+	// Three images with descending risk: A (1 critical), B (2 high), C (3 medium).
+	seedImg := func(name string, sevs ...string) {
+		digest := "sha256:" + name + suffix
+		if _, err := st.DB().ExecContext(ctx, `
+			INSERT INTO devradar_sbom (id, tenant_id, image_ref, repository, digest, format, object_path)
+			VALUES ($1,$2,$3,$3,$4,'cyclonedx','gs://x')`,
+			digest, tenantID, "reg/"+name+"-"+suffix, digest); err != nil {
+			t.Fatalf("seed sbom %s: %v", name, err)
+		}
+		for i, sev := range sevs {
+			if _, err := st.DB().ExecContext(ctx, `
+				INSERT INTO devradar_finding (sbom_id, scanner, finding_id, exposure, package, version, severity, score, is_fixed)
+				VALUES ($1,'grype',$2,$3,'pkg','1.0',$4,1.0,$5)`,
+				digest, name+"-f-"+hex.EncodeToString([]byte{byte(i)}), "CVE-"+name+"-"+sev, sev, i%2 == 0); err != nil {
+				t.Fatalf("seed finding: %v", err)
+			}
+		}
+	}
+	seedImg("a", "critical")
+	seedImg("b", "high", "high")
+	seedImg("c", "medium", "medium", "medium")
+
+	// Fleet stats: whole tenant, not one page.
+	fs, err := st.FleetStats(ctx, tenantID)
+	if err != nil {
+		t.Fatalf("fleet stats: %v", err)
+	}
+	if fs.Images != 3 || fs.Total != 6 || fs.Critical != 1 || fs.High != 2 {
+		t.Errorf("fleet stats = %+v, want images=3 total=6 crit=1 high=2", fs)
+	}
+
+	// Full list: risk order must be A (crit) → B (high) → C (medium).
+	all, _, err := st.ListRepoImages(ctx, tenantID, "negligible", "", 50)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("want 3 images, got %d", len(all))
+	}
+	wantOrder := []string{"reg/a-" + suffix, "reg/b-" + suffix, "reg/c-" + suffix}
+	for i, w := range wantOrder {
+		if all[i].Repository != w {
+			t.Errorf("risk order[%d] = %s, want %s", i, all[i].Repository, w)
+		}
+	}
+
+	// Paginate 2 at a time: page1 = [A,B] + cursor, page2 = [C] + no cursor.
+	p1, next, err := st.ListRepoImages(ctx, tenantID, "negligible", "", 2)
+	if err != nil || len(p1) != 2 || next == "" {
+		t.Fatalf("page1: len=%d next=%q err=%v", len(p1), next, err)
+	}
+	p2, next2, err := st.ListRepoImages(ctx, tenantID, "negligible", next, 2)
+	if err != nil || len(p2) != 1 || next2 != "" {
+		t.Fatalf("page2: len=%d next=%q err=%v", len(p2), next2, err)
+	}
+	if p1[0].Repository != wantOrder[0] || p1[1].Repository != wantOrder[1] || p2[0].Repository != wantOrder[2] {
+		t.Errorf("paged order wrong: %s,%s then %s", p1[0].Repository, p1[1].Repository, p2[0].Repository)
+	}
+}
+
 // TestRepoViews covers the CUJ endpoints: grouping SBOMs by repository, listing
 // an image's SBOMs newest-generation-first, the cross-digest repo timeline, and
 // keyset pagination on each.

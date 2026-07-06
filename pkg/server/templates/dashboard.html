@@ -62,6 +62,9 @@
         {{end}}
       </tbody>
     </table>
+    {{if .NextCursor}}
+    <p class="loadmore"><a href="/dashboard?min_severity={{.MinSeverity}}&cursor={{.NextCursor}}">Load more →</a></p>
+    {{end}}
   </div>
 </main>
 {{template "foot" .}}

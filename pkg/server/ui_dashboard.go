@@ -2,7 +2,6 @@ package server
 
 import (
 	"net/http"
-	"sort"
 
 	"github.com/thingzio/devradar/pkg/data"
 	"github.com/thingzio/devradar/pkg/data/postgres"
@@ -26,7 +25,6 @@ type imageRow struct {
 	FixablePct int
 	Failures   int
 	Bar        []barSeg // ordered crit→low segments with non-zero width
-	RiskScore  int      // ranking key; not shown
 }
 
 type barSeg struct {
@@ -41,6 +39,7 @@ type dashboardView struct {
 	Email       string
 	Version     string
 	MinSeverity string
+	NextCursor  string
 	Images      []imageRow
 	// Fleet headline stats.
 	ImageCount int
@@ -62,10 +61,17 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		min = q
 	}
 
-	// Pull the full inventory (grouped). The dashboard is a rollup, so it reads
-	// with a high limit rather than paginating — a tenant's distinct-image count
-	// is small relative to SBOMs. (When that stops holding, page it.)
-	images, _, err := s.store.ListRepoImages(r.Context(), tn.ID, min, "", 500)
+	// Headline stats are fleet-wide (all active images), computed independently of
+	// the paginated image list below — summing one page would undercount.
+	fs, err := s.store.FleetStats(r.Context(), tn.ID)
+	if err != nil {
+		http.Error(w, "failed to load dashboard", http.StatusInternalServerError)
+		return
+	}
+
+	// Image list: one page, risk-ranked in SQL (so page order is global order).
+	images, next, err := s.store.ListRepoImages(r.Context(), tn.ID, min,
+		r.URL.Query().Get("cursor"), 50)
 	if err != nil {
 		http.Error(w, "failed to load dashboard", http.StatusInternalServerError)
 		return
@@ -77,7 +83,15 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		Email:       tn.Email,
 		Version:     s.opts.Version,
 		MinSeverity: min,
-		ImageCount:  len(images),
+		NextCursor:  next,
+		ImageCount:  fs.Images,
+		TotalCount:  fs.Total,
+		CriticalCT:  fs.Critical,
+		HighCT:      fs.High,
+		FixableCT:   fs.Fixable,
+		FailureCT:   fs.Failures,
+		HasData:     fs.Total > 0,
+		FixablePct:  pct(fs.Fixable, fs.Total),
 	}
 	for _, im := range images {
 		row := imageRow{
@@ -92,25 +106,13 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 			Total:      im.Counts.Total,
 			Fixable:    im.Fixable,
 			Failures:   im.Failures,
-			RiskScore:  im.Counts.Critical*1_000_000 + im.Counts.High*1_000 + im.Counts.Total,
 		}
 		row.Bar = severityBar(im.Counts)
 		if im.Counts.Total > 0 {
 			row.FixablePct = pct(im.Fixable, im.Counts.Total)
 		}
 		v.Images = append(v.Images, row)
-
-		v.TotalCount += im.Counts.Total
-		v.CriticalCT += im.Counts.Critical
-		v.HighCT += im.Counts.High
-		v.FixableCT += im.Fixable
-		v.FailureCT += im.Failures
 	}
-	sort.SliceStable(v.Images, func(i, j int) bool {
-		return v.Images[i].RiskScore > v.Images[j].RiskScore
-	})
-	v.HasData = v.TotalCount > 0
-	v.FixablePct = pct(v.FixableCT, v.TotalCount)
 
 	render(w, "dashboard.html", v)
 }

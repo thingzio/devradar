@@ -74,6 +74,9 @@
         {{end}}
       </tbody>
     </table>
+    {{if .SBOMNextCursor}}
+    <p class="loadmore"><a href="/images?repo={{.Repository}}&min_severity={{.MinSeverity}}&sbom_cursor={{.SBOMNextCursor}}">Load more →</a></p>
+    {{end}}
   </div>
 </main>
 {{template "foot" .}}

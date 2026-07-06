@@ -24,49 +24,62 @@ type RepoImage struct {
 	Failures    int            `json:"failures,omitempty"`
 }
 
-// ListRepoImages returns a tenant's tracked images grouped by repository, newest
-// activity first, keyset-paginated on (latest_at, repository). Every active SBOM
-// contributes; counts are the union of findings across the repo's SBOMs, trimmed
-// to minSeverity like the per-SBOM views.
+// ListRepoImages returns a tenant's tracked images grouped by repository,
+// **risk-ranked in SQL** (critical, then high, then total finding count), so the
+// database order is the display order — which is what makes keyset pagination
+// correct (no re-sort in Go could reorder across pages). Keyset on
+// (risk_score DESC, repository DESC). Every active SBOM contributes; counts are
+// the union of findings across the repo's SBOMs, trimmed to minSeverity like the
+// per-SBOM views. Risk uses the raw (untrimmed) severity counts, so ranking is a
+// stable property of the image, independent of the viewer's threshold.
 func (s *Store) ListRepoImages(ctx context.Context, tenantID, minSeverity, cursor string, limit int) (items []RepoImage, next string, err error) {
 	eff, fetch := clampLimit(limit)
 	cur, hasCur := decodeCursor(cursor)
 
-	// Keyset predicate: rows strictly "older" than the cursor in the
-	// (latest_at DESC, repository DESC) ordering.
-	where := ""
+	// Rank in a CTE so `risk` is a real column usable in both ORDER BY and the
+	// keyset predicate. risk = crit*1e9 + high*1e5 + total (bounded fields;
+	// wide multipliers keep the tiers from colliding at realistic corpus sizes).
 	args := []any{tenantID}
+	keyset := ""
 	if hasCur {
-		where = `HAVING (MAX(sb.submitted_at), sb.repository) < ($2, $3)`
-		args = append(args, cur.TS, cur.ID)
+		keyset = "WHERE (risk, repository) < ($2, $3)"
+		args = append(args, cur.N, cur.ID)
 	}
 	args = append(args, fetch)
 	limitPos := fmt.Sprintf("$%d", len(args))
 
 	q := fmt.Sprintf(`
-		SELECT sb.repository,
-		       COUNT(DISTINCT sb.id)                                        AS sbom_count,
-		       COUNT(DISTINCT sb.digest)                                    AS digest_count,
-		       COALESCE(array_agg(DISTINCT sb.version) FILTER (WHERE sb.version IS NOT NULL), '{}') AS versions,
-		       MAX(sb.submitted_at)                                         AS latest_at,
-		       COUNT(*) FILTER (WHERE f.severity = 'critical')              AS crit,
-		       COUNT(*) FILTER (WHERE f.severity = 'high')                  AS high,
-		       COUNT(*) FILTER (WHERE f.severity = 'medium')                AS med,
-		       COUNT(*) FILTER (WHERE f.severity = 'low')                   AS low,
-		       COUNT(*) FILTER (WHERE f.severity = 'negligible')            AS neg,
-		       COUNT(*) FILTER (WHERE f.severity = 'unknown')               AS unk,
-		       COUNT(f.finding_id)                                          AS total,
-		       COUNT(*) FILTER (WHERE f.is_fixed)                           AS fixable,
-		       (SELECT COUNT(*) FROM devradar_scan_failure sf
-		          JOIN devradar_sbom sb2 ON sb2.id = sf.sbom_id
-		         WHERE sb2.tenant_id = sb.tenant_id AND sb2.repository = sb.repository) AS failures
-		FROM devradar_sbom sb
-		LEFT JOIN devradar_finding f ON f.sbom_id = sb.id
-		WHERE sb.tenant_id = $1 AND sb.status = 'active'
-		GROUP BY sb.tenant_id, sb.repository
+		WITH img AS (
+			SELECT sb.repository,
+			       COUNT(DISTINCT sb.id)                             AS sbom_count,
+			       COUNT(DISTINCT sb.digest)                         AS digest_count,
+			       COALESCE(array_agg(DISTINCT sb.version) FILTER (WHERE sb.version IS NOT NULL), '{}') AS versions,
+			       MAX(sb.submitted_at)                              AS latest_at,
+			       COUNT(*) FILTER (WHERE f.severity = 'critical')   AS crit,
+			       COUNT(*) FILTER (WHERE f.severity = 'high')       AS high,
+			       COUNT(*) FILTER (WHERE f.severity = 'medium')     AS med,
+			       COUNT(*) FILTER (WHERE f.severity = 'low')        AS low,
+			       COUNT(*) FILTER (WHERE f.severity = 'negligible') AS neg,
+			       COUNT(*) FILTER (WHERE f.severity = 'unknown')    AS unk,
+			       COUNT(f.finding_id)                               AS total,
+			       COUNT(*) FILTER (WHERE f.is_fixed)                AS fixable,
+			       (SELECT COUNT(*) FROM devradar_scan_failure sf
+			          JOIN devradar_sbom sb2 ON sb2.id = sf.sbom_id
+			         WHERE sb2.tenant_id = sb.tenant_id AND sb2.repository = sb.repository) AS failures,
+			       COUNT(*) FILTER (WHERE f.severity = 'critical') * 1000000000::bigint
+			         + COUNT(*) FILTER (WHERE f.severity = 'high') * 100000::bigint
+			         + COUNT(f.finding_id)                         AS risk
+			FROM devradar_sbom sb
+			LEFT JOIN devradar_finding f ON f.sbom_id = sb.id
+			WHERE sb.tenant_id = $1 AND sb.status = 'active'
+			GROUP BY sb.tenant_id, sb.repository
+		)
+		SELECT repository, sbom_count, digest_count, versions, latest_at,
+		       crit, high, med, low, neg, unk, total, fixable, failures, risk
+		FROM img
 		%s
-		ORDER BY latest_at DESC, sb.repository DESC
-		LIMIT %s`, where, limitPos)
+		ORDER BY risk DESC, repository DESC
+		LIMIT %s`, keyset, limitPos)
 
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -74,31 +87,91 @@ func (s *Store) ListRepoImages(ctx context.Context, tenantID, minSeverity, curso
 	}
 	defer func() { _ = rows.Close() }()
 
+	var risks []int64
 	for rows.Next() {
 		var im RepoImage
 		var c SeverityCounts
+		var risk int64
 		if err := rows.Scan(&im.Repository, &im.SBOMCount, &im.DigestCount, pq.Array(&im.Versions),
 			&im.LatestAt, &c.Critical, &c.High, &c.Medium, &c.Low, &c.Negligible, &c.Unknown,
-			&c.Total, &im.Fixable, &im.Failures); err != nil {
+			&c.Total, &im.Fixable, &im.Failures, &risk); err != nil {
 			return nil, "", fmt.Errorf("scan repo image: %w", err)
 		}
 		im.Counts = applyThreshold(c, minSeverity)
 		items = append(items, im)
+		risks = append(risks, risk)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, "", err
 	}
-	items, next = paginateRepoImages(items, eff)
+	if len(items) > eff {
+		items = items[:eff]
+		last := items[len(items)-1]
+		next = encodeCursorN(risks[eff-1], last.Repository)
+	}
 	return items, next, nil
 }
 
-func paginateRepoImages(items []RepoImage, eff int) ([]RepoImage, string) {
-	if len(items) <= eff {
-		return items, ""
+// FleetStats is the tenant-wide rollup for the dashboard headline. It is
+// deliberately independent of the paginated image list: summing one page would
+// undercount once a tenant has more images than fit on a page.
+type FleetStats struct {
+	Images   int `json:"images"`
+	Total    int `json:"total"`
+	Critical int `json:"critical"`
+	High     int `json:"high"`
+	Fixable  int `json:"fixable"`
+	Failures int `json:"failures"`
+}
+
+// FleetStats returns tenant-wide finding totals across all active images.
+func (s *Store) FleetStats(ctx context.Context, tenantID string) (FleetStats, error) {
+	var fs FleetStats
+	err := s.db.QueryRowContext(ctx, `
+		SELECT
+			(SELECT COUNT(DISTINCT repository) FROM devradar_sbom
+			   WHERE tenant_id = $1 AND status = 'active'),
+			COUNT(f.finding_id),
+			COUNT(*) FILTER (WHERE f.severity = 'critical'),
+			COUNT(*) FILTER (WHERE f.severity = 'high'),
+			COUNT(*) FILTER (WHERE f.is_fixed),
+			(SELECT COUNT(*) FROM devradar_scan_failure sf
+			   JOIN devradar_sbom s2 ON s2.id = sf.sbom_id
+			  WHERE s2.tenant_id = $1)
+		FROM devradar_sbom sb
+		LEFT JOIN devradar_finding f ON f.sbom_id = sb.id
+		WHERE sb.tenant_id = $1 AND sb.status = 'active'`,
+		tenantID).Scan(&fs.Images, &fs.Total, &fs.Critical, &fs.High, &fs.Fixable, &fs.Failures)
+	if err != nil {
+		return FleetStats{}, fmt.Errorf("fleet stats: %w", err)
 	}
-	items = items[:eff]
-	last := items[len(items)-1]
-	return items, encodeCursor(last.LatestAt, last.Repository)
+	return fs, nil
+}
+
+// RepoSummary is the header rollup for one image: authoritative totals that
+// don't depend on how the SBOM list is paginated.
+type RepoSummary struct {
+	SBOMCount   int
+	DigestCount int
+	Versions    []string
+}
+
+// RepoSummary returns totals for one repository. ErrNotFound if unknown.
+func (s *Store) RepoSummary(ctx context.Context, tenantID, repository string) (RepoSummary, error) {
+	var rs RepoSummary
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT id), COUNT(DISTINCT digest),
+		       COALESCE(array_agg(DISTINCT version) FILTER (WHERE version IS NOT NULL), '{}')
+		FROM devradar_sbom
+		WHERE tenant_id = $1 AND repository = $2 AND status = 'active'`,
+		tenantID, repository).Scan(&rs.SBOMCount, &rs.DigestCount, pq.Array(&rs.Versions))
+	if err != nil {
+		return RepoSummary{}, fmt.Errorf("repo summary: %w", err)
+	}
+	if rs.SBOMCount == 0 {
+		return RepoSummary{}, ErrNotFound
+	}
+	return rs, nil
 }
 
 // SBOMsForRepo returns the SBOMs tracked for one repository, newest generation

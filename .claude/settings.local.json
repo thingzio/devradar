@@ -8,7 +8,8 @@
       "Bash(make db-down *)",
       "Bash(gofmt -l pkg/ cmd/ tools/)",
       "Bash(grep -n \"critical/high\\\\|Critical.*High\\\\|critical and high\\\\|CRITICAL/HIGH\\\\|critical or \\\\`high\" IMPLEMENTATION.md CLAUDE.md README.md)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(git commit -qS -m 'feat\\(ui\\): paginate all list views; risk-rank images in SQL *)"
     ]
   }
 }

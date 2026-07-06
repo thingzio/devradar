@@ -46,10 +46,11 @@ type imageDetailView struct {
 	SBOMCount   int
 	DigestCount int
 
-	SBOMs      []sbomRow
-	Events     []eventRow
-	NextCursor string // for the change log
-	HasEvents  bool
+	SBOMs          []sbomRow
+	Events         []eventRow
+	NextCursor     string // for the change log
+	SBOMNextCursor string // for the versions/SBOMs list
+	HasEvents      bool
 }
 
 // handleImageDetail renders one image (CUJ-2 + CUJ-3): its versions/SBOMs list
@@ -67,8 +68,10 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 		min = q
 	}
 
-	// SBOMs for the image (newest generation first). ErrNotFound ⇒ unknown image.
-	sboms, _, err := s.store.SBOMsForRepo(r.Context(), tn.ID, repo, "", 100)
+	// SBOMs for the image (newest generation first), paginated independently of
+	// the change log via its own cursor param. ErrNotFound ⇒ unknown image.
+	sboms, sbomNext, err := s.store.SBOMsForRepo(r.Context(), tn.ID, repo,
+		r.URL.Query().Get("sbom_cursor"), 50)
 	if err != nil {
 		if errors.Is(err, postgres.ErrNotFound) {
 			http.Error(w, "image not found", http.StatusNotFound)
@@ -80,38 +83,40 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 
 	// Cross-digest change log, severity-filtered, paginated.
 	events, next, err := s.store.RepoTimeline(r.Context(), tn.ID, repo, min,
-		r.URL.Query().Get("cursor"), 100)
+		r.URL.Query().Get("cursor"), 50)
 	if err != nil {
 		http.Error(w, "failed to load change log", http.StatusInternalServerError)
 		return
 	}
 
-	v := imageDetailView{
-		Title:       lastPath(repo),
-		SignedIn:    true,
-		Email:       tn.Email,
-		Version:     s.opts.Version,
-		MinSeverity: min,
-		Repository:  repo,
-		Short:       lastPath(repo),
-		SBOMCount:   len(sboms),
-		NextCursor:  next,
-		HasEvents:   len(events) > 0,
+	// Authoritative header totals (independent of SBOM-list paging).
+	sum, err := s.store.RepoSummary(r.Context(), tn.ID, repo)
+	if err != nil {
+		if errors.Is(err, postgres.ErrNotFound) {
+			http.Error(w, "image not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "failed to load image", http.StatusInternalServerError)
+		return
 	}
 
-	seenDigest := map[string]struct{}{}
-	seenVer := map[string]struct{}{}
+	v := imageDetailView{
+		Title:          lastPath(repo),
+		SignedIn:       true,
+		Email:          tn.Email,
+		Version:        s.opts.Version,
+		MinSeverity:    min,
+		Repository:     repo,
+		Short:          lastPath(repo),
+		Versions:       sum.Versions,
+		SBOMCount:      sum.SBOMCount,
+		DigestCount:    sum.DigestCount,
+		NextCursor:     next,
+		SBOMNextCursor: sbomNext,
+		HasEvents:      len(events) > 0,
+	}
+
 	for _, sb := range sboms {
-		if _, ok := seenDigest[sb.Digest]; !ok {
-			seenDigest[sb.Digest] = struct{}{}
-			v.DigestCount++
-		}
-		if sb.Version != "" {
-			if _, ok := seenVer[sb.Version]; !ok {
-				seenVer[sb.Version] = struct{}{}
-				v.Versions = append(v.Versions, sb.Version)
-			}
-		}
 		v.SBOMs = append(v.SBOMs, sbomRow{
 			SBOMID:       sb.SBOMID,
 			ShortDigest:  shortDigest(sb.Digest),
