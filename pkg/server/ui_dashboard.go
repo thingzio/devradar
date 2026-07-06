@@ -48,6 +48,7 @@ type dashboardView struct {
 	HighCT     int
 	FixableCT  int
 	FixablePct int
+	KEVCount   int
 	FailureCT  int
 	HasData    bool
 }
@@ -89,6 +90,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		CriticalCT:  fs.Critical,
 		HighCT:      fs.High,
 		FixableCT:   fs.Fixable,
+		KEVCount:    fs.KEV,
 		FailureCT:   fs.Failures,
 		HasData:     fs.Total > 0,
 		FixablePct:  pct(fs.Fixable, fs.Total),

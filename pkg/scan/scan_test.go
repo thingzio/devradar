@@ -12,6 +12,7 @@ import (
 	"github.com/thingzio/devradar/pkg/converter"
 	"github.com/thingzio/devradar/pkg/data"
 	"github.com/thingzio/devradar/pkg/data/postgres"
+	"github.com/thingzio/devradar/pkg/enrich"
 	"github.com/thingzio/devradar/pkg/sbom"
 	"github.com/thingzio/devradar/pkg/scanner"
 )
@@ -36,6 +37,8 @@ func (f *fakeStore) RecordScanFailure(_ context.Context, sbomID, _, stage string
 	f.failures = append(f.failures, stage)
 	f.failedIDs = append(f.failedIDs, sbomID)
 }
+func (f *fakeStore) DistinctActiveCVEs(context.Context) ([]string, error)       { return nil, nil }
+func (f *fakeStore) UpsertCVEEnrichment(context.Context, []enrich.Record) error { return nil }
 
 type fakeFetcher struct {
 	data []byte
@@ -59,7 +62,7 @@ func TestRunner_ScansAndApplies(t *testing.T) {
 	sc := &fakeScanner{name: "grype", out: grypeDoc}
 	r := NewRunner(store, fakeFetcher{data: []byte(`{"bomFormat":"CycloneDX"}`)},
 		sbom.NewPassthroughCanonicalizer(), []scanner.Scanner{sc},
-		converter.DefaultRegistry(), DefaultOptions())
+		converter.DefaultRegistry(), nil, DefaultOptions())
 
 	if err := r.Execute(context.Background()); err != nil {
 		t.Fatalf("run: %v", err)
@@ -80,7 +83,7 @@ func TestRunner_ZeroFindingsTripwire(t *testing.T) {
 	sc := &fakeScanner{name: "grype", out: `{"descriptor":{"name":"grype"},"matches":[]}`}
 	r := NewRunner(store, fakeFetcher{data: []byte(`{"bomFormat":"CycloneDX"}`)},
 		sbom.NewPassthroughCanonicalizer(), []scanner.Scanner{sc},
-		converter.DefaultRegistry(), DefaultOptions())
+		converter.DefaultRegistry(), nil, DefaultOptions())
 
 	if err := r.Execute(context.Background()); err != nil {
 		t.Fatalf("run: %v", err)
@@ -98,7 +101,7 @@ func TestRunner_FetchFailureRecorded(t *testing.T) {
 	sc := &fakeScanner{name: "grype", out: grypeDoc}
 	r := NewRunner(store, fakeFetcher{err: errors.New("boom")},
 		sbom.NewPassthroughCanonicalizer(), []scanner.Scanner{sc},
-		converter.DefaultRegistry(), DefaultOptions())
+		converter.DefaultRegistry(), nil, DefaultOptions())
 
 	if err := r.Execute(context.Background()); err != nil {
 		t.Fatalf("run: %v", err)
@@ -121,7 +124,7 @@ func TestRunner_PanicIsolation(t *testing.T) {
 	sc := &fakeScanner{name: "grype", out: grypeDoc, panicOn: "poison"}
 	r := NewRunner(store, fakeFetcher{data: []byte(`{"bomFormat":"CycloneDX"}`)},
 		sbom.NewPassthroughCanonicalizer(), []scanner.Scanner{sc},
-		converter.DefaultRegistry(), DefaultOptions())
+		converter.DefaultRegistry(), nil, DefaultOptions())
 
 	// The run itself must not error — a per-SBOM panic is contained.
 	if err := r.Execute(context.Background()); err != nil {
@@ -143,6 +146,64 @@ func TestRunner_PanicIsolation(t *testing.T) {
 	if len(store.failedIDs) != 1 || store.failedIDs[0] != "poison" {
 		t.Errorf("panic should be attributed to poison, got %v", store.failedIDs)
 	}
+}
+
+// TestRunner_EnrichmentRefresh verifies the post-scan enrichment step calls the
+// enricher with the store's distinct CVEs and upserts what it returns; and that a
+// nil enricher (disabled) is a no-op.
+func TestRunner_EnrichmentRefresh(t *testing.T) {
+	store := &enrichStore{cves: []string{"CVE-2025-1", "CVE-2025-2"}}
+	en := &fakeEnricher{recs: []enrich.Record{{CVE: "CVE-2025-1", KEV: true}}}
+	r := NewRunner(store, fakeFetcher{}, sbom.NewPassthroughCanonicalizer(),
+		[]scanner.Scanner{&fakeScanner{name: "grype", out: grypeDoc}},
+		converter.DefaultRegistry(), en, DefaultOptions())
+	if err := r.Execute(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(en.gotCVEs) != 2 {
+		t.Errorf("enricher got %d cves, want 2", len(en.gotCVEs))
+	}
+	if store.upserted != 1 {
+		t.Errorf("upserted %d records, want 1", store.upserted)
+	}
+
+	// Nil enricher: enrichment skipped, no calls.
+	store2 := &enrichStore{cves: []string{"CVE-2025-1"}}
+	r2 := NewRunner(store2, fakeFetcher{}, sbom.NewPassthroughCanonicalizer(),
+		[]scanner.Scanner{&fakeScanner{name: "grype", out: grypeDoc}},
+		converter.DefaultRegistry(), nil, DefaultOptions())
+	if err := r2.Execute(context.Background()); err != nil {
+		t.Fatalf("run (nil enricher): %v", err)
+	}
+	if store2.upserted != 0 {
+		t.Errorf("nil enricher should not upsert, got %d", store2.upserted)
+	}
+}
+
+type enrichStore struct {
+	cves     []string
+	upserted int
+}
+
+func (s *enrichStore) ListActiveSBOMs(context.Context) ([]*postgres.SBOM, error) { return nil, nil }
+func (s *enrichStore) ApplyScan(context.Context, *postgres.SBOM, string, postgres.Versions, []data.Vulnerability) error {
+	return nil
+}
+func (s *enrichStore) RecordScanFailure(context.Context, string, string, string, error) {}
+func (s *enrichStore) DistinctActiveCVEs(context.Context) ([]string, error)             { return s.cves, nil }
+func (s *enrichStore) UpsertCVEEnrichment(_ context.Context, recs []enrich.Record) error {
+	s.upserted += len(recs)
+	return nil
+}
+
+type fakeEnricher struct {
+	recs    []enrich.Record
+	gotCVEs []string
+}
+
+func (f *fakeEnricher) Fetch(_ context.Context, cves []string) ([]enrich.Record, error) {
+	f.gotCVEs = cves
+	return f.recs, nil
 }
 
 // ── fake scanner plumbing ─────────────────────────────────────────────────────

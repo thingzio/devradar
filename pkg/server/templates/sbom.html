@@ -76,7 +76,7 @@
     {{if .Findings}}
     <table class="findings">
       <thead>
-        <tr><th>Severity</th><th>CVE</th><th>Package</th><th>Version</th><th class="num">CVSS</th><th>Fix</th><th>Scanner</th></tr>
+        <tr><th>Severity</th><th>CVE</th><th>Package</th><th>Version</th><th class="num">CVSS</th><th class="num">EPSS</th><th>KEV</th><th>Fix</th><th>Scanner</th></tr>
       </thead>
       <tbody>
         {{range .Findings}}
@@ -86,6 +86,8 @@
           <td>{{.Package}}</td>
           <td class="mono">{{.Version}}</td>
           <td class="num">{{.Score}}</td>
+          <td class="num">{{if .EPSS}}{{.EPSS}}{{else}}<span class="muted">—</span>{{end}}</td>
+          <td>{{if .KEV}}<span class="kev-badge" title="In CISA Known Exploited Vulnerabilities catalog — actively exploited">KEV</span>{{else}}<span class="muted">—</span>{{end}}</td>
           <td>{{if .IsFixed}}<span class="fix">available</span>{{else}}<span class="muted">none</span>{{end}}</td>
           <td class="muted">{{.Scanner}}</td>
         </tr>

@@ -17,6 +17,7 @@ import (
 	"github.com/thingzio/devradar/pkg/converter"
 	"github.com/thingzio/devradar/pkg/data"
 	"github.com/thingzio/devradar/pkg/data/postgres"
+	"github.com/thingzio/devradar/pkg/enrich"
 	"github.com/thingzio/devradar/pkg/gcs"
 	"github.com/thingzio/devradar/pkg/sbom"
 	"github.com/thingzio/devradar/pkg/scanner"
@@ -37,6 +38,14 @@ type Store interface {
 	ListActiveSBOMs(ctx context.Context) ([]*postgres.SBOM, error)
 	ApplyScan(ctx context.Context, sb *postgres.SBOM, scanner string, ver postgres.Versions, vulns []data.Vulnerability) error
 	RecordScanFailure(ctx context.Context, sbomID, scanner, stage string, cause error)
+	DistinctActiveCVEs(ctx context.Context) ([]string, error)
+	UpsertCVEEnrichment(ctx context.Context, recs []enrich.Record) error
+}
+
+// Enricher fetches CVE risk context (EPSS + KEV). Injectable so the scan loop is
+// testable without live feeds.
+type Enricher interface {
+	Fetch(ctx context.Context, cves []string) ([]enrich.Record, error)
 }
 
 // Options configures a scan run.
@@ -56,12 +65,14 @@ type Runner struct {
 	canon    sbom.Canonicalizer
 	scanners []scanner.Scanner
 	convs    *converter.Registry
+	enricher Enricher // nil disables enrichment
 	opts     Options
 }
 
-// NewRunner builds a Runner. scanners should be the *available* set.
-func NewRunner(store Store, fetch Fetcher, canon sbom.Canonicalizer, scanners []scanner.Scanner, convs *converter.Registry, opts Options) *Runner {
-	return &Runner{store: store, fetch: fetch, canon: canon, scanners: scanners, convs: convs, opts: opts}
+// NewRunner builds a Runner. scanners should be the *available* set. enricher may
+// be nil to skip CVE risk enrichment.
+func NewRunner(store Store, fetch Fetcher, canon sbom.Canonicalizer, scanners []scanner.Scanner, convs *converter.Registry, enricher Enricher, opts Options) *Runner {
+	return &Runner{store: store, fetch: fetch, canon: canon, scanners: scanners, convs: convs, enricher: enricher, opts: opts}
 }
 
 // Run is the entry point for the scan binary: it wires the store, blob fetcher,
@@ -97,7 +108,12 @@ func Run(ctx context.Context, opts Options) error {
 		canon = sbom.NewPassthroughCanonicalizer()
 	}
 
-	return NewRunner(store, blobs, canon, scanners, converter.DefaultRegistry(), opts).Execute(ctx)
+	var enricher Enricher
+	if config.EnrichEnabled() {
+		enricher = enrich.New()
+	}
+
+	return NewRunner(store, blobs, canon, scanners, converter.DefaultRegistry(), enricher, opts).Execute(ctx)
 }
 
 // Execute runs one full pass over all active SBOMs. It returns an error only for
@@ -130,7 +146,45 @@ func (r *Runner) Execute(ctx context.Context) error {
 		scanned++
 	}
 	slog.Info("scan run complete", "scanned", scanned)
+
+	// Refresh CVE risk enrichment (EPSS + KEV) after findings are written, so the
+	// distinct-CVE target set includes anything this run just discovered. Additive
+	// overlay: a failure here degrades context, never the scan — log and move on.
+	r.refreshEnrichment(ctx)
 	return nil
+}
+
+// refreshEnrichment pulls EPSS + KEV for the CVEs currently in findings and
+// upserts them. Best-effort: enrichment is a read-time overlay, so a feed outage
+// leaves prior (possibly stale) data in place rather than failing the run.
+func (r *Runner) refreshEnrichment(ctx context.Context) {
+	if r.enricher == nil {
+		return
+	}
+	cves, err := r.store.DistinctActiveCVEs(ctx)
+	if err != nil {
+		slog.Warn("enrichment skipped: list cves", "error", err)
+		return
+	}
+	if len(cves) == 0 {
+		return
+	}
+	recs, err := r.enricher.Fetch(ctx, cves)
+	if err != nil {
+		slog.Warn("enrichment fetch failed", "error", err)
+		return
+	}
+	if err := r.store.UpsertCVEEnrichment(ctx, recs); err != nil {
+		slog.Warn("enrichment upsert failed", "error", err)
+		return
+	}
+	kev := 0
+	for _, x := range recs {
+		if x.KEV {
+			kev++
+		}
+	}
+	slog.Info("enrichment refreshed", "cves", len(cves), "records", len(recs), "kev", kev)
 }
 
 // scanOne processes a single SBOM across all scanners. All failures are recorded

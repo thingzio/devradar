@@ -5,10 +5,11 @@
   <p class="sub">Vulnerability overview across your tracked images.</p>
 
   {{if .HasData}}
-  <section class="stats">
+  <section class="stats stats-5">
     <div class="stat"><span class="stat-n">{{.ImageCount}}</span><span class="stat-l">Images</span></div>
     <div class="stat"><span class="stat-n">{{.TotalCount}}</span><span class="stat-l">Findings</span></div>
     <div class="stat"><span class="stat-n danger-n">{{.CriticalCT}}</span><span class="stat-l">Critical</span></div>
+    <div class="stat"><span class="stat-n kev-n">{{.KEVCount}}</span><span class="stat-l" title="CVEs in CISA's Known Exploited Vulnerabilities catalog — patch first">KEV — exploited</span></div>
     <div class="stat"><span class="stat-n ok-n">{{.FixablePct}}%</span><span class="stat-l">Fixable now</span></div>
   </section>
   {{end}}

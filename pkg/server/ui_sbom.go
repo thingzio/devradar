@@ -19,6 +19,8 @@ type findingRow struct {
 	Score    string
 	IsFixed  bool
 	Scanner  string
+	KEV      bool
+	EPSS     string // percentage, e.g. "94%"; "" when no data
 }
 
 type pkgRow struct {
@@ -135,6 +137,8 @@ func (s *Server) handleSBOMDetail(w http.ResponseWriter, r *http.Request) {
 			Score:    formatScore(f.Score),
 			IsFixed:  f.IsFixed,
 			Scanner:  f.Scanner,
+			KEV:      f.KEV,
+			EPSS:     formatEPSS(f.EPSS),
 		})
 	}
 	for _, p := range pkgs {
@@ -157,4 +161,12 @@ func formatScore(f float32) string {
 		return "—"
 	}
 	return strconv.FormatFloat(float64(f), 'g', -1, 32)
+}
+
+// formatEPSS renders an EPSS probability [0,1] as a percentage; "" when absent.
+func formatEPSS(p *float32) string {
+	if p == nil {
+		return ""
+	}
+	return strconv.Itoa(int(*p*100+0.5)) + "%"
 }

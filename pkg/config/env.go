@@ -102,3 +102,10 @@ func EmailFrom() string {
 func DebugEnabled() bool {
 	return GetEnvBool("DEVRADAR_DEBUG")
 }
+
+// EnrichEnabled reports whether the scan job refreshes CVE risk enrichment
+// (EPSS + CISA KEV) each run. On by default; set DEVRADAR_ENRICH=false to
+// disable (e.g. in an air-gapped run with no feed egress).
+func EnrichEnabled() bool {
+	return GetEnv("DEVRADAR_ENRICH", "true") != "false"
+}

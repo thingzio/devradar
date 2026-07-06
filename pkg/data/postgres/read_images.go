@@ -121,10 +121,13 @@ type FleetStats struct {
 	Critical int `json:"critical"`
 	High     int `json:"high"`
 	Fixable  int `json:"fixable"`
+	KEV      int `json:"kev"` // distinct known-exploited CVEs across the fleet
 	Failures int `json:"failures"`
 }
 
-// FleetStats returns tenant-wide finding totals across all active images.
+// FleetStats returns tenant-wide finding totals across all active images,
+// including a count of distinct known-exploited (KEV) CVEs — the strongest
+// "patch now" signal in the fleet.
 func (s *Store) FleetStats(ctx context.Context, tenantID string) (FleetStats, error) {
 	var fs FleetStats
 	err := s.db.QueryRowContext(ctx, `
@@ -135,13 +138,15 @@ func (s *Store) FleetStats(ctx context.Context, tenantID string) (FleetStats, er
 			COUNT(*) FILTER (WHERE f.severity = 'critical'),
 			COUNT(*) FILTER (WHERE f.severity = 'high'),
 			COUNT(*) FILTER (WHERE f.is_fixed),
+			COUNT(DISTINCT f.exposure) FILTER (WHERE e.kev),
 			(SELECT COUNT(*) FROM devradar_scan_failure sf
 			   JOIN devradar_sbom s2 ON s2.id = sf.sbom_id
 			  WHERE s2.tenant_id = $1)
 		FROM devradar_sbom sb
 		LEFT JOIN devradar_finding f ON f.sbom_id = sb.id
+		LEFT JOIN devradar_cve_enrichment e ON e.cve = f.exposure
 		WHERE sb.tenant_id = $1 AND sb.status = 'active'`,
-		tenantID).Scan(&fs.Images, &fs.Total, &fs.Critical, &fs.High, &fs.Fixable, &fs.Failures)
+		tenantID).Scan(&fs.Images, &fs.Total, &fs.Critical, &fs.High, &fs.Fixable, &fs.KEV, &fs.Failures)
 	if err != nil {
 		return FleetStats{}, fmt.Errorf("fleet stats: %w", err)
 	}

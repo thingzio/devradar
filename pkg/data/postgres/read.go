@@ -106,7 +106,8 @@ func applyThreshold(c SeverityCounts, min string) SeverityCounts {
 	return c
 }
 
-// Finding is a tenant-facing current finding row.
+// Finding is a tenant-facing current finding row. EPSS/KEV are enrichment
+// overlays joined from devradar_cve_enrichment (nil/false when no data).
 type Finding struct {
 	Scanner  string  `json:"scanner"`
 	Exposure string  `json:"exposure"`
@@ -115,6 +116,10 @@ type Finding struct {
 	Severity string  `json:"severity"`
 	Score    float32 `json:"score"`
 	IsFixed  bool    `json:"is_fixed"`
+	// Risk enrichment.
+	EPSS    *float32 `json:"epss,omitempty"`     // [0,1] exploit probability
+	EPSSPct *float32 `json:"epss_pct,omitempty"` // [0,1] percentile
+	KEV     bool     `json:"kev,omitempty"`      // in CISA known-exploited catalog
 }
 
 // severityRankSQL orders findings worst-first; shared by the query and the
@@ -149,11 +154,16 @@ func (s *Store) FindingsBySBOM(ctx context.Context, tenantID, sbomID, minSeverit
 	args = append(args, fetch)
 	limitPos := fmt.Sprintf("$%d", len(args))
 
+	// severityRankSQL references bare `severity`, which is unambiguous here since
+	// only devradar_finding has that column even after the enrichment join.
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
-		SELECT scanner, exposure, package, version, severity, score, is_fixed, finding_id, %s AS rank
-		FROM devradar_finding
-		WHERE sbom_id = $1 AND severity = ANY($2)%s
-		ORDER BY rank, exposure, finding_id
+		SELECT f.scanner, f.exposure, f.package, f.version, f.severity, f.score, f.is_fixed,
+		       f.finding_id, %s AS rank,
+		       e.epss_score, e.epss_percentile, COALESCE(e.kev, false)
+		FROM devradar_finding f
+		LEFT JOIN devradar_cve_enrichment e ON e.cve = f.exposure
+		WHERE f.sbom_id = $1 AND f.severity = ANY($2)%s
+		ORDER BY rank, f.exposure, f.finding_id
 		LIMIT %s`, severityRankSQL, conds, limitPos), args...)
 	if err != nil {
 		return nil, "", fmt.Errorf("findings: %w", err)
@@ -169,7 +179,8 @@ func (s *Store) FindingsBySBOM(ctx context.Context, tenantID, sbomID, minSeverit
 	for rows.Next() {
 		var f Finding
 		var k key
-		if err := rows.Scan(&f.Scanner, &f.Exposure, &f.Package, &f.Version, &f.Severity, &f.Score, &f.IsFixed, &k.id, &k.rank); err != nil {
+		if err := rows.Scan(&f.Scanner, &f.Exposure, &f.Package, &f.Version, &f.Severity, &f.Score, &f.IsFixed,
+			&k.id, &k.rank, &f.EPSS, &f.EPSSPct, &f.KEV); err != nil {
 			return nil, "", fmt.Errorf("scan finding: %w", err)
 		}
 		k.exp = f.Exposure

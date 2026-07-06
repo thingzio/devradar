@@ -164,6 +164,15 @@ code {
 .stat-l { color: var(--muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; }
 .stat-n.danger-n { color: var(--danger); }
 .stat-n.ok-n { color: var(--ok); }
+.stat-n.kev-n { color: var(--danger); }
+.stats-5 { grid-template-columns: repeat(5, 1fr); }
+
+/* KEV badge — the strongest "patch now" signal, so it's the loudest. */
+.kev-badge {
+  display: inline-block; padding: 0.1rem 0.45rem; border-radius: 4px;
+  background: var(--danger); color: #fff; font-size: 0.72rem; font-weight: 700;
+  letter-spacing: 0.03em;
+}
 
 /* ── Image table + severity bar ────────────────────────────────────────────── */
 table.images td { vertical-align: middle; }
@@ -234,7 +243,7 @@ table.findings td { vertical-align: middle; }
 }
 
 @media (max-width: 640px) {
-  .stats { grid-template-columns: repeat(2, 1fr); }
+  .stats, .stats-5 { grid-template-columns: repeat(2, 1fr); }
   .col-bar { display: none; }
   .page-content { padding: 20px 16px; }
   .top-nav { padding: 10px 16px; }
