@@ -121,10 +121,10 @@ scan: ## Runs the daily scan job once against local Postgres + blob store
 	$(LOCAL_ENV) go run -ldflags "$(LDFLAGS)" ./cmd/devradar-scan
 
 .PHONY: submit
-submit: ## Submits an SBOM to a running server. Usage: make submit SBOM=path [REF=img@sha256:..]
+submit: ## Submits by image (SBOM auto-generated) or file. Usage: make submit IMAGE=repo:tag | SBOM=file [REF=img@sha256:..]
 	@test -n "$(DR_TOKEN)" || { echo "set DR_TOKEN (see 'make seed')"; exit 1; }
-	@test -n "$(SBOM)" || { echo "usage: make submit SBOM=<file> [REF=<image@sha256:...>]"; exit 1; }
-	DR_TOKEN="$(DR_TOKEN)" go run ./tools/sbom-submit "$(SBOM)" "$(REF)"
+	@test -n "$(IMAGE)$(SBOM)" || { echo "usage: make submit IMAGE=<repo:tag> | SBOM=<file> [REF=<image@sha256:...>]"; exit 1; }
+	DR_TOKEN="$(DR_TOKEN)" go run ./tools/sbom-submit "$(if $(IMAGE),$(IMAGE),$(SBOM))" "$(REF)"
 
 # =============================================================================
 # Build & release
