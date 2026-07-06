@@ -780,13 +780,15 @@ CREATE TABLE devradar_scan_failure (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     sbom_id     TEXT NOT NULL,
     scanner     TEXT,
-    stage       TEXT NOT NULL,  -- download|canonicalize|scan|parse|detect|convert|zero-findings|persist
+    stage       TEXT NOT NULL,  -- download|canonicalize|scan|parse|detect|convert|zero-findings|persist|panic
     error       TEXT NOT NULL,
     occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
 
 **Scanner divergence is observable, not silent.** A scanner can legitimately return nothing where another finds CVEs — e.g. Trivy matches Alpine packages only against the Alpine `secdb` (no NVD/CPE fallback), so on an **EOL** release (no advisories) it reports 0 while Grype's `nvd:cpe` fallback still matches. The `zeroFindingFloor` tripwire turns "0 findings on a non-trivial SBOM" into a recorded `zero-findings` failure rather than a misleading "all clear", and the scan job **also logs a `slog.Warn`** at every failure so it surfaces in Cloud Run logs. Tenants read the rows via `GET /v1/sboms/{id}/failures`; `/v1/images` carries a per-image `failures` count. This is the mechanism behind "Grype/Trivy divergence = cataloger/matcher-disagreement signal" — the disagreement is captured, not dropped.
+
+**One bad apple never stops the batch.** The daily run iterates every active SBOM and each is fully isolated: `scanOne` returns no error — every failure path (download, canonicalize, scan, parse, detect, convert, zero-findings, persist) records a `devradar_scan_failure` row + a `slog.Warn` and moves to the next SBOM. Isolation holds *per scanner within an SBOM* too — Grype faulting on one SBOM still lets Trivy run on it. Because the SBOM is attacker-controllable untrusted input, both `scanOne` and `scanWith` also `recover()` from panics, recording a `panic`-stage failure rather than unwinding through the run loop and crashing the whole job (which Cloud Run would then retry straight back onto the same poison SBOM). Only genuine whole-batch failures abort the run: lost DB connection, `ListActiveSBOMs` error, `EnsureDB` (no vuln DB = nothing can scan), or the 90-min job timeout.
 
 Note the DDL is written **idempotent** (`CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` in the real files, elided here for readability) and applied by the embedded advisory-lock migration runner described in [Platform Alignment](#platform-alignment) — the same pattern both siblings use.
 

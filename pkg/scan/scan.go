@@ -134,8 +134,20 @@ func (r *Runner) Execute(ctx context.Context) error {
 }
 
 // scanOne processes a single SBOM across all scanners. All failures are recorded
-// and swallowed so one bad SBOM never stops the batch.
+// and swallowed so one bad SBOM never stops the batch. The deferred recover is
+// the batch-level guarantee: the SBOM is attacker-controllable untrusted input,
+// so a panic (nil deref, a gabs edge case, a malformed document) is turned into
+// a recorded panic-stage failure rather than unwinding through the run loop and
+// crashing the whole daily job — which would then retry onto the same poison
+// SBOM. Per-scanner panics are recovered separately in scanWith so one scanner
+// faulting still lets the other run on the same SBOM.
 func (r *Runner) scanOne(ctx context.Context, sb *postgres.SBOM) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			r.recordFailure(ctx, sb.ID, "", "panic", fmt.Errorf("panic: %v", rec))
+		}
+	}()
+
 	raw, err := r.fetch.Fetch(ctx, sb.ObjectPath)
 	if err != nil {
 		r.recordFailure(ctx, sb.ID, "", "download", err)
@@ -161,6 +173,14 @@ func (r *Runner) scanOne(ctx context.Context, sb *postgres.SBOM) {
 }
 
 func (r *Runner) scanWith(ctx context.Context, sb *postgres.SBOM, sc scanner.Scanner, sbomPath string) {
+	// Recover per-scanner so a fault in one scanner (or its converter) is a
+	// recorded failure that still lets the other scanner run on this SBOM.
+	defer func() {
+		if rec := recover(); rec != nil {
+			r.recordFailure(ctx, sb.ID, sc.Name(), "panic", fmt.Errorf("panic: %v", rec))
+		}
+	}()
+
 	out, cleanup, err := tempOut(sb.ID, sc.Name())
 	if err != nil {
 		r.recordFailure(ctx, sb.ID, sc.Name(), "scan", err)

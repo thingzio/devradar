@@ -156,7 +156,7 @@ CREATE TABLE IF NOT EXISTS devradar_scan_failure (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     sbom_id     TEXT NOT NULL,
     scanner     TEXT,
-    stage       TEXT NOT NULL,                         -- download|canonicalize|scan|parse|detect|convert|zero-findings|persist
+    stage       TEXT NOT NULL,                         -- download|canonicalize|scan|parse|detect|convert|zero-findings|persist|panic
     error       TEXT NOT NULL,
     occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

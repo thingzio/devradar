@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,18 +19,22 @@ import (
 // ── fakes ─────────────────────────────────────────────────────────────────────
 
 type fakeStore struct {
-	sboms    []*postgres.SBOM
-	applied  int
-	failures []string // "stage" per recorded failure
+	sboms      []*postgres.SBOM
+	applied    int
+	appliedIDs []string // SBOM ids that reached ApplyScan
+	failures   []string // "stage" per recorded failure
+	failedIDs  []string // SBOM ids that recorded a failure
 }
 
 func (f *fakeStore) ListActiveSBOMs(context.Context) ([]*postgres.SBOM, error) { return f.sboms, nil }
-func (f *fakeStore) ApplyScan(_ context.Context, _ *postgres.SBOM, _ string, _ postgres.Versions, _ []data.Vulnerability) error {
+func (f *fakeStore) ApplyScan(_ context.Context, sb *postgres.SBOM, _ string, _ postgres.Versions, _ []data.Vulnerability) error {
 	f.applied++
+	f.appliedIDs = append(f.appliedIDs, sb.ID)
 	return nil
 }
-func (f *fakeStore) RecordScanFailure(_ context.Context, _, _, stage string, _ error) {
+func (f *fakeStore) RecordScanFailure(_ context.Context, sbomID, _, stage string, _ error) {
 	f.failures = append(f.failures, stage)
+	f.failedIDs = append(f.failedIDs, sbomID)
 }
 
 type fakeFetcher struct {
@@ -102,11 +108,49 @@ func TestRunner_FetchFailureRecorded(t *testing.T) {
 	}
 }
 
+// TestRunner_PanicIsolation is the "one bad apple" guarantee: a scanner that
+// panics on a single SBOM must not abort the daily batch. The panic is recorded
+// as a panic-stage failure and every other SBOM still scans.
+func TestRunner_PanicIsolation(t *testing.T) {
+	store := &fakeStore{sboms: []*postgres.SBOM{
+		{ID: "good1", TenantID: "t1", Format: "cyclonedx", PackageCount: 50, ObjectPath: "x"},
+		{ID: "poison", TenantID: "t1", Format: "cyclonedx", PackageCount: 50, ObjectPath: "x"},
+		{ID: "good2", TenantID: "t1", Format: "cyclonedx", PackageCount: 50, ObjectPath: "x"},
+	}}
+	// Scanner panics only for the SBOM whose id ("poison") lands in the temp path.
+	sc := &fakeScanner{name: "grype", out: grypeDoc, panicOn: "poison"}
+	r := NewRunner(store, fakeFetcher{data: []byte(`{"bomFormat":"CycloneDX"}`)},
+		sbom.NewPassthroughCanonicalizer(), []scanner.Scanner{sc},
+		converter.DefaultRegistry(), DefaultOptions())
+
+	// The run itself must not error — a per-SBOM panic is contained.
+	if err := r.Execute(context.Background()); err != nil {
+		t.Fatalf("run returned error, want batch to survive panic: %v", err)
+	}
+	// Both good SBOMs scanned despite the poison one in the middle.
+	if store.applied != 2 {
+		t.Errorf("ApplyScan calls = %d, want 2 (good1, good2)", store.applied)
+	}
+	for _, want := range []string{"good1", "good2"} {
+		if !slices.Contains(store.appliedIDs, want) {
+			t.Errorf("%s should have scanned; applied = %v", want, store.appliedIDs)
+		}
+	}
+	// The poison SBOM recorded a panic-stage failure.
+	if len(store.failures) != 1 || store.failures[0] != "panic" {
+		t.Errorf("want one panic failure, got %v", store.failures)
+	}
+	if len(store.failedIDs) != 1 || store.failedIDs[0] != "poison" {
+		t.Errorf("panic should be attributed to poison, got %v", store.failedIDs)
+	}
+}
+
 // ── fake scanner plumbing ─────────────────────────────────────────────────────
 
 type fakeScanner struct {
-	name string
-	out  string
+	name    string
+	out     string
+	panicOn string // if non-empty, ScanSBOM panics when the SBOM's id appears in the temp path
 }
 
 func (f *fakeScanner) Name() string                                  { return f.name }
@@ -115,6 +159,12 @@ func (f *fakeScanner) DBVersion() string                             { return "d
 func (f *fakeScanner) EnsureDB(context.Context, time.Duration) error { return nil }
 func (f *fakeScanner) IsAvailable() bool                             { return true }
 func (f *fakeScanner) ConverterName() string                         { return f.name }
-func (f *fakeScanner) ScanSBOM(_ context.Context, _, outPath string) error {
+func (f *fakeScanner) ScanSBOM(_ context.Context, sbomPath, outPath string) error {
+	// writeTemp names the file "devradar-sbom-<id>-*.json", so the poison SBOM's
+	// id shows up in the path — match on it to simulate a scanner faulting on one
+	// specific untrusted input.
+	if f.panicOn != "" && strings.Contains(sbomPath, f.panicOn) {
+		panic("boom: poison SBOM")
+	}
 	return os.WriteFile(outPath, []byte(f.out), 0o600)
 }
