@@ -48,6 +48,7 @@ func maybeGunzip(b []byte, limit int) ([]byte, error) {
 type submitRequest struct {
 	SBOM        string `json:"sbom"`                   // base64-encoded bytes (required)
 	ImageRef    string `json:"image_ref,omitempty"`    // override the image reference
+	Version     string `json:"version,omitempty"`      // human tag (e.g. "v1.20.2"); else parsed from image_ref
 	GeneratedAt string `json:"generated_at,omitempty"` // RFC3339 override
 }
 
@@ -124,6 +125,14 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 	if req.ImageRef != "" {
 		imageRef = req.ImageRef // caller override wins for the label
 	}
+	// Split the effective ref into its stable grouping identity (repository) and
+	// version (tag). The tag is often absent when submitters pin by digest, so
+	// an explicit `version` in the request takes precedence.
+	repository, refTag, _ := sbom.SplitRef(imageRef)
+	version := req.Version
+	if version == "" {
+		version = refTag
+	}
 	generatedAt := subj.GeneratedAt
 	if req.GeneratedAt != "" {
 		if t, perr := time.Parse(time.RFC3339, req.GeneratedAt); perr == nil {
@@ -150,6 +159,8 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 		ID:           id,
 		TenantID:     tn.ID,
 		ImageRef:     imageRef,
+		Repository:   repository,
+		Version:      version,
 		Digest:       subj.Digest,
 		Format:       string(subj.Format),
 		SpecVersion:  subj.SpecVersion,

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/lib/pq"
@@ -159,35 +160,55 @@ type Event struct {
 }
 
 // EventsBySBOM returns change history for one SBOM at or above minSeverity
-// (unknown always included), newest first. Tenant-scoped.
-func (s *Store) EventsBySBOM(ctx context.Context, tenantID, sbomID, minSeverity string, limit int) ([]Event, error) {
+// (unknown always included), newest first, keyset-paginated on (occurred_at, id)
+// so a long history pages cleanly instead of silently truncating at a fixed cap.
+// Tenant-scoped.
+func (s *Store) EventsBySBOM(ctx context.Context, tenantID, sbomID, minSeverity, cursor string, limit int) (items []Event, next string, err error) {
 	if err := s.assertSBOMOwner(ctx, tenantID, sbomID); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	if limit <= 0 || limit > 1000 {
-		limit = 200
+	eff, fetch := clampLimit(limit)
+	cur, hasCur := decodeCursor(cursor)
+
+	args := []any{sbomID, pq.Array(data.AllowedSeverities(minSeverity))}
+	keyset := ""
+	if hasCur {
+		keyset = ` AND (occurred_at, id) < ($3, $4)`
+		args = append(args, cur.TS, cur.ID)
 	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT scanner, event_type, exposure, package, severity, score, cause, occurred_at
+	args = append(args, fetch)
+	limitPos := fmt.Sprintf("$%d", len(args))
+
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
+		SELECT id, scanner, event_type, exposure, package, severity, score, cause, occurred_at
 		FROM devradar_finding_event
-		WHERE sbom_id = $1 AND severity = ANY($2)
-		ORDER BY occurred_at DESC LIMIT $3`,
-		sbomID, pq.Array(data.AllowedSeverities(minSeverity)), limit)
+		WHERE sbom_id = $1 AND severity = ANY($2)%s
+		ORDER BY occurred_at DESC, id DESC
+		LIMIT %s`, keyset, limitPos), args...)
 	if err != nil {
-		return nil, fmt.Errorf("events: %w", err)
+		return nil, "", fmt.Errorf("events: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []Event
+	var ids []int64
 	for rows.Next() {
 		var e Event
-		if err := rows.Scan(&e.Scanner, &e.EventType, &e.Exposure, &e.Package,
+		var id int64
+		if err := rows.Scan(&id, &e.Scanner, &e.EventType, &e.Exposure, &e.Package,
 			&e.Severity, &e.Score, &e.Cause, &e.OccurredAt); err != nil {
-			return nil, fmt.Errorf("scan event: %w", err)
+			return nil, "", fmt.Errorf("scan event: %w", err)
 		}
-		out = append(out, e)
+		items = append(items, e)
+		ids = append(ids, id)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	if len(items) > eff {
+		items = items[:eff]
+		next = encodeCursor(items[len(items)-1].OccurredAt, strconv.FormatInt(ids[eff-1], 10))
+	}
+	return items, next, nil
 }
 
 // TimelineEvent is one change in an image's history, carrying the digest it

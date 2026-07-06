@@ -131,13 +131,22 @@ func TestIngest_AndRead(t *testing.T) {
 		t.Errorf("resubmit should report existing:true")
 	}
 
-	// List images includes it.
+	// List images (grouped by repository) includes the image's repository.
 	req3 := httptest.NewRequest(http.MethodGet, "/v1/images", nil)
 	req3.Header.Set("Authorization", "Bearer "+tok)
 	rec3 := httptest.NewRecorder()
 	h.ServeHTTP(rec3, req3)
-	if rec3.Code != http.StatusOK || !strings.Contains(rec3.Body.String(), sub.SBOMID) {
-		t.Errorf("images should include %s, got %s", sub.SBOMID, rec3.Body.String())
+	if rec3.Code != http.StatusOK || !strings.Contains(rec3.Body.String(), `"repository":"redis"`) {
+		t.Errorf("images should include repository redis, got %s", rec3.Body.String())
+	}
+
+	// The per-image SBOM list (CUJ-2) returns this SBOM under its repository.
+	req4 := httptest.NewRequest(http.MethodGet, "/v1/images/sboms?repo=redis", nil)
+	req4.Header.Set("Authorization", "Bearer "+tok)
+	rec4 := httptest.NewRecorder()
+	h.ServeHTTP(rec4, req4)
+	if rec4.Code != http.StatusOK || !strings.Contains(rec4.Body.String(), sub.SBOMID) {
+		t.Errorf("/v1/images/sboms?repo=redis should include %s, got %s", sub.SBOMID, rec4.Body.String())
 	}
 }
 

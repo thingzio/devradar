@@ -379,8 +379,16 @@ images that don't embed the digest.
 ```bash
 make scan                            # runs grype + trivy over all active SBOMs once
 
-# list tracked images with their severity breakdown
+# CUJ-1: images I track — grouped by repository (one row per image), paginated
 curl -s http://localhost:8080/v1/images -H "Authorization: Bearer $DR_TOKEN"
+
+# CUJ-2: the SBOMs (versions/digests) for one image, newest generation first
+curl -s "http://localhost:8080/v1/images/sboms?repo=quay.io/jetstack/cert-manager-cainjector" \
+  -H "Authorization: Bearer $DR_TOKEN"
+
+# CUJ-3: how one image's vulnerabilities changed over time, across ALL its digests
+curl -s "http://localhost:8080/v1/images/timeline?repo=quay.io/jetstack/cert-manager-cainjector" \
+  -H "Authorization: Bearer $DR_TOKEN"
 
 # one SBOM's metadata + severity breakdown (use sbom_id from step 4)
 curl -s http://localhost:8080/v1/sboms/<sbom_id>          -H "Authorization: Bearer $DR_TOKEN"
@@ -389,12 +397,15 @@ curl -s http://localhost:8080/v1/sboms/<sbom_id>          -H "Authorization: Bea
 curl -s http://localhost:8080/v1/sboms/<sbom_id>/findings -H "Authorization: Bearer $DR_TOKEN"
 curl -s http://localhost:8080/v1/sboms/<sbom_id>/events   -H "Authorization: Bearer $DR_TOKEN"
 
-# change history for an image ACROSS digests (ref is a query param — refs have slashes)
-curl -s "http://localhost:8080/v1/images/timeline?ref=alpine" -H "Authorization: Bearer $DR_TOKEN"
-
 # stop tracking an image (archive — drops from scans + images; history kept)
 curl -s -X DELETE http://localhost:8080/v1/sboms/<sbom_id> -H "Authorization: Bearer $DR_TOKEN"
 ```
+
+**Pagination.** List endpoints (`/v1/images`, `/v1/images/sboms`,
+`/v1/images/timeline`, `/v1/sboms/{id}/events`) return at most `?limit` rows
+(default 100, max 1000) and include a `next_cursor` when more exist — pass it
+back as `?cursor=<token>` for the next page. Cursors are opaque; keyset-based, so
+paging is stable under concurrent writes.
 
 SBOMs may also be submitted **gzip-compressed** (base64 the gzip bytes); the
 server detects and decompresses them, with a decompression-bomb guard.

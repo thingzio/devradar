@@ -401,13 +401,18 @@ Read endpoints (session or token auth):
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET`  | `/v1/images` | List the tenant's tracked images (latest state per digest). |
-| `GET`  | `/v1/images/timeline?ref=<image_ref>` | Event history for an image ref across digests. `ref` is a query param, not a path segment (image refs contain slashes). |
+| `GET`  | `/v1/images` | **CUJ-1** — tracked images **grouped by repository** (one row per image regardless of version/digest count), severity rollup. Paginated (`?limit`, `?cursor`). |
+| `GET`  | `/v1/images/sboms?repo=<repository>` | **CUJ-2** — the SBOMs tracked for one image, newest generation first (`COALESCE(generated_at, submitted_at)`). Paginated. `repo` is a query param (repositories contain slashes). |
+| `GET`  | `/v1/images/timeline?repo=<repository>` | **CUJ-3** — change history for an image across **all** its versions/digests, newest first. Paginated. Legacy `?ref=<image_ref>` (exact match) is still honored, unpaginated. |
 | `GET`  | `/v1/sboms/{id}` | One SBOM's metadata + severity breakdown. |
 | `DELETE` | `/v1/sboms/{id}` | Archive (stop tracking) an SBOM — drops from scan set + images; findings/events retained. Idempotent. |
 | `GET`  | `/v1/sboms/{id}/findings` | Current findings for one SBOM. |
-| `GET`  | `/v1/sboms/{id}/events` | Change events for one SBOM. |
+| `GET`  | `/v1/sboms/{id}/events` | Change events for one SBOM. Paginated (`?limit`, `?cursor`). |
 | `GET`  | `/v1/sboms/{id}/failures?limit=N` | Recent scan failures for one SBOM (newest first) — a scanner/stage that errored or returned nothing. Makes a silently-absent scanner visible (e.g. Trivy finding 0 CVEs on an EOL distro it has no advisories for). `/v1/images` also carries a `failures` count per image so a non-zero count is visible in the rollup. |
+
+**Image identity & grouping.** `devradar_sbom` splits an image reference into three axes: `repository` (registry/path — the stable grouping key), `version` (the tag, e.g. `v1.20.2`; nullable — often absent when submitters pin by digest), and `digest` (the immutable pin). Grouping by `repository` is what makes "track one image across its versions and digests over time" (CUJ-1/2/3) work regardless of how the SBOM was pinned. `image_ref` is retained as the raw submitted label.
+
+**Pagination.** List endpoints use **keyset (seek) pagination**, not `OFFSET`: the cursor is an opaque base64 token carrying the last row's ordering key (a timestamp + a unique tiebreaker — `id` for events, `repository` for the image list). Each response includes `next_cursor` only when a further page exists; pass it back as `?cursor=`. Default page size 100, max 1000. Keyset avoids `OFFSET`'s O(n) scan and its skip/duplicate anomalies under concurrent writes — important because the event log (CUJ-3) is the unbounded, high-volume table.
 
 ### Untrusted-input handling
 
@@ -813,12 +818,13 @@ The read endpoints (tenant-scoped, `WHERE tenant_id = $1`):
 
 | Method | Path | Returns |
 |---|---|---|
-| `GET` | `/v1/images` | tracked images (latest state per digest) |
-| `GET` | `/v1/images/timeline?ref=<image_ref>` | change events for an image ref across digests (ref is a query param — refs contain slashes) |
+| `GET` | `/v1/images` | tracked images grouped by repository (CUJ-1); paginated |
+| `GET` | `/v1/images/sboms?repo=<repository>` | SBOMs for one image, newest generation first (CUJ-2); paginated |
+| `GET` | `/v1/images/timeline?repo=<repository>` | change events for an image across all its digests (CUJ-3); paginated. Legacy `?ref=` still honored |
 | `GET` | `/v1/sboms/{id}` | one SBOM's metadata + severity breakdown |
 | `DELETE` | `/v1/sboms/{id}` | archive (stop tracking) — drops from scan set + images; findings/events retained; idempotent |
 | `GET` | `/v1/sboms/{id}/findings` | current findings for one SBOM |
-| `GET` | `/v1/sboms/{id}/events` | change events for one SBOM |
+| `GET` | `/v1/sboms/{id}/events` | change events for one SBOM; paginated |
 | `GET` | `/v1/sboms/{id}/failures` | recent scan failures for one SBOM (a scanner/stage that errored or returned nothing) |
 
 **Severity threshold (a view/policy knob, not a write filter).** Findings are always *stored* at every severity; which ones a read *returns* is a tenant policy. Each tenant has a `min_severity` (default `medium`, in `devradar_tenant`). Every read endpoint filters at or above it, and accepts an independent `?min_severity=` per-request override — so `/findings` and `/events` can use different thresholds in the same session:

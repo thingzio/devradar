@@ -22,12 +22,14 @@ func (s *Store) UpsertSBOM(ctx context.Context, sb *SBOM) (id string, inserted b
 	}
 	err = s.db.QueryRowContext(ctx, `
 		INSERT INTO devradar_sbom
-			(id, tenant_id, image_ref, digest, format, spec_version, tool, tool_version,
-			 package_count, object_path, verification_status, status, generated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+			(id, tenant_id, image_ref, repository, version, digest, format, spec_version,
+			 tool, tool_version, package_count, object_path, verification_status, status,
+			 generated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 		ON CONFLICT (tenant_id, digest, format) DO NOTHING
 		RETURNING id`,
-		sb.ID, sb.TenantID, sb.ImageRef, sb.Digest, sb.Format, sb.SpecVersion,
+		sb.ID, sb.TenantID, sb.ImageRef, sb.Repository, nullStr(sb.Version),
+		sb.Digest, sb.Format, sb.SpecVersion,
 		nullStr(sb.Tool), nullStr(sb.ToolVersion), sb.PackageCount, sb.ObjectPath,
 		defaultStr(sb.VerificationStatus, "unverified"), defaultStr(sb.Status, "active"),
 		generatedAt,

@@ -7,6 +7,8 @@ type SBOM struct {
 	ID                 string
 	TenantID           string
 	ImageRef           string
+	Repository         string // grouping key: registry/path, no tag/digest
+	Version            string // the tag, e.g. "v1.20.2"; empty on digest-only submits
 	Digest             string
 	Format             string
 	SpecVersion        string

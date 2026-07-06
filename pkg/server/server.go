@@ -90,6 +90,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/sboms", apiToken(http.HandlerFunc(s.handleSubmitSBOM)))
 	mux.Handle("GET /v1/images", apiToken(http.HandlerFunc(s.handleListImages)))
 	mux.Handle("GET /v1/images/timeline", apiToken(http.HandlerFunc(s.handleTimeline)))
+	mux.Handle("GET /v1/images/sboms", apiToken(http.HandlerFunc(s.handleImageSBOMs)))
 	mux.Handle("GET /v1/sboms/{id}", apiToken(http.HandlerFunc(s.handleGetSBOM)))
 	mux.Handle("DELETE /v1/sboms/{id}", apiToken(http.HandlerFunc(s.handleArchiveSBOM)))
 	mux.Handle("GET /v1/sboms/{id}/findings", apiToken(http.HandlerFunc(s.handleFindings)))

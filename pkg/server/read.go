@@ -27,8 +27,10 @@ func minSeverity(r *http.Request, tn *tenant.Tenant) (string, bool) {
 	return data.DefaultMinSeverity, true
 }
 
-// handleListImages returns the tenant's tracked images with the full severity
-// breakdown; ?min_severity sets which levels count toward "relevant".
+// handleListImages returns the tenant's tracked images grouped by repository —
+// one row per image (CUJ-1), regardless of how many versions/digests it has —
+// with a severity rollup. Paginated (?limit, ?cursor). ?min_severity trims the
+// breakdown.
 func (s *Server) handleListImages(w http.ResponseWriter, r *http.Request) {
 	tn := middleware.TenantFromContext(r.Context())
 	if tn == nil {
@@ -40,26 +42,45 @@ func (s *Server) handleListImages(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid min_severity (want critical|high|medium|low|negligible)")
 		return
 	}
-	images, err := s.store.ListImages(r.Context(), tn.ID, min)
+	images, next, err := s.store.ListRepoImages(r.Context(), tn.ID, min,
+		r.URL.Query().Get("cursor"), pageLimit(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list images")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"min_severity": min, "images": images})
+	writeJSON(w, http.StatusOK, page(map[string]any{"min_severity": min, "images": images}, next))
 }
 
-// handleTimeline returns the change history for an image ref across all its
-// digests. The ref is a query param (not a path segment) because image refs
-// contain slashes, which a stdlib ServeMux path wildcard can't capture.
-func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
+// handleImageSBOMs lists the SBOMs tracked for one repository (CUJ-2), newest
+// generation first. The repository is a `repo=` query param (not a path segment)
+// because it contains slashes a stdlib ServeMux wildcard can't capture.
+func (s *Server) handleImageSBOMs(w http.ResponseWriter, r *http.Request) {
 	tn := middleware.TenantFromContext(r.Context())
 	if tn == nil {
 		writeError(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
-	ref := r.URL.Query().Get("ref")
-	if ref == "" {
-		writeError(w, http.StatusBadRequest, "missing ref query parameter")
+	repo := r.URL.Query().Get("repo")
+	if repo == "" {
+		writeError(w, http.StatusBadRequest, "missing repo query parameter")
+		return
+	}
+	sboms, next, err := s.store.SBOMsForRepo(r.Context(), tn.ID, repo,
+		r.URL.Query().Get("cursor"), pageLimit(r))
+	if err != nil {
+		writeReadErr(w, err, "failed to list sboms")
+		return
+	}
+	writeJSON(w, http.StatusOK, page(map[string]any{"repository": repo, "sboms": sboms}, next))
+}
+
+// handleTimeline returns the change history for an image across all its digests
+// (CUJ-3). The image is a `repo=` query param (its slashes preclude a path
+// wildcard); the legacy `ref=` param is still honored for an exact image_ref.
+func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
+	tn := middleware.TenantFromContext(r.Context())
+	if tn == nil {
+		writeError(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
 	min, ok := minSeverity(r, tn)
@@ -67,13 +88,26 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid min_severity")
 		return
 	}
-	limit := 200
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			limit = n
+
+	// Preferred: group by repository across every version/digest.
+	if repo := r.URL.Query().Get("repo"); repo != "" {
+		events, next, err := s.store.RepoTimeline(r.Context(), tn.ID, repo, min,
+			r.URL.Query().Get("cursor"), pageLimit(r))
+		if err != nil {
+			writeReadErr(w, err, "failed to load timeline")
+			return
 		}
+		writeJSON(w, http.StatusOK, page(map[string]any{"repository": repo, "min_severity": min, "timeline": events}, next))
+		return
 	}
-	events, err := s.store.ImageTimeline(r.Context(), tn.ID, ref, min, limit)
+
+	// Legacy: exact image_ref match (kept for back-compat; not paginated).
+	ref := r.URL.Query().Get("ref")
+	if ref == "" {
+		writeError(w, http.StatusBadRequest, "missing repo (or legacy ref) query parameter")
+		return
+	}
+	events, err := s.store.ImageTimeline(r.Context(), tn.ID, ref, min, pageLimit(r))
 	if err != nil {
 		writeReadErr(w, err, "failed to load timeline")
 		return
@@ -150,18 +184,13 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid min_severity")
 		return
 	}
-	limit := 200
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			limit = n
-		}
-	}
-	events, err := s.store.EventsBySBOM(r.Context(), tn.ID, r.PathValue("id"), min, limit)
+	events, next, err := s.store.EventsBySBOM(r.Context(), tn.ID, r.PathValue("id"), min,
+		r.URL.Query().Get("cursor"), pageLimit(r))
 	if err != nil {
 		writeReadErr(w, err, "failed to load events")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"min_severity": min, "events": events})
+	writeJSON(w, http.StatusOK, page(map[string]any{"min_severity": min, "events": events}, next))
 }
 
 // handleFailures returns recent scan failures for one of the tenant's SBOMs
@@ -196,4 +225,25 @@ func writeReadErr(w http.ResponseWriter, err error, msg string) {
 		return
 	}
 	writeError(w, http.StatusInternalServerError, msg)
+}
+
+// pageLimit reads ?limit (0 when absent/invalid; the store clamps to its
+// default and maximum).
+func pageLimit(r *http.Request) int {
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return 0
+}
+
+// page attaches next_cursor to a response body when there is a further page.
+// Callers pass an opaque cursor ("" when exhausted); an empty cursor is omitted
+// so a fully-returned list has no next_cursor field.
+func page(body map[string]any, next string) map[string]any {
+	if next != "" {
+		body["next_cursor"] = next
+	}
+	return body
 }

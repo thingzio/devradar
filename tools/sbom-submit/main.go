@@ -56,7 +56,7 @@ func main() {
 	arg := os.Args[1]
 
 	var sbomBytes []byte
-	var imageRef string
+	var imageRef, version string
 
 	if fileExists(arg) {
 		// File mode: submit an existing SBOM, with an optional image_ref override.
@@ -76,10 +76,11 @@ func main() {
 			log.Fatalf("generate sbom for %s: %v", arg, err)
 		}
 		sbomBytes = sbom
-		imageRef = ref // digest-pinned ref, so the stored label is unambiguous
+		imageRef = ref       // digest-pinned ref, so the stored label is unambiguous
+		version = tagOf(arg) // preserve the human tag (e.g. v1.20.2) the digest replaced
 	}
 
-	if err := submit(base, token, sbomBytes, imageRef); err != nil {
+	if err := submit(base, token, sbomBytes, imageRef, version); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -120,10 +121,21 @@ func repoOf(image string) string {
 	return image
 }
 
-func submit(base, token string, sbom []byte, imageRef string) error {
+// tagOf returns the :tag from an image reference, or "" if none (mirrors repoOf).
+func tagOf(image string) string {
+	if i := strings.LastIndex(image, ":"); i != -1 && !strings.Contains(image[i+1:], "/") {
+		return image[i+1:]
+	}
+	return ""
+}
+
+func submit(base, token string, sbom []byte, imageRef, version string) error {
 	payload := map[string]string{"sbom": base64.StdEncoding.EncodeToString(sbom)}
 	if imageRef != "" {
 		payload["image_ref"] = imageRef
+	}
+	if version != "" {
+		payload["version"] = version
 	}
 	body, _ := json.Marshal(payload)
 
