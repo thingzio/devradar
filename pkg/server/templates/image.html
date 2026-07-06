@@ -1,0 +1,79 @@
+{{template "head" .}}
+{{template "nav" .}}
+<main class="page-content">
+  <p class="crumb"><a href="/dashboard">← Dashboard</a></p>
+  <h1 class="page-title">{{.Short}}</h1>
+  <p class="sub repo-full">{{.Repository}}</p>
+
+  <div class="chips">
+    {{if .Versions}}{{range .Versions}}<span class="tag">{{.}}</span>{{end}}{{end}}
+    <span class="muted">{{.SBOMCount}} SBOM{{if ne .SBOMCount 1}}s{{end}}</span>
+    <span class="muted">·</span>
+    <span class="muted">{{.DigestCount}} digest{{if ne .DigestCount 1}}s{{end}}</span>
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <h2>Change log</h2>
+      <form class="inline sev" method="get" action="/images">
+        <input type="hidden" name="repo" value="{{.Repository}}">
+        <label class="muted" for="sev">Min severity</label>
+        <select id="sev" name="min_severity" onchange="this.form.submit()">
+          {{$cur := .MinSeverity}}
+          {{range (list "critical" "high" "medium" "low" "negligible")}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}
+        </select>
+      </form>
+    </div>
+    <p class="muted" style="margin-top:0">How this image's vulnerabilities changed over time, across all its digests. History builds as daily scans run.</p>
+
+    {{if .HasEvents}}
+    <table class="events">
+      <thead>
+        <tr><th>When</th><th>Change</th><th>Cause</th><th>Severity</th><th>CVE</th><th>Package</th><th>Digest</th></tr>
+      </thead>
+      <tbody>
+        {{range .Events}}
+        <tr>
+          <td class="nowrap">{{.When}}</td>
+          <td><span class="evt evt-{{.EventType}}">{{.EventType}}</span></td>
+          <td><span class="cause cause-{{.Cause}}" title="{{.CauseLabel}}">{{.CauseLabel}}</span></td>
+          <td><span class="sev-badge sev-b-{{.Severity}}">{{.Severity}}</span></td>
+          <td><a href="https://nvd.nist.gov/vuln/detail/{{.Exposure}}" target="_blank" rel="noopener">{{.Exposure}}</a></td>
+          <td>{{.Package}}</td>
+          <td class="muted"><code>{{.ShortDigest}}</code></td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+    {{if .NextCursor}}
+    <p class="loadmore"><a href="/images?repo={{.Repository}}&min_severity={{.MinSeverity}}&cursor={{.NextCursor}}">Load more →</a></p>
+    {{end}}
+    {{else}}
+    <p class="muted">No changes at or above the current severity threshold yet.</p>
+    {{end}}
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Versions &amp; SBOMs</h2></div>
+    <p class="muted" style="margin-top:0">Each SBOM submitted for this image, newest generation first.</p>
+    <table>
+      <thead>
+        <tr><th>Version</th><th>Digest</th><th>Generated</th><th class="num">Packages</th><th>Generator</th></tr>
+      </thead>
+      <tbody>
+        {{range .SBOMs}}
+        <tr>
+          <td>{{if .Version}}<span class="tag">{{.Version}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
+          <td><code>{{.ShortDigest}}</code></td>
+          <td class="nowrap">{{.GeneratedAt}}</td>
+          <td class="num">{{.PackageCount}}</td>
+          <td class="muted">{{if .Tool}}{{.Tool}}{{else}}—{{end}}</td>
+        </tr>
+        {{else}}
+        <tr><td colspan="5" class="muted">No SBOMs.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</main>
+{{template "foot" .}}

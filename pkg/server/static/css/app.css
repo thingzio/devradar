@@ -184,6 +184,35 @@ table.images td { vertical-align: middle; }
 .sev-medium   { background: var(--sev-medium); }
 .sev-low      { background: var(--sev-low); }
 
+/* ── Image detail ──────────────────────────────────────────────────────────── */
+.crumb { font-size: 0.85rem; margin-bottom: 0.5rem; }
+.repo-full { font-family: var(--font-mono); font-size: 0.85rem; word-break: break-all; }
+.chips { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.5rem; font-size: 0.85rem; }
+.nowrap { white-space: nowrap; }
+.loadmore { margin-top: 1rem; }
+
+/* Event type + cause + severity badges (small pills) */
+.evt, .cause, .sev-badge {
+  display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px;
+  font-size: 0.75rem; font-weight: 600; white-space: nowrap;
+}
+.evt-added    { background: color-mix(in srgb, var(--danger) 15%, transparent); color: var(--danger); }
+.evt-resolved { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
+.evt-fixed    { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
+.evt-rerated  { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+
+.cause { border: 1px solid var(--border); color: var(--muted); }
+.cause-image   { border-color: color-mix(in srgb, var(--danger) 40%, transparent); color: var(--danger); }
+.cause-db      { border-color: color-mix(in srgb, var(--accent) 40%, transparent); color: var(--accent); }
+.cause-tooling { border-color: var(--border); color: var(--muted); }
+
+.sev-badge { color: #fff; }
+.sev-b-critical { background: var(--sev-critical); }
+.sev-b-high     { background: var(--sev-high); }
+.sev-b-medium   { background: var(--sev-medium); color: #1f2328; }
+.sev-b-low      { background: var(--sev-low); }
+.sev-b-negligible, .sev-b-unknown { background: var(--surface-hover); color: var(--muted); }
+
 /* ── Footer ────────────────────────────────────────────────────────────────── */
 .page-footer {
   max-width: 76rem; margin: 2rem auto 0; padding: 1.5rem 30px;

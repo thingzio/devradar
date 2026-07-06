@@ -44,6 +44,7 @@ func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
 
 	authed := middleware.RequireAuth(db, loginPath)
 	mux.Handle("GET /dashboard", authed(http.HandlerFunc(s.handleDashboard)))
+	mux.Handle("GET /images", authed(http.HandlerFunc(s.handleImageDetail)))
 	mux.Handle("GET /tokens", authed(http.HandlerFunc(s.handleTokensPage)))
 	mux.Handle("POST /tokens", authed(http.HandlerFunc(s.handleCreateToken)))
 	mux.Handle("POST /tokens/{id}/revoke", authed(http.HandlerFunc(s.handleRevokeToken)))
