@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 )
 
@@ -11,7 +10,8 @@ import (
 // package inventory, so there is one SBOM per digest+format per tenant. Both
 // exact re-submission and a *different* SBOM for the same digest+format (e.g.
 // by-tag vs by-digest generation, or a newer generator) resolve to the existing
-// row — the first submission is canonical.
+// row — the first submission is canonical for the content. A re-submit may,
+// however, backfill the version (tag) label if the original submit lacked one.
 //
 // Returns the effective row id (which may differ from sb.ID on conflict) and
 // whether a new row was inserted (false ⇒ the caller may skip writing bytes).
@@ -20,33 +20,32 @@ func (s *Store) UpsertSBOM(ctx context.Context, sb *SBOM) (id string, inserted b
 	if !sb.GeneratedAt.IsZero() {
 		generatedAt = sb.GeneratedAt.UTC()
 	}
+	// The SBOM bytes are immutable and content-addressed, so on conflict we never
+	// touch content-derived columns (digest/format/package_count/tool/…). But the
+	// version (tag) is a caller-supplied *label*: a re-submit that now carries a
+	// tag should fill it in. COALESCE keeps an existing version when a later
+	// digest-only submit omits it, so the label is never wiped. `xmax = 0` is
+	// true only for a freshly inserted row (false for the DO UPDATE path), which
+	// is how we report `inserted` accurately without a second query.
 	err = s.db.QueryRowContext(ctx, `
 		INSERT INTO devradar_sbom
 			(id, tenant_id, image_ref, repository, version, digest, format, spec_version,
 			 tool, tool_version, package_count, object_path, verification_status, status,
 			 generated_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-		ON CONFLICT (tenant_id, digest, format) DO NOTHING
-		RETURNING id`,
+		ON CONFLICT (tenant_id, digest, format) DO UPDATE
+		SET version = COALESCE(EXCLUDED.version, devradar_sbom.version)
+		RETURNING id, (xmax = 0)`,
 		sb.ID, sb.TenantID, sb.ImageRef, sb.Repository, nullStr(sb.Version),
 		sb.Digest, sb.Format, sb.SpecVersion,
 		nullStr(sb.Tool), nullStr(sb.ToolVersion), sb.PackageCount, sb.ObjectPath,
 		defaultStr(sb.VerificationStatus, "unverified"), defaultStr(sb.Status, "active"),
 		generatedAt,
-	).Scan(&id)
-	if err == nil {
-		return id, true, nil
-	}
-	if err != sql.ErrNoRows {
+	).Scan(&id, &inserted)
+	if err != nil {
 		return "", false, fmt.Errorf("upsert sbom: %w", err)
 	}
-	// Conflict on (tenant_id, digest, format): return the existing row's id.
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT id FROM devradar_sbom WHERE tenant_id=$1 AND digest=$2 AND format=$3`,
-		sb.TenantID, sb.Digest, sb.Format).Scan(&id); err != nil {
-		return "", false, fmt.Errorf("upsert sbom (lookup existing): %w", err)
-	}
-	return id, false, nil
+	return id, inserted, nil
 }
 
 // ListActiveSBOMs returns all active SBOMs across all tenants — the scan job's

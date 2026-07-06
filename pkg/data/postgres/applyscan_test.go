@@ -75,6 +75,78 @@ func vuln(cve, pkg, ver, sev string, score float32, fixed bool) data.Vulnerabili
 	return data.Vulnerability{Exposure: cve, Package: pkg, Version: ver, Severity: sev, Score: score, IsFixed: fixed}
 }
 
+// TestUpsertSBOM_VersionBackfill verifies the conflict semantics: a first submit
+// with no version, then a re-submit of the same (tenant, digest, format) that
+// now carries a tag backfills the version label without inserting a new row; a
+// later digest-only re-submit must NOT wipe it.
+func TestUpsertSBOM_VersionBackfill(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+
+	var tenantID string
+	if err := st.DB().QueryRowContext(ctx,
+		`INSERT INTO devradar_tenant (email) VALUES ($1) RETURNING id`,
+		"ver-"+randID(t)[:8]+"@example.com").Scan(&tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	digest := "sha256:" + randID(t) + randID(t)
+	base := postgres.SBOM{
+		ID: randID(t) + randID(t), TenantID: tenantID, ImageRef: "reg.test/app",
+		Repository: "reg.test/app", Digest: digest, Format: "cyclonedx",
+		PackageCount: 10, ObjectPath: "gs://x",
+	}
+
+	// 1. First submit, no version.
+	id, inserted, err := st.UpsertSBOM(ctx, &base)
+	if err != nil || !inserted {
+		t.Fatalf("first submit: inserted=%v err=%v", inserted, err)
+	}
+	if got := sbomVersion(t, st, id); got != "" {
+		t.Errorf("version after no-version submit = %q, want empty", got)
+	}
+
+	// 2. Re-submit same digest, now with a tag → backfills, does NOT insert.
+	withVer := base
+	withVer.ID = randID(t) + randID(t) // different candidate id; conflict resolves to existing
+	withVer.Version = "v1.20.2"
+	id2, inserted2, err := st.UpsertSBOM(ctx, &withVer)
+	if err != nil {
+		t.Fatalf("re-submit with version: %v", err)
+	}
+	if inserted2 {
+		t.Errorf("re-submit should not insert a new row")
+	}
+	if id2 != id {
+		t.Errorf("re-submit id = %s, want existing %s", id2, id)
+	}
+	if got := sbomVersion(t, st, id); got != "v1.20.2" {
+		t.Errorf("version after backfill = %q, want v1.20.2", got)
+	}
+
+	// 3. Later digest-only re-submit must NOT wipe the version.
+	noVer := base
+	noVer.Version = ""
+	if _, _, err := st.UpsertSBOM(ctx, &noVer); err != nil {
+		t.Fatalf("digest-only re-submit: %v", err)
+	}
+	if got := sbomVersion(t, st, id); got != "v1.20.2" {
+		t.Errorf("version after digest-only re-submit = %q, want v1.20.2 (not wiped)", got)
+	}
+}
+
+func sbomVersion(t *testing.T, st *postgres.Store, id string) string {
+	t.Helper()
+	var v *string
+	if err := st.DB().QueryRowContext(context.Background(),
+		`SELECT version FROM devradar_sbom WHERE id=$1`, id).Scan(&v); err != nil {
+		t.Fatalf("read version: %v", err)
+	}
+	if v == nil {
+		return ""
+	}
+	return *v
+}
+
 // TestApplyScan_DeltaEngine exercises the full lifecycle: first scan (all added,
 // image-caused), an unchanged rescan (no events), a DB update that adds a
 // finding (db-caused), a re-rating, a resolve, and a tooling-only upgrade
