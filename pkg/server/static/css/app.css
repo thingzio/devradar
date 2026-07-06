@@ -175,6 +175,17 @@ code {
 }
 td.small .tag { font-size: 0.72rem; }
 
+/* VEX status badge + suppressed-row dimming */
+.vex-badge {
+  display: inline-block; padding: 0.1rem 0.45rem; border-radius: 999px;
+  font-size: 0.72rem; font-weight: 600; border: 1px solid var(--border); white-space: nowrap;
+}
+.vex-not_affected { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+.vex-fixed        { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+.vex-under_investigation { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+.vex-affected     { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
+tr.vexed td { opacity: 0.65; }
+
 /* ── Image table + severity bar ────────────────────────────────────────────── */
 table.images td { vertical-align: middle; }
 .img-name { font-weight: 600; }

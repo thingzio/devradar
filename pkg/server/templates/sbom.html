@@ -59,11 +59,15 @@
     <div class="card-head">
       <h2>Findings</h2>
       <div class="filters">
-        <a class="chip-toggle {{if .FixableOnly}}on{{end}}" href="/sboms/{{.SBOMID}}?min_severity={{.MinSeverity}}{{if not .FixableOnly}}&fixable=true{{end}}">
+        <a class="chip-toggle {{if .FixableOnly}}on{{end}}" href="/sboms/{{.SBOMID}}?min_severity={{.MinSeverity}}{{if not .FixableOnly}}&fixable=true{{end}}{{if .ShowSuppressed}}&suppressed=true{{end}}">
           {{if .FixableOnly}}✓ Fixable only{{else}}Fixable only{{end}}
+        </a>
+        <a class="chip-toggle {{if .ShowSuppressed}}on{{end}}" href="/sboms/{{.SBOMID}}?min_severity={{.MinSeverity}}{{if .FixableOnly}}&fixable=true{{end}}{{if not .ShowSuppressed}}&suppressed=true{{end}}" title="Include findings a VEX statement marked not_affected or fixed">
+          {{if .ShowSuppressed}}✓ Showing VEX-suppressed{{else}}Show VEX-suppressed{{end}}
         </a>
         <form class="inline sev" method="get" action="/sboms/{{.SBOMID}}">
           {{if .FixableOnly}}<input type="hidden" name="fixable" value="true">{{end}}
+          {{if .ShowSuppressed}}<input type="hidden" name="suppressed" value="true">{{end}}
           <label class="muted" for="sev">Min severity</label>
           <select id="sev" name="min_severity" onchange="this.form.submit()">
             {{$cur := .MinSeverity}}
@@ -76,11 +80,11 @@
     {{if .Findings}}
     <table class="findings">
       <thead>
-        <tr><th>Severity</th><th>CVE</th><th>Package</th><th>Version</th><th class="num">CVSS</th><th class="num">EPSS</th><th>KEV</th><th>Fix</th><th>Scanner</th></tr>
+        <tr><th>Severity</th><th>CVE</th><th>Package</th><th>Version</th><th class="num">CVSS</th><th class="num">EPSS</th><th>KEV</th><th>Fix</th><th>VEX</th><th>Scanner</th></tr>
       </thead>
       <tbody>
         {{range .Findings}}
-        <tr>
+        <tr{{if .VEXStatus}} class="vexed"{{end}}>
           <td><span class="sev-badge sev-b-{{.Severity}}">{{.Severity}}</span></td>
           <td><a href="https://nvd.nist.gov/vuln/detail/{{.Exposure}}" target="_blank" rel="noopener">{{.Exposure}}</a></td>
           <td>{{.Package}}</td>
@@ -89,13 +93,14 @@
           <td class="num">{{if .EPSS}}{{.EPSS}}{{else}}<span class="muted">—</span>{{end}}</td>
           <td>{{if .KEV}}<span class="kev-badge" title="In CISA Known Exploited Vulnerabilities catalog — actively exploited">KEV</span>{{else}}<span class="muted">—</span>{{end}}</td>
           <td>{{if .IsFixed}}<span class="fix">available</span>{{else}}<span class="muted">none</span>{{end}}</td>
+          <td>{{if .VEXStatus}}<span class="vex-badge vex-{{.VEXStatus}}" title="VEX: {{.VEXStatus}}">{{.VEXStatus}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
           <td class="muted">{{.Scanner}}</td>
         </tr>
         {{end}}
       </tbody>
     </table>
     {{if .NextCursor}}
-    <p class="loadmore"><a href="/sboms/{{.SBOMID}}?min_severity={{.MinSeverity}}{{if .FixableOnly}}&fixable=true{{end}}&cursor={{.NextCursor}}">Load more →</a></p>
+    <p class="loadmore"><a href="/sboms/{{.SBOMID}}?min_severity={{.MinSeverity}}{{if .FixableOnly}}&fixable=true{{end}}{{if .ShowSuppressed}}&suppressed=true{{end}}&cursor={{.NextCursor}}">Load more →</a></p>
     {{end}}
     {{else}}
     <p class="muted">No findings{{if .FixableOnly}} with an available fix{{end}} at or above the current severity threshold.</p>

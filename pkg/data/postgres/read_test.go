@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/thingzio/devradar/pkg/data/postgres"
+	"github.com/thingzio/devradar/pkg/vex"
 )
 
 // TestListImages_ThresholdTrimsBreakdown verifies that ListImages keeps every
@@ -177,6 +178,87 @@ func TestImageTimeline_AcrossDigests(t *testing.T) {
 	}
 }
 
+// TestVEXSuppression verifies a not_affected VEX statement hides a finding from
+// the default view (and from counts), is included when showSuppressed is set and
+// carries its status.
+func TestVEXSuppression(t *testing.T) {
+	st, err := postgres.NewFromEnv(context.Background())
+	if err != nil {
+		t.Skipf("skipping (no database): %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	suffix := hex.EncodeToString(b)
+	var tenantID string
+	if err := st.DB().QueryRowContext(ctx,
+		`INSERT INTO devradar_tenant (email) VALUES ($1) RETURNING id`,
+		"vex-"+suffix+"@example.com").Scan(&tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	sbomID := "vex-" + suffix
+	digest := "sha256:vex" + suffix
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_sbom (id, tenant_id, image_ref, repository, digest, format, object_path)
+		VALUES ($1,$2,'reg/app','reg/app',$3,'cyclonedx','gs://x')`, sbomID, tenantID, digest); err != nil {
+		t.Fatalf("seed sbom: %v", err)
+	}
+	for _, cve := range []string{"CVE-A" + suffix, "CVE-B" + suffix} {
+		if _, err := st.DB().ExecContext(ctx, `
+			INSERT INTO devradar_finding (sbom_id, scanner, finding_id, exposure, package, version, severity, score, is_fixed)
+			VALUES ($1,'grype',$2,$3,'pkg','1.0','high',7.0,false)`,
+			sbomID, cve+"/pkg/1.0", cve); err != nil {
+			t.Fatalf("seed finding: %v", err)
+		}
+	}
+
+	countDefault := func() int {
+		f, _, err := st.FindingsBySBOM(ctx, tenantID, sbomID, "negligible", false, false, "", 50)
+		if err != nil {
+			t.Fatalf("findings: %v", err)
+		}
+		return len(f)
+	}
+	if countDefault() != 2 {
+		t.Fatalf("pre-VEX findings = %d, want 2", countDefault())
+	}
+
+	doc := &vex.Document{Author: "sec@x", Raw: []byte(`{}`), Statements: []vex.Statement{
+		{ProductDigest: digest, Vulnerability: "CVE-A" + suffix, Status: vex.StatusNotAffected,
+			Justification: "vulnerable_code_not_in_execute_path"},
+	}}
+	if _, matched, err := st.SaveVEXDocument(ctx, tenantID, doc); err != nil || matched != 1 {
+		t.Fatalf("save vex: matched=%d err=%v", matched, err)
+	}
+
+	if got := countDefault(); got != 1 {
+		t.Errorf("post-VEX default findings = %d, want 1 (one suppressed)", got)
+	}
+	all, _, _ := st.FindingsBySBOM(ctx, tenantID, sbomID, "negligible", false, true, "", 50)
+	if len(all) != 2 {
+		t.Fatalf("showSuppressed findings = %d, want 2", len(all))
+	}
+	var sawStatus bool
+	for _, f := range all {
+		if f.Exposure == "CVE-A"+suffix && f.VEXStatus == vex.StatusNotAffected {
+			sawStatus = true
+		}
+	}
+	if !sawStatus {
+		t.Errorf("suppressed finding should carry vex_status=not_affected")
+	}
+
+	d, err := st.GetSBOM(ctx, tenantID, sbomID, "negligible")
+	if err != nil {
+		t.Fatalf("get sbom: %v", err)
+	}
+	if d.Counts.Total != 1 {
+		t.Errorf("suppressed count: total = %d, want 1", d.Counts.Total)
+	}
+}
+
 // TestFleetCVEs_BlastRadiusRanking verifies CVEs are grouped across images,
 // ranked KEV-first then severity then blast radius, and that CVEDetail lists
 // every occurrence.
@@ -323,7 +405,7 @@ func TestFindings_PagingFilterRollup(t *testing.T) {
 	var got []string
 	cursor := ""
 	for range 5 {
-		page, next, err := st.FindingsBySBOM(ctx, tenantID, sbomID, "negligible", false, cursor, 2)
+		page, next, err := st.FindingsBySBOM(ctx, tenantID, sbomID, "negligible", false, false, cursor, 2)
 		if err != nil {
 			t.Fatalf("findings page: %v", err)
 		}
@@ -346,7 +428,7 @@ func TestFindings_PagingFilterRollup(t *testing.T) {
 	}
 
 	// Fixable filter: only the 2 fixed findings (1 crit, 1 med).
-	fx, _, err := st.FindingsBySBOM(ctx, tenantID, sbomID, "negligible", true, "", 50)
+	fx, _, err := st.FindingsBySBOM(ctx, tenantID, sbomID, "negligible", true, false, "", 50)
 	if err != nil {
 		t.Fatalf("fixable findings: %v", err)
 	}

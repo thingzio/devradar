@@ -71,6 +71,7 @@ func (s *Store) ListRepoImages(ctx context.Context, tenantID, minSeverity, curso
 			         + COUNT(f.finding_id)                         AS risk
 			FROM devradar_sbom sb
 			LEFT JOIN devradar_finding f ON f.sbom_id = sb.id
+				AND NOT `+vexSuppressedByDigestCVE+`
 			WHERE sb.tenant_id = $1 AND sb.status = 'active'
 			GROUP BY sb.tenant_id, sb.repository
 		)
@@ -144,6 +145,7 @@ func (s *Store) FleetStats(ctx context.Context, tenantID string) (FleetStats, er
 			  WHERE s2.tenant_id = $1)
 		FROM devradar_sbom sb
 		LEFT JOIN devradar_finding f ON f.sbom_id = sb.id
+			AND NOT `+vexSuppressedByDigestCVE+`
 		LEFT JOIN devradar_cve_enrichment e ON e.cve = f.exposure
 		WHERE sb.tenant_id = $1 AND sb.status = 'active'`,
 		tenantID).Scan(&fs.Images, &fs.Total, &fs.Critical, &fs.High, &fs.Fixable, &fs.KEV, &fs.Failures)

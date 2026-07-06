@@ -400,3 +400,79 @@ func TestFindings_SeverityThreshold(t *testing.T) {
 		t.Errorf("invalid min_severity: status %d, want 400", rec.Code)
 	}
 }
+
+// TestVEX_SubmitAndSuppress covers the full VEX round trip over HTTP: post an
+// OpenVEX doc, confirm it suppresses the matched finding by default and that
+// ?suppressed=true reveals it, and that an invalid doc is rejected.
+func TestVEX_SubmitAndSuppress(t *testing.T) {
+	srv, st := testServer(t)
+	tenantID, tok := seedTenantToken(t, st)
+	h := srv.Handler()
+	ctx := context.Background()
+
+	digest := "sha256:" + hex.EncodeToString(mustRand(t, 32))
+	sbomID := "vex-" + tenantID
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_sbom (id, tenant_id, image_ref, repository, digest, format, object_path)
+		VALUES ($1,$2,'reg/app','reg/app',$3,'cyclonedx','gs://x')`, sbomID, tenantID, digest); err != nil {
+		t.Fatalf("seed sbom: %v", err)
+	}
+	for _, cve := range []string{"CVE-2025-1", "CVE-2025-2"} {
+		if _, err := st.DB().ExecContext(ctx, `
+			INSERT INTO devradar_finding (sbom_id, scanner, finding_id, exposure, package, version, severity, score, is_fixed)
+			VALUES ($1,'grype',$2,$3,'p','1','high',7.0,false)`, sbomID, cve+"/p/1", cve); err != nil {
+			t.Fatalf("seed finding: %v", err)
+		}
+	}
+
+	do := func(method, path, body string) *httptest.ResponseRecorder {
+		rq := httptest.NewRequest(method, path, strings.NewReader(body))
+		rq.Header.Set("Authorization", "Bearer "+tok)
+		rc := httptest.NewRecorder()
+		h.ServeHTTP(rc, rq)
+		return rc
+	}
+	countFindings := func(query string) int {
+		rc := do(http.MethodGet, "/v1/sboms/"+sbomID+"/findings?min_severity=negligible"+query, "")
+		var body struct {
+			Findings []json.RawMessage `json:"findings"`
+		}
+		_ = json.Unmarshal(rc.Body.Bytes(), &body)
+		return len(body.Findings)
+	}
+
+	if countFindings("") != 2 {
+		t.Fatalf("pre-VEX findings = %d, want 2", countFindings(""))
+	}
+
+	// Post a valid VEX suppressing CVE-2025-1.
+	doc := `{"@context":"https://openvex.dev/ns","author":"sec@x","statements":[
+		{"vulnerability":"CVE-2025-1","products":[{"@id":"` + digest + `"}],
+		 "status":"not_affected","justification":"vulnerable_code_not_in_execute_path"}]}`
+	rc := do(http.MethodPost, "/v1/vex", doc)
+	if rc.Code != http.StatusAccepted || !strings.Contains(rc.Body.String(), `"matched":1`) {
+		t.Fatalf("POST /v1/vex = %d: %s", rc.Code, rc.Body.String())
+	}
+
+	if got := countFindings(""); got != 1 {
+		t.Errorf("post-VEX default findings = %d, want 1 (one suppressed)", got)
+	}
+	if got := countFindings("&suppressed=true"); got != 2 {
+		t.Errorf("suppressed=true findings = %d, want 2", got)
+	}
+
+	// Invalid VEX (not_affected without justification) → 422.
+	bad := `{"statements":[{"vulnerability":"CVE-2025-2","products":[{"@id":"` + digest + `"}],"status":"not_affected"}]}`
+	if rc := do(http.MethodPost, "/v1/vex", bad); rc.Code != http.StatusUnprocessableEntity {
+		t.Errorf("invalid VEX: status %d, want 422", rc.Code)
+	}
+}
+
+func mustRand(t *testing.T, n int) []byte {
+	t.Helper()
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		t.Fatal(err)
+	}
+	return b
+}

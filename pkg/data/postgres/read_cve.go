@@ -60,6 +60,7 @@ func (s *Store) FleetCVEs(ctx context.Context, tenantID, minSeverity, cursor str
 			JOIN devradar_sbom sb ON sb.id = f.sbom_id
 			LEFT JOIN devradar_cve_enrichment e ON e.cve = f.exposure
 			WHERE sb.tenant_id = $1 AND sb.status = 'active' AND f.severity = ANY($2)
+			  AND NOT `+vexSuppressedByDigestCVE+`
 			GROUP BY f.exposure
 		), ranked AS (
 			SELECT *,

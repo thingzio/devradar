@@ -409,6 +409,12 @@ Read endpoints (session or token auth):
 | `GET`  | `/v1/sboms/{id}/findings` | Current findings for one SBOM. |
 | `GET`  | `/v1/sboms/{id}/events` | Change events for one SBOM. Paginated (`?limit`, `?cursor`). |
 | `GET`  | `/v1/sboms/{id}/failures?limit=N` | Recent scan failures for one SBOM (newest first) — a scanner/stage that errored or returned nothing. Makes a silently-absent scanner visible (e.g. Trivy finding 0 CVEs on an EOL distro it has no advisories for). `/v1/images` also carries a `failures` count per image so a non-zero count is visible in the rollup. |
+| `POST` | `/v1/vex` | Ingest an OpenVEX document (raw JSON body). Parses + validates shape (status enum, `not_affected` requires a justification), persists, and reports `matched`/`unmatched`/`skipped` statement counts. Matched `not_affected`/`fixed` statements **suppress** those findings across all views (a read-time overlay — findings are never mutated). VEX is a tenant assertion (`unverified`), scoped to a **specific image digest** — a new digest needs a new statement. |
+| `GET`  | `/v1/vex` | List the tenant's submitted VEX documents (author, statement/matched counts, timestamp). |
+
+**Risk enrichment (EPSS + KEV).** Findings carry `epss`/`kev` from a daily-refreshed `devradar_cve_enrichment` table (FIRST.org EPSS + CISA KEV), joined at read time. CVE-keyed, never written into findings. Drives the dashboard KEV stat and the fleet-CVE blast-radius ranking (KEV → severity → reach → EPSS).
+
+**VEX suppression** is applied consistently across *every* finding read and count (SBOM findings, image/fleet rollups, package rollup, fleet-CVE) so the numbers a `not_affected` statement changes are the same everywhere. Suppressed findings are hidden by default and revealed with `?suppressed=true`. v1 matches at (digest, CVE) granularity; OpenVEX `subcomponents` (per-package) are stored but not yet used for matching.
 
 **Image identity & grouping.** `devradar_sbom` splits an image reference into three axes: `repository` (registry/path — the stable grouping key), `version` (the tag, e.g. `v1.20.2`; nullable — often absent when submitters pin by digest), and `digest` (the immutable pin). Grouping by `repository` is what makes "track one image across its versions and digests over time" (CUJ-1/2/3) work regardless of how the SBOM was pinned. `image_ref` is retained as the raw submitted label.
 

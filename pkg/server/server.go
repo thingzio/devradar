@@ -96,6 +96,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/sboms/{id}/findings", apiToken(http.HandlerFunc(s.handleFindings)))
 	mux.Handle("GET /v1/sboms/{id}/events", apiToken(http.HandlerFunc(s.handleEvents)))
 	mux.Handle("GET /v1/sboms/{id}/failures", apiToken(http.HandlerFunc(s.handleFailures)))
+	mux.Handle("POST /v1/vex", apiToken(http.HandlerFunc(s.handleSubmitVEX)))
+	mux.Handle("GET /v1/vex", apiToken(http.HandlerFunc(s.handleListVEX)))
 
 	// Minimal passwordless UI (session auth) for minting API tokens.
 	s.registerUI(mux, db)

@@ -12,15 +12,16 @@ import (
 )
 
 type findingRow struct {
-	Severity string
-	Exposure string
-	Package  string
-	Version  string
-	Score    string
-	IsFixed  bool
-	Scanner  string
-	KEV      bool
-	EPSS     string // percentage, e.g. "94%"; "" when no data
+	Severity  string
+	Exposure  string
+	Package   string
+	Version   string
+	Score     string
+	IsFixed   bool
+	Scanner   string
+	KEV       bool
+	EPSS      string // percentage, e.g. "94%"; "" when no data
+	VEXStatus string // "", not_affected, under_investigation, affected, fixed
 }
 
 type pkgRow struct {
@@ -57,11 +58,12 @@ type sbomDetailView struct {
 	SubmittedAt string
 	Counts      postgres.SeverityCounts
 
-	FixableOnly bool
-	Findings    []findingRow
-	NextCursor  string
-	Packages    []pkgRow
-	Failures    []failureRow
+	FixableOnly    bool
+	ShowSuppressed bool
+	Findings       []findingRow
+	NextCursor     string
+	Packages       []pkgRow
+	Failures       []failureRow
 }
 
 // handleSBOMDetail renders one SBOM: metadata + severity rollup, a paginated
@@ -75,6 +77,7 @@ func (s *Server) handleSBOMDetail(w http.ResponseWriter, r *http.Request) {
 		min = q
 	}
 	fixableOnly := r.URL.Query().Get("fixable") == "true"
+	showSuppressed := r.URL.Query().Get("suppressed") == "true"
 
 	detail, err := s.store.GetSBOM(r.Context(), tn.ID, id, min)
 	if err != nil {
@@ -87,7 +90,7 @@ func (s *Server) handleSBOMDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	findings, next, err := s.store.FindingsBySBOM(r.Context(), tn.ID, id, min, fixableOnly,
-		r.URL.Query().Get("cursor"), 100)
+		showSuppressed, r.URL.Query().Get("cursor"), 100)
 	if err != nil {
 		http.Error(w, "failed to load findings", http.StatusInternalServerError)
 		return
@@ -105,24 +108,25 @@ func (s *Server) handleSBOMDetail(w http.ResponseWriter, r *http.Request) {
 
 	repo, tag, _ := sbom.SplitRef(detail.ImageRef)
 	v := sbomDetailView{
-		Title:       shortDigest(detail.Digest),
-		SignedIn:    true,
-		Email:       tn.Email,
-		Version:     s.opts.Version,
-		MinSeverity: min,
-		SBOMID:      detail.SBOMID,
-		Repository:  repo,
-		Short:       lastPath(repo),
-		ImageRef:    detail.ImageRef,
-		VersionTag:  tag,
-		ShortDigest: shortDigest(detail.Digest),
-		Digest:      detail.Digest,
-		Tool:        detail.Tool,
-		ToolVersion: detail.ToolVersion,
-		SubmittedAt: detail.SubmittedAt.Format("2006-01-02 15:04"),
-		Counts:      detail.Counts,
-		FixableOnly: fixableOnly,
-		NextCursor:  next,
+		Title:          shortDigest(detail.Digest),
+		SignedIn:       true,
+		Email:          tn.Email,
+		Version:        s.opts.Version,
+		MinSeverity:    min,
+		SBOMID:         detail.SBOMID,
+		Repository:     repo,
+		Short:          lastPath(repo),
+		ImageRef:       detail.ImageRef,
+		VersionTag:     tag,
+		ShortDigest:    shortDigest(detail.Digest),
+		Digest:         detail.Digest,
+		Tool:           detail.Tool,
+		ToolVersion:    detail.ToolVersion,
+		SubmittedAt:    detail.SubmittedAt.Format("2006-01-02 15:04"),
+		Counts:         detail.Counts,
+		FixableOnly:    fixableOnly,
+		ShowSuppressed: showSuppressed,
+		NextCursor:     next,
 	}
 	if detail.GeneratedAt != nil {
 		v.GeneratedAt = detail.GeneratedAt.Format("2006-01-02 15:04")
@@ -130,15 +134,16 @@ func (s *Server) handleSBOMDetail(w http.ResponseWriter, r *http.Request) {
 
 	for _, f := range findings {
 		v.Findings = append(v.Findings, findingRow{
-			Severity: f.Severity,
-			Exposure: f.Exposure,
-			Package:  f.Package,
-			Version:  f.Version,
-			Score:    formatScore(f.Score),
-			IsFixed:  f.IsFixed,
-			Scanner:  f.Scanner,
-			KEV:      f.KEV,
-			EPSS:     formatEPSS(f.EPSS),
+			Severity:  f.Severity,
+			Exposure:  f.Exposure,
+			Package:   f.Package,
+			Version:   f.Version,
+			Score:     formatScore(f.Score),
+			IsFixed:   f.IsFixed,
+			Scanner:   f.Scanner,
+			KEV:       f.KEV,
+			EPSS:      formatEPSS(f.EPSS),
+			VEXStatus: f.VEXStatus,
 		})
 	}
 	for _, p := range pkgs {
