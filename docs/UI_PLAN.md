@@ -136,7 +136,32 @@ The drill-down for one frozen inventory.
 
 ## Suggested build order
 
-1. Dashboard (`/dashboard`) — highest value, reuses `/v1/images`, no new API.
-2. SBOM detail (`/sboms/{id}`) — findings table + fixable filter + package rollup.
-3. Image detail (`/images?repo=`) — versions list + change log + trend affordance.
+1. Dashboard (`/dashboard`) — highest value, reuses `/v1/images`, no new API. ✅ shipped v0.1.7
+2. Image detail (`/images?repo=`) — versions list + change log + trend affordance. ✅ shipped v0.1.8
+3. SBOM detail (`/sboms/{id}`) — findings table + fixable filter + package rollup. ✅ shipped (Page 3)
+   - All list views keyset-paginated (v0.1.9): image list, SBOMs, change log, findings.
 4. Fast-follow: cross-image CVE aggregation ("which images share this CVE").
+5. Fast-follow: SBOM tagging → image groups (see below).
+
+## Future — SBOM tagging & image groups
+
+_Requested 2026-07-06. Lets tenants label SBOMs (e.g. `team-x`, `prod`, `edge`)
+and filter the dashboard to a group. The unique tag set shows atop the dashboard;
+selecting a tag lists only images with that tag._
+
+The design composes cleanly onto what's already built:
+
+- **Data**: a `devradar_sbom_tag` table (tenant-scoped, `(sbom_id, tag)`), or a
+  `tags text[]` column on `devradar_sbom`. Tags are per-SBOM but roll up to the
+  repository/image for grouping — the same relationship `version` already has.
+- **Ingest**: `POST /v1/sboms` accepts an optional `tags: ["team-x","prod"]`
+  field; `tools/sbom-submit` gains a repeatable `--tag` flag so CI labels at
+  push. In-UI tag editing is a nice-to-have on top of the push path.
+- **API**: a `?tag=` filter on `/v1/images` and the grouped views. It's just
+  another `WHERE` predicate, so it composes with the existing `min_severity`
+  filter and keyset pagination without new machinery.
+- **UI**: a tag filter bar across the top of the dashboard (the tenant's unique
+  tag set); selecting one narrows the risk-ranked image list to that group.
+
+Effort is modest because the grouping, filtering, and pagination substrate all
+exist — this adds a dimension, not a new subsystem.
