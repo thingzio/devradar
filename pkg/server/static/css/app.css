@@ -126,12 +126,25 @@ a:hover { text-decoration: underline; }
 
 /* Filter bar (CVEs page) */
 .filterbar {
-  display: flex; align-items: flex-end; gap: 0.75rem; flex-wrap: wrap;
+  display: flex; align-items: end; gap: 0.75rem 1rem; flex-wrap: wrap;
   margin: 1rem 0 0.5rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border);
 }
-.filterbar label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.78rem; }
-.filterbar label.chk { flex-direction: row; align-items: center; gap: 0.35rem; }
+/* A labeled field: caption on top, control below. The caption reserves a line so
+   every control's bottom edge lines up whether or not it has a caption. */
+.filterbar .field { display: flex; flex-direction: column; gap: 0.3rem; }
+.filterbar .field-cap { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+/* Uniform control height across selects + buttons so nothing looks ragged. */
+.filterbar select,
+.filterbar .btn {
+  height: 2.25rem; box-sizing: border-box; margin: 0;
+  display: inline-flex; align-items: center;
+}
+.filterbar .btn { padding: 0 1rem; }
 .filterbar select { min-width: 8rem; }
+/* Checkboxes: group them and center each with its label on the control line. */
+.filterbar .checks { display: flex; align-items: center; gap: 1rem; height: 2.25rem; }
+.filterbar .chk { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; color: var(--text); cursor: pointer; }
+.filterbar .chk input { margin: 0; }
 .filelabel { cursor: pointer; }
 .vex-just { margin-top: 0.15rem; }
 .vex-partial {

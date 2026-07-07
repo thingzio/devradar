@@ -18,13 +18,15 @@
     {{/* Filter bar. All controls submit via GET so state lives in the URL and
          survives sort/paging. The severity select stays; add VEX + KEV + fix. */}}
     <form class="filterbar" method="get" action="/cves">
-      <label class="muted">Severity
+      <div class="field">
+        <span class="field-cap">Severity</span>
         <select name="min_severity">
           {{$cur := .MinSeverity}}
           {{range (list "critical" "high" "medium" "low" "negligible")}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}
         </select>
-      </label>
-      <label class="muted">VEX
+      </div>
+      <div class="field">
+        <span class="field-cap">VEX</span>
         <select name="vex">
           <option value="" {{if eq .FVex ""}}selected{{end}}>any</option>
           <option value="not_vexed" {{if eq .FVex "not_vexed"}}selected{{end}}>not VEX'd</option>
@@ -34,17 +36,20 @@
           <option value="under_investigation" {{if eq .FVex "under_investigation"}}selected{{end}}>under_investigation</option>
           <option value="fixed" {{if eq .FVex "fixed"}}selected{{end}}>fixed</option>
         </select>
-      </label>
-      <label class="muted">Justification
+      </div>
+      <div class="field">
+        <span class="field-cap">Justification</span>
         <select name="just">
           <option value="" {{if eq .FJust ""}}selected{{end}}>any</option>
           {{$j := .FJust}}
           {{range .Justifications}}<option value="{{.}}" {{if eq . $j}}selected{{end}}>{{.}}</option>{{end}}
         </select>
-      </label>
-      <label class="muted chk"><input type="checkbox" name="kev" value="true" {{if .FKEV}}checked{{end}}> KEV only</label>
-      <label class="muted chk"><input type="checkbox" name="fixable" value="true" {{if .FFixable}}checked{{end}}> Fixable only</label>
-      <button class="btn secondary" type="submit">Apply</button>
+      </div>
+      <div class="checks">
+        <label class="chk"><input type="checkbox" name="kev" value="true" {{if .FKEV}}checked{{end}}> KEV only</label>
+        <label class="chk"><input type="checkbox" name="fixable" value="true" {{if .FFixable}}checked{{end}}> Fixable only</label>
+      </div>
+      <button class="btn" type="submit">Apply</button>
       <a class="btn secondary" href="/cves">Reset</a>
     </form>
 
