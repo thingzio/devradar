@@ -522,6 +522,47 @@ func TestFleetCVEs_VEXAnnotationAndFilters(t *testing.T) {
 	if find(jf, vexdCVE) == nil || find(jf, openCVE) != nil {
 		t.Errorf("justification filter should show only the VEX'd CVE")
 	}
+	// The single-SBOM VEX'd CVE is fully covered.
+	if !find(all, vexdCVE).AllVEXd {
+		t.Errorf("single-image VEX'd CVE should be AllVEXd")
+	}
+
+	// PARTIAL case (the real-world AICR bug): a CVE on TWO images, VEX'd on only
+	// one. It must still surface the VEX status but be marked partial (not fully
+	// suppressed), and NOT dimmed as mitigated.
+	partialCVE := "CVE-PART-" + suffix
+	sbom2, digest2 := "vc2-"+suffix, "sha256:2"+suffix
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_sbom (id, tenant_id, image_ref, repository, digest, format, object_path)
+		VALUES ($1,$2,'reg/other','reg/other',$3,'cyclonedx','gs://x')`, sbom2, tenantID, digest2); err != nil {
+		t.Fatalf("seed sbom2: %v", err)
+	}
+	for _, sid := range []string{sbomID, sbom2} {
+		if _, err := st.DB().ExecContext(ctx, `
+			INSERT INTO devradar_finding (sbom_id, scanner, finding_id, exposure, package, version, severity, score, is_fixed)
+			VALUES ($1,'grype',$2,$3,'p','1','high',7.0,false)`, sid, partialCVE+"/p/1", partialCVE); err != nil {
+			t.Fatalf("seed partial finding: %v", err)
+		}
+	}
+	// VEX only the first image's occurrence (digest).
+	pdoc := &vex.Document{Author: "sec", Raw: []byte(`{}`), Statements: []vex.Statement{{
+		ProductDigest: digest, Vulnerability: partialCVE, Status: vex.StatusNotAffected,
+		Justification: "component_not_present",
+	}}}
+	if _, _, err := st.SaveVEXDocument(ctx, tenantID, pdoc); err != nil {
+		t.Fatalf("save partial vex: %v", err)
+	}
+	all2, _, _ := st.FleetCVEs(ctx, tenantID, "negligible", postgres.FleetCVEFilter{}, "", "", "", 50)
+	p := find(all2, partialCVE)
+	if p == nil {
+		t.Fatalf("partial CVE should appear")
+	}
+	if p.VEXStatus != "not_affected" || !p.Suppressed {
+		t.Errorf("partial CVE should surface not_affected status: %+v", p)
+	}
+	if p.AllVEXd {
+		t.Errorf("partial CVE (VEX'd on 1 of 2 images) must NOT be AllVEXd")
+	}
 }
 
 // TestFindings_PagingFilterRollup verifies findings page in worst-first order

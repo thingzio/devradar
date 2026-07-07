@@ -69,7 +69,7 @@
       </thead>
       <tbody>
         {{range .CVEs}}
-        <tr{{if .Suppressed}} class="vexed"{{end}}>
+        <tr{{if .AllVEXd}} class="vexed"{{end}}>
           <td><a href="/cves/{{.CVE}}">{{.CVE}}</a></td>
           <td><span class="sev-badge sev-b-{{.WorstSev}}">{{.WorstSev}}</span></td>
           <td class="num">{{if .EPSS}}{{.EPSS}}{{else}}<span class="muted">—</span>{{end}}</td>
@@ -80,6 +80,7 @@
           <td>
             {{if .VEXStatus}}
               <span class="vex-badge vex-{{.VEXStatus}}" title="{{if .Impact}}{{.Impact}}{{else}}{{.Justification}}{{end}}">{{.VEXStatus}}</span>
+              {{if not .AllVEXd}}<span class="vex-partial" title="Mitigated on some images; still open on others">partial</span>{{end}}
               {{if .Justification}}<div class="vex-just muted small">{{.Justification}}</div>{{end}}
             {{else}}<span class="muted">—</span>{{end}}
           </td>

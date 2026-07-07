@@ -134,6 +134,11 @@ a:hover { text-decoration: underline; }
 .filterbar select { min-width: 8rem; }
 .filelabel { cursor: pointer; }
 .vex-just { margin-top: 0.15rem; }
+.vex-partial {
+  display: inline-block; margin-left: 0.3rem; padding: 0 0.4rem; border-radius: 999px;
+  font-size: 0.68rem; font-weight: 600; color: var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+}
 
 /* Unified search box (Overview + Images) */
 .searchbar { display: flex; gap: 0.5rem; margin: 1.25rem 0; }

@@ -26,6 +26,7 @@ type cveListRow struct {
 	Justification string
 	Impact        string
 	Suppressed    bool
+	AllVEXd       bool // every occurrence VEX'd (dim the row); false = partial
 }
 
 // justifications is the OpenVEX justification enum, offered as filter options.
@@ -94,7 +95,8 @@ func (s *Server) handleCVEList(w http.ResponseWriter, r *http.Request) {
 			CVE: c.CVE, WorstSev: c.WorstSev, ImageCount: c.ImageCount,
 			FindingCount: c.FindingCount, KEV: c.KEV, EPSS: formatEPSS(c.EPSS),
 			Fixable: c.Fixable, Repositories: c.Repositories,
-			VEXStatus: c.VEXStatus, Justification: c.Justification, Impact: c.Impact, Suppressed: c.Suppressed,
+			VEXStatus: c.VEXStatus, Justification: c.Justification, Impact: c.Impact,
+			Suppressed: c.Suppressed, AllVEXd: c.AllVEXd,
 		})
 	}
 	render(w, "cves.html", v)

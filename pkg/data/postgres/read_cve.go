@@ -31,7 +31,8 @@ type FleetCVE struct {
 	VEXStatus     string `json:"vex_status,omitempty"`
 	Justification string `json:"justification,omitempty"`
 	Impact        string `json:"impact_statement,omitempty"`
-	Suppressed    bool   `json:"suppressed,omitempty"`
+	Suppressed    bool   `json:"suppressed,omitempty"` // any occurrence VEX'd not_affected/fixed
+	AllVEXd       bool   `json:"all_vexed,omitempty"`  // every occurrence suppressed (vs. partial)
 }
 
 // FleetCVEFilter narrows the fleet CVE list. Zero value = no filtering.
@@ -102,9 +103,11 @@ func (s *Store) FleetCVEs(ctx context.Context, tenantID, minSeverity string, fil
 
 	// risk = KEV(1e18) + worst-severity-rank(1e15..) + image_count(1e9) +
 	// EPSS-scaled + finding_count. Wide multipliers keep tiers from colliding.
-	// vex_* aggregate the tenant's statements for the CVE: a status is attributed
-	// to the CVE only when it applies to EVERY occurrence (bool_and), so a
-	// partially-VEX'd CVE still reads as open.
+	// vex_* aggregate the tenant's statements for the CVE: a VEX is scoped to a
+	// specific image, so ANY suppressing occurrence surfaces the status (bool_or);
+	// all_vexed distinguishes "mitigated on every image" from "partial" (mitigated
+	// on some, still open on others). This is what makes a VEX applied to one of
+	// several affected images actually show up in the fleet list.
 	q := fmt.Sprintf(`
 		WITH cve AS (
 			SELECT f.exposure AS cve,
@@ -116,10 +119,11 @@ func (s *Store) FleetCVEs(ctx context.Context, tenantID, minSeverity string, fil
 			       COALESCE(bool_or(e.kev), false)           AS kev,
 			       MAX(e.epss_score)                         AS epss,
 			       (array_agg(DISTINCT sb.repository))[1:3]  AS repos,
-			       bool_and(vex.vex_status IS NOT NULL)      AS all_vexed,
-			       (array_agg(vex.vex_status)   FILTER (WHERE vex.vex_status IS NOT NULL))[1] AS a_status,
-			       (array_agg(vex.vex_just)     FILTER (WHERE vex.vex_just IS NOT NULL))[1]   AS a_just,
-			       (array_agg(vex.vex_impact)   FILTER (WHERE vex.vex_impact IS NOT NULL))[1] AS a_impact
+			       bool_or(COALESCE(vex.vex_status IN ('not_affected','fixed'), false)) AS any_suppressed,
+			       bool_and(COALESCE(vex.vex_status IN ('not_affected','fixed'), false)) AS all_suppressed,
+			       (array_agg(vex.vex_status) FILTER (WHERE vex.vex_status IN ('not_affected','fixed')))[1] AS a_status,
+			       (array_agg(vex.vex_just)   FILTER (WHERE vex.vex_status IN ('not_affected','fixed')))[1] AS a_just,
+			       (array_agg(vex.vex_impact) FILTER (WHERE vex.vex_status IN ('not_affected','fixed')))[1] AS a_impact
 			FROM devradar_finding f
 			JOIN devradar_sbom sb ON sb.id = f.sbom_id
 			LEFT JOIN devradar_cve_enrichment e ON e.cve = f.exposure%s
@@ -127,9 +131,10 @@ func (s *Store) FleetCVEs(ctx context.Context, tenantID, minSeverity string, fil
 			GROUP BY f.exposure
 		), agg AS (
 			SELECT cve, best_rank, max_score, image_count, finding_count, fixable, kev, epss, repos,
-			       CASE WHEN all_vexed THEN a_status ELSE NULL END AS vex_status,
-			       CASE WHEN all_vexed THEN a_just   ELSE NULL END AS vex_just,
-			       CASE WHEN all_vexed THEN a_impact ELSE NULL END AS vex_impact
+			       CASE WHEN any_suppressed THEN a_status ELSE NULL END AS vex_status,
+			       CASE WHEN any_suppressed THEN a_just   ELSE NULL END AS vex_just,
+			       CASE WHEN any_suppressed THEN a_impact ELSE NULL END AS vex_impact,
+			       COALESCE(all_suppressed, false)                      AS all_vexed
 			FROM cve
 		), ranked AS (
 			SELECT *,
@@ -141,7 +146,7 @@ func (s *Store) FleetCVEs(ctx context.Context, tenantID, minSeverity string, fil
 			FROM agg
 		)
 		SELECT cve, best_rank, max_score, image_count, finding_count, fixable, kev, epss, repos,
-		       vex_status, vex_just, vex_impact, %s
+		       vex_status, vex_just, vex_impact, all_vexed, %s
 		FROM ranked
 		%s
 		ORDER BY %s
@@ -161,7 +166,7 @@ func (s *Store) FleetCVEs(ctx context.Context, tenantID, minSeverity string, fil
 		var vstatus, vjust, vimpact *string
 		if err := rows.Scan(&c.CVE, &rank, &c.MaxScore, &c.ImageCount, &c.FindingCount,
 			&c.Fixable, &c.KEV, &c.EPSS, pq.Array(&c.Repositories),
-			&vstatus, &vjust, &vimpact, &sortval); err != nil {
+			&vstatus, &vjust, &vimpact, &c.AllVEXd, &sortval); err != nil {
 			return nil, "", fmt.Errorf("scan fleet cve: %w", err)
 		}
 		c.VEXStatus, c.Justification, c.Impact = deref(vstatus), deref(vjust), deref(vimpact)
