@@ -18,10 +18,17 @@
     <div class="stat"><span class="stat-n ok-n">{{.FixablePct}}%</span><span class="stat-l">Fixable now</span></div>
   </section>
 
-  <div class="card">
-    <div class="card-head"><h2>Findings by severity</h2></div>
-    <p class="muted" style="margin-top:0">Open findings across the fleet at or above your threshold, VEX-suppressed excluded.</p>
-    {{.SevChart}}
+  <div class="chart-row">
+    <div class="card chart-col">
+      <div class="card-head"><h2>Findings by severity</h2></div>
+      <p class="muted" style="margin-top:0">Open findings across the fleet at or above your threshold, VEX-suppressed excluded.</p>
+      {{.SevChart}}
+    </div>
+    <div class="card chart-col">
+      <div class="card-head"><h2>Remediation readiness</h2></div>
+      <p class="muted" style="margin-top:0">How much of each severity has a fix available now (colored) vs. no fix yet (muted).</p>
+      {{.RemedChart}}
+    </div>
   </div>
 
   <div class="card">

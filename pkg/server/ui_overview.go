@@ -29,7 +29,8 @@ type overviewView struct {
 	FixablePct int
 	FailureCT  int
 	HasData    bool
-	SevChart   template.HTML // inline SVG: fleet severity composition
+	SevChart   template.HTML // inline SVG: fleet severity composition (donut)
+	RemedChart template.HTML // inline SVG: fixable-now vs open, per severity
 	// Top-risk images teaser.
 	TopImages []imageRow
 }
@@ -59,12 +60,18 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		KEVCount: fs.KEV, FixablePct: pct(fs.Fixable, fs.Total), FailureCT: fs.Failures,
 		HasData: fs.Total > 0,
 	}
-	v.SevChart = hbarChart([]hbar{
+	v.SevChart = donutChart([]slice{
 		{Label: "Critical", Value: fs.Critical, Sev: "critical"},
 		{Label: "High", Value: fs.High, Sev: "high"},
 		{Label: "Medium", Value: fs.Medium, Sev: "medium"},
 		{Label: "Low", Value: fs.Low, Sev: "low"},
-	}, 720)
+	}, "findings", 200)
+	v.RemedChart = remediationChart([]remedRow{
+		{Label: "Critical", Sev: "critical", Fixable: fs.FixCritical, Total: fs.Critical},
+		{Label: "High", Sev: "high", Fixable: fs.FixHigh, Total: fs.High},
+		{Label: "Medium", Sev: "medium", Fixable: fs.FixMedium, Total: fs.Medium},
+		{Label: "Low", Sev: "low", Fixable: fs.FixLow, Total: fs.Low},
+	}, 440)
 	for _, im := range images {
 		row := imageRow{
 			Repository: im.Repository, Short: lastPath(im.Repository),

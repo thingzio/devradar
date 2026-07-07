@@ -302,6 +302,13 @@ table.images td { vertical-align: middle; }
 .chart-lbl  { fill: var(--text); font-size: 12px; font-family: var(--font); }
 .chart-val  { fill: var(--muted); font-size: 12px; font-family: var(--font); }
 .chart-xlbl { fill: var(--muted); font-size: 10px; font-family: var(--font-mono); }
+.donut-total { fill: var(--text); font-size: 30px; font-weight: 700; font-family: var(--font); }
+.donut-sub   { fill: var(--muted); font-size: 12px; font-family: var(--font); }
+
+/* Two charts side by side; stack on narrow viewports. */
+.chart-row { display: flex; gap: 1rem; align-items: stretch; margin-bottom: 1rem; }
+.chart-row .chart-col { flex: 1 1 0; min-width: 0; margin-bottom: 0; }
+@media (max-width: 820px) { .chart-row { flex-direction: column; } }
 
 /* ── Image detail ──────────────────────────────────────────────────────────── */
 .crumb { font-size: 0.85rem; margin-bottom: 0.5rem; }

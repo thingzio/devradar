@@ -203,8 +203,14 @@ type FleetStats struct {
 	Medium   int `json:"medium"`
 	Low      int `json:"low"`
 	Fixable  int `json:"fixable"`
-	KEV      int `json:"kev"` // distinct known-exploited CVEs across the fleet
-	Failures int `json:"failures"`
+	// Fixable-now counts per severity — the actionable subset the remediation
+	// chart contrasts against each severity's total.
+	FixCritical int `json:"fix_critical"`
+	FixHigh     int `json:"fix_high"`
+	FixMedium   int `json:"fix_medium"`
+	FixLow      int `json:"fix_low"`
+	KEV         int `json:"kev"` // distinct known-exploited CVEs across the fleet
+	Failures    int `json:"failures"`
 }
 
 // FleetStats returns tenant-wide finding totals across all active images,
@@ -222,6 +228,10 @@ func (s *Store) FleetStats(ctx context.Context, tenantID string) (FleetStats, er
 			COUNT(*) FILTER (WHERE f.severity = 'medium'),
 			COUNT(*) FILTER (WHERE f.severity = 'low'),
 			COUNT(*) FILTER (WHERE f.is_fixed),
+			COUNT(*) FILTER (WHERE f.is_fixed AND f.severity = 'critical'),
+			COUNT(*) FILTER (WHERE f.is_fixed AND f.severity = 'high'),
+			COUNT(*) FILTER (WHERE f.is_fixed AND f.severity = 'medium'),
+			COUNT(*) FILTER (WHERE f.is_fixed AND f.severity = 'low'),
 			COUNT(DISTINCT f.exposure) FILTER (WHERE e.kev),
 			(SELECT COUNT(*) FROM devradar_scan_failure sf
 			   JOIN devradar_sbom s2 ON s2.id = sf.sbom_id
@@ -231,7 +241,8 @@ func (s *Store) FleetStats(ctx context.Context, tenantID string) (FleetStats, er
 			AND NOT `+vexSuppressedByDigestCVE+`
 		LEFT JOIN devradar_cve_enrichment e ON e.cve = f.exposure
 		WHERE sb.tenant_id = $1 AND sb.status = 'active'`,
-		tenantID).Scan(&fs.Images, &fs.Total, &fs.Critical, &fs.High, &fs.Medium, &fs.Low, &fs.Fixable, &fs.KEV, &fs.Failures)
+		tenantID).Scan(&fs.Images, &fs.Total, &fs.Critical, &fs.High, &fs.Medium, &fs.Low, &fs.Fixable,
+		&fs.FixCritical, &fs.FixHigh, &fs.FixMedium, &fs.FixLow, &fs.KEV, &fs.Failures)
 	if err != nil {
 		return FleetStats{}, fmt.Errorf("fleet stats: %w", err)
 	}
