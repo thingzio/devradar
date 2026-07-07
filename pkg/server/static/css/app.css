@@ -352,6 +352,75 @@ table.images td { vertical-align: middle; }
 .chip-toggle.on { background: color-mix(in srgb, var(--ok) 15%, transparent); border-color: color-mix(in srgb, var(--ok) 40%, transparent); color: var(--ok); }
 table.findings td { vertical-align: middle; }
 
+/* ── Landing page (unauthenticated) ──────────────────────────────────────────── */
+.landing { max-width: 64rem; }
+
+.hero {
+  display: grid; grid-template-columns: 1.1fr 1fr; gap: 2.5rem;
+  align-items: center; margin: 1.5rem 0 2.5rem;
+}
+.hero-title { font-size: 2.6rem; line-height: 1.1; letter-spacing: -0.02em; margin-bottom: 1rem; }
+.hero-sub { color: var(--muted); font-size: 1.1rem; line-height: 1.6; }
+.hero-signin { margin-top: 0; }
+
+.lp-section { margin: 2.5rem 0; }
+.lp-h2 { font-size: 1.35rem; letter-spacing: -0.01em; margin-bottom: 1.25rem; }
+
+.lp-grid { display: grid; gap: 1rem; }
+.lp-grid-3 { grid-template-columns: repeat(3, 1fr); }
+.lp-grid-2 { grid-template-columns: repeat(2, 1fr); }
+
+/* Emphasized "core idea" cards */
+.lp-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.25rem 1.4rem;
+}
+.lp-card h3 { font-size: 1.05rem; margin-bottom: 0.5rem; }
+.lp-card p { color: var(--muted); line-height: 1.55; }
+
+/* Lighter feature cells */
+.lp-feature {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 1.1rem 1.25rem; background: var(--surface-alt);
+}
+.lp-feature h3 { font-size: 0.98rem; margin-bottom: 0.4rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.lp-feature p { color: var(--muted); font-size: 0.92rem; line-height: 1.5; }
+.lp-feature.soon { opacity: 0.85; border-style: dashed; }
+.lp-feature .tag { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.04em; }
+
+.lp-card code, .lp-feature code, .lp-steps code {
+  font-family: var(--font-mono); font-size: 0.85em;
+  background: var(--page-bg); border: 1px solid var(--border);
+  border-radius: 4px; padding: 0.05rem 0.35rem;
+}
+
+/* How-it-works steps */
+.lp-steps { list-style: none; display: grid; gap: 0.9rem; }
+.lp-steps li { display: flex; gap: 0.9rem; align-items: flex-start; line-height: 1.5; }
+.lp-steps li div { color: var(--muted); }
+.lp-steps li strong { color: var(--text); }
+.lp-step-n {
+  flex: none; width: 1.8rem; height: 1.8rem; border-radius: 999px;
+  background: var(--accent); color: #fff; font-weight: 700; font-size: 0.9rem;
+  display: grid; place-items: center;
+}
+
+.lp-note {
+  border-left: 3px solid var(--accent); background: var(--surface-alt);
+  border-radius: 0 var(--radius) var(--radius) 0; padding: 1rem 1.25rem;
+}
+.lp-note p { color: var(--muted); line-height: 1.6; }
+.lp-note strong { color: var(--text); }
+
+.lp-cta { text-align: center; padding: 1rem 0 0.5rem; }
+.lp-cta-form { max-width: 30rem; margin: 1rem auto 0; }
+
+@media (max-width: 820px) {
+  .hero { grid-template-columns: 1fr; gap: 1.5rem; }
+  .lp-grid-3, .lp-grid-2 { grid-template-columns: 1fr; }
+  .hero-title { font-size: 2.1rem; }
+}
+
 /* ── Footer ────────────────────────────────────────────────────────────────── */
 .page-footer {
   max-width: 76rem; margin: 2rem auto 0; padding: 1.5rem 30px;

@@ -1,27 +1,141 @@
 {{template "head" .}}
 {{template "nav" .}}
-<main class="page-content narrow">
-  <h1 class="page-title">Dev<span class="accent">Radar</span></h1>
-  <p class="sub">Container vulnerability tracking — submit an SBOM, track what changes over time.</p>
+<main class="page-content landing">
 
-  {{if .Error}}<div class="msg err">
-    {{if eq .Error "email"}}Please enter a valid email address.
-    {{else if eq .Error "link"}}That sign-in link is invalid or expired — request a new one.
-    {{else if eq .Error "suspended"}}This account is suspended.
-    {{else}}Something went wrong. Please try again.{{end}}
-  </div>{{end}}
+  <!-- Hero -->
+  <section class="hero">
+    <div class="hero-copy">
+      <h1 class="hero-title">Know what <span class="accent">changed</span></h1>
+      <p class="hero-sub">
+        Submit an SBOM once; DevRadar rescans it every day and records how your
+        container's vulnerabilities change over time — so a new critical shows up
+        as an event, not a surprise.
+      </p>
+    </div>
 
-  {{if .Sent}}
-  <div class="msg ok">Check your email — we sent you a sign-in link. It expires in 15 minutes.</div>
-  {{else}}
-  <div class="card">
-    <p style="margin-top:0">Enter your email and we'll send you a one-time sign-in link — no password.</p>
-    <form class="row" method="post" action="/auth/login">
-      <input type="email" name="email" placeholder="you@example.com" required autofocus>
+    <div class="card hero-signin">
+      {{if .Error}}<div class="msg err">
+        {{if eq .Error "email"}}Please enter a valid email address.
+        {{else if eq .Error "link"}}That sign-in link is invalid or expired — request a new one.
+        {{else if eq .Error "suspended"}}This account is suspended.
+        {{else}}Something went wrong. Please try again.{{end}}
+      </div>{{end}}
+
+      {{if .Sent}}
+      <div class="msg ok" style="margin:0">Check your email — we sent you a sign-in link. It expires in 15 minutes.</div>
+      {{else}}
+      <p style="margin-top:0">Enter your email and we'll send you a one-time sign-in link — no password.</p>
+      <form class="row" method="post" action="/auth/login">
+        <input type="email" name="email" placeholder="you@example.com" required autofocus>
+        <button class="btn" type="submit">Send sign-in link</button>
+      </form>
+      <p class="muted" style="margin-bottom:0">Then mint an API token and submit SBOMs straight from your CI. Every account gets the full feature set.</p>
+      {{end}}
+    </div>
+  </section>
+
+  <!-- The core idea: DevRadar's differentiator -->
+  <section class="lp-section">
+    <h2 class="lp-h2">Three ideas unlock the whole thing</h2>
+    <div class="lp-grid lp-grid-3">
+      <div class="lp-card">
+        <h3>Scan the SBOM, not the image</h3>
+        <p>Your CI already produces the SBOM; DevRadar consumes it. No registry access, no credentials, no egress — which is exactly what makes <strong>private-registry coverage</strong> work: the SBOM crosses the trust boundary, not your secrets.</p>
+      </div>
+      <div class="lp-card">
+        <h3>Change over time, not snapshots</h3>
+        <p>An SBOM is frozen to an image digest, so the only variable day to day is the scanner's vulnerability database. DevRadar keeps an append-only change log — the delta <em>is</em> the product.</p>
+      </div>
+      <div class="lp-card">
+        <h3>Clean causality</h3>
+        <p>Every change is labeled: a new image, new CVE data, or a scanner change. You can always tell <em>why</em> a finding appeared — and never get paged for a tooling upgrade.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Feature grid -->
+  <section class="lp-section">
+    <h2 class="lp-h2">What you get</h2>
+    <div class="lp-grid lp-grid-2">
+      <div class="lp-feature">
+        <h3>Daily rescans, two scanners</h3>
+        <p>Every active SBOM is re-scanned with Grype <em>and</em> Trivy. Running two catches cataloger disagreement instead of overfitting to one tool.</p>
+      </div>
+      <div class="lp-feature">
+        <h3>Change log &amp; timeline</h3>
+        <p>Added, resolved, re-rated, and fixed events — per image and across every digest of an image over time.</p>
+      </div>
+      <div class="lp-feature">
+        <h3>Risk enrichment</h3>
+        <p>EPSS exploit-probability and CISA <strong>KEV</strong> (known-exploited) overlays surface what to patch first, not just what's critical.</p>
+      </div>
+      <div class="lp-feature">
+        <h3>VEX suppression</h3>
+        <p>Upload an OpenVEX document to mark findings not-affected or fixed. Suppressed findings drop out of your counts and lists.</p>
+      </div>
+      <div class="lp-feature">
+        <h3>Severity thresholds</h3>
+        <p>Set a per-account floor (default <em>medium</em>) so the noise stays below the line, and override it per request when you need everything.</p>
+      </div>
+      <div class="lp-feature">
+        <h3>Image grouping with tags</h3>
+        <p>Tag SBOMs by team or environment at submission and filter your whole fleet by them.</p>
+      </div>
+      <div class="lp-feature">
+        <h3>Insight charts</h3>
+        <p>Fleet severity composition, remediation readiness (what's fixable now), and risk-over-time — all server-rendered, no dashboards to configure.</p>
+      </div>
+      <div class="lp-feature">
+        <h3>API-first, CI-native</h3>
+        <p>Everything in the UI is also a tenant-scoped REST API. Submit SBOMs with a <code>dr_</code> token from any pipeline.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- How it works -->
+  <section class="lp-section">
+    <h2 class="lp-h2">How it works</h2>
+    <ol class="lp-steps">
+      <li><span class="lp-step-n">1</span><div><strong>Sign in with your email</strong> — passwordless, no OAuth app to install.</div></li>
+      <li><span class="lp-step-n">2</span><div><strong>Mint an API token</strong> for your CI pipeline.</div></li>
+      <li><span class="lp-step-n">3</span><div><strong>Submit an SBOM</strong> pinned to an image digest (<code>POST /v1/sboms</code>). Syft-generated CycloneDX, all layers, is recommended.</div></li>
+      <li><span class="lp-step-n">4</span><div><strong>Watch it change</strong> — DevRadar rescans daily. Check the dashboard or pull the change log via the API.</div></li>
+    </ol>
+  </section>
+
+  <!-- Coming soon -->
+  <section class="lp-section">
+    <h2 class="lp-h2">Coming soon</h2>
+    <div class="lp-grid lp-grid-2">
+      <div class="lp-feature soon">
+        <h3>Push &amp; email alerts <span class="tag">coming soon</span></h3>
+        <p>Get notified when an image- or DB-driven change crosses your threshold. The event log that powers it is already built in.</p>
+      </div>
+      <div class="lp-feature soon">
+        <h3>AI delta narratives <span class="tag">coming soon</span></h3>
+        <p>Plain-language summaries of what changed and why it matters, generated from the same change events.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Trust model -->
+  <section class="lp-section">
+    <div class="lp-note">
+      <p><strong>An honest note on trust.</strong> DevRadar guarantees <em>determinism</em> (the same SBOM and scanner database always produce the same findings) and <em>clean change causality</em> — not the authenticity of the SBOM itself. A wrong or stale SBOM yields wrong results; verifying signed attestations is reserved for a later release.</p>
+    </div>
+  </section>
+
+  <!-- Closing CTA -->
+  {{if not .Sent}}
+  <section class="lp-section lp-cta">
+    <h2 class="lp-h2">Start tracking your exposure</h2>
+    <p class="muted">Free to start — no password, no credit card.</p>
+    <form class="row lp-cta-form" method="post" action="/auth/login">
+      <input type="email" name="email" placeholder="you@example.com" required>
       <button class="btn" type="submit">Send sign-in link</button>
     </form>
-    <p class="muted" style="margin-bottom:0">Sign in to create API tokens for submitting SBOMs from your CI.</p>
-  </div>
+  </section>
   {{end}}
+
 </main>
 {{template "foot" .}}
