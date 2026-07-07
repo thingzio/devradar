@@ -20,7 +20,7 @@ func TestLanding_RendersMarketing(t *testing.T) {
 	}
 	body := rec.Body.String()
 	for _, want := range []string{
-		"Scan the SBOM, not the image", // the differentiator
+		"SBOM vs Image", // the differentiator
 		"Daily rescans",                // feature grid
 		"VEX suppression",
 		"How it works",
