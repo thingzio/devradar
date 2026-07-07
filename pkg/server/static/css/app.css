@@ -297,6 +297,12 @@ table.images td { vertical-align: middle; }
 .sev-medium   { background: var(--sev-medium); }
 .sev-low      { background: var(--sev-low); }
 
+/* ── Inline SVG charts (server-rendered, no JS) ───────────────────────────────── */
+.chart { display: block; margin: 0.5rem 0 0.25rem; max-width: 100%; }
+.chart-lbl  { fill: var(--text); font-size: 12px; font-family: var(--font); }
+.chart-val  { fill: var(--muted); font-size: 12px; font-family: var(--font); }
+.chart-xlbl { fill: var(--muted); font-size: 10px; font-family: var(--font-mono); }
+
 /* ── Image detail ──────────────────────────────────────────────────────────── */
 .crumb { font-size: 0.85rem; margin-bottom: 0.5rem; }
 .repo-full { font-family: var(--font-mono); font-size: 0.85rem; word-break: break-all; }

@@ -26,7 +26,9 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 	"sorth": func(label, key, base, qs, activeSort, activeDir string) template.HTML {
 		return sortHeader(label, key, base, qs, "sort", "dir", activeSort, activeDir)
 	},
-	"sorthp": sortHeader, // explicit param-prefix variant (e.g. "sbom_sort"/"sbom_dir")
+	"sorthp":     sortHeader, // explicit param-prefix variant (e.g. "sbom_sort"/"sbom_dir")
+	"hbarChart":  hbarChart,
+	"stackChart": stackedTimeSeries,
 }).ParseFS(templateFS, "templates/*.html"))
 
 // sortHeader renders a clickable sortable column header (a full <a>). base is the

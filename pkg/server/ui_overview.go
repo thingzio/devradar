@@ -1,6 +1,7 @@
 package server
 
 import (
+	"html/template"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -28,6 +29,7 @@ type overviewView struct {
 	FixablePct int
 	FailureCT  int
 	HasData    bool
+	SevChart   template.HTML // inline SVG: fleet severity composition
 	// Top-risk images teaser.
 	TopImages []imageRow
 }
@@ -57,6 +59,12 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		KEVCount: fs.KEV, FixablePct: pct(fs.Fixable, fs.Total), FailureCT: fs.Failures,
 		HasData: fs.Total > 0,
 	}
+	v.SevChart = hbarChart([]hbar{
+		{Label: "Critical", Value: fs.Critical, Sev: "critical"},
+		{Label: "High", Value: fs.High, Sev: "high"},
+		{Label: "Medium", Value: fs.Medium, Sev: "medium"},
+		{Label: "Low", Value: fs.Low, Sev: "low"},
+	}, 720)
 	for _, im := range images {
 		row := imageRow{
 			Repository: im.Repository, Short: lastPath(im.Repository),

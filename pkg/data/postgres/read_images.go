@@ -123,6 +123,52 @@ func (s *Store) ListRepoImages(ctx context.Context, tenantID, minSeverity, nameF
 	return items, next, nil
 }
 
+// SeverityPoint is one day's severity composition for an image (from scan runs).
+type SeverityPoint struct {
+	Day      string // YYYY-MM-DD
+	Critical int
+	High     int
+	Medium   int
+	Low      int
+}
+
+// RepoSeverityTimeline returns per-day severity counts for a repository, derived
+// from devradar_scan_run (which snapshots counts per scan). Aggregated across the
+// repo's SBOMs/scanners by taking the max per day (scanners overlap; max avoids
+// double-counting the same findings). Oldest→newest, last `days` days present.
+func (s *Store) RepoSeverityTimeline(ctx context.Context, tenantID, repository string, limit int) ([]SeverityPoint, error) {
+	if limit <= 0 || limit > 365 {
+		limit = 60
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		WITH per_day AS (
+			SELECT date_trunc('day', sr.scanned_at)::date AS day,
+			       MAX(sr.critical_count) AS crit, MAX(sr.high_count) AS high,
+			       MAX(sr.medium_count) AS med, MAX(sr.low_count) AS low
+			FROM devradar_scan_run sr
+			JOIN devradar_sbom sb ON sb.id = sr.sbom_id
+			WHERE sb.tenant_id = $1 AND sb.repository = $2
+			GROUP BY 1
+			ORDER BY 1 DESC
+			LIMIT $3
+		)
+		SELECT day::text, crit, high, med, low FROM per_day ORDER BY day ASC`,
+		tenantID, repository, limit)
+	if err != nil {
+		return nil, fmt.Errorf("repo severity timeline: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []SeverityPoint
+	for rows.Next() {
+		var p SeverityPoint
+		if err := rows.Scan(&p.Day, &p.Critical, &p.High, &p.Medium, &p.Low); err != nil {
+			return nil, fmt.Errorf("scan severity point: %w", err)
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 // TenantTags returns the distinct tags across a tenant's active SBOMs, sorted —
 // the option set for the image tag filter.
 func (s *Store) TenantTags(ctx context.Context, tenantID string) ([]string, error) {
@@ -154,6 +200,8 @@ type FleetStats struct {
 	Total    int `json:"total"`
 	Critical int `json:"critical"`
 	High     int `json:"high"`
+	Medium   int `json:"medium"`
+	Low      int `json:"low"`
 	Fixable  int `json:"fixable"`
 	KEV      int `json:"kev"` // distinct known-exploited CVEs across the fleet
 	Failures int `json:"failures"`
@@ -171,6 +219,8 @@ func (s *Store) FleetStats(ctx context.Context, tenantID string) (FleetStats, er
 			COUNT(f.finding_id),
 			COUNT(*) FILTER (WHERE f.severity = 'critical'),
 			COUNT(*) FILTER (WHERE f.severity = 'high'),
+			COUNT(*) FILTER (WHERE f.severity = 'medium'),
+			COUNT(*) FILTER (WHERE f.severity = 'low'),
 			COUNT(*) FILTER (WHERE f.is_fixed),
 			COUNT(DISTINCT f.exposure) FILTER (WHERE e.kev),
 			(SELECT COUNT(*) FROM devradar_scan_failure sf
@@ -181,7 +231,7 @@ func (s *Store) FleetStats(ctx context.Context, tenantID string) (FleetStats, er
 			AND NOT `+vexSuppressedByDigestCVE+`
 		LEFT JOIN devradar_cve_enrichment e ON e.cve = f.exposure
 		WHERE sb.tenant_id = $1 AND sb.status = 'active'`,
-		tenantID).Scan(&fs.Images, &fs.Total, &fs.Critical, &fs.High, &fs.Fixable, &fs.KEV, &fs.Failures)
+		tenantID).Scan(&fs.Images, &fs.Total, &fs.Critical, &fs.High, &fs.Medium, &fs.Low, &fs.Fixable, &fs.KEV, &fs.Failures)
 	if err != nil {
 		return FleetStats{}, fmt.Errorf("fleet stats: %w", err)
 	}

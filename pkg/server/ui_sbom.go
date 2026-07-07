@@ -2,6 +2,8 @@ package server
 
 import (
 	"errors"
+	"fmt"
+	"html/template"
 	"net/http"
 	"strconv"
 
@@ -66,6 +68,7 @@ type sbomDetailView struct {
 	Findings       []findingRow
 	NextCursor     string
 	Packages       []pkgRow
+	PkgChart       template.HTML // inline SVG: findings-per-package bar chart
 	Failures       []failureRow
 }
 
@@ -154,11 +157,18 @@ func (s *Server) handleSBOMDetail(w http.ResponseWriter, r *http.Request) {
 			VEXStatus: f.VEXStatus,
 		})
 	}
+	var bars []hbar
 	for _, p := range pkgs {
 		v.Packages = append(v.Packages, pkgRow{
 			Package: p.Package, Count: p.Count, Fixable: p.Fixable, WorstSev: p.WorstSev,
 		})
+		sub := ""
+		if p.Fixable > 0 {
+			sub = fmt.Sprintf("(%d fixable)", p.Fixable)
+		}
+		bars = append(bars, hbar{Label: p.Package, Value: p.Count, Sev: p.WorstSev, Sub: sub})
 	}
+	v.PkgChart = hbarChart(bars, 720)
 	for _, f := range failures {
 		v.Failures = append(v.Failures, failureRow{
 			Scanner: f.Scanner, Stage: f.Stage, Error: f.Error,

@@ -13,6 +13,12 @@
   </div>
 
   <div class="card">
+    <div class="card-head"><h2>Risk over time</h2></div>
+    <p class="muted" style="margin-top:0">Finding count by severity across daily scans, oldest to newest. A rising column on an unchanged digest is new CVE data; a step change follows a new digest.</p>
+    {{.SevChart}}
+  </div>
+
+  <div class="card">
     <div class="card-head">
       <h2>Change log</h2>
       <form class="inline sev" method="get" action="/images">

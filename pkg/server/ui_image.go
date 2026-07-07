@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"html/template"
 	"net/http"
 	"strings"
 
@@ -49,12 +50,13 @@ type imageDetailView struct {
 
 	SBOMs          []sbomRow
 	Events         []eventRow
-	NextCursor     string // for the change log
-	SBOMNextCursor string // for the versions/SBOMs list
-	SBOMSort       string // active SBOM-list sort key
-	SBOMDir        string // active SBOM-list direction
-	EvSort         string // active change-log sort key
-	EvDir          string // active change-log direction
+	NextCursor     string        // for the change log
+	SBOMNextCursor string        // for the versions/SBOMs list
+	SBOMSort       string        // active SBOM-list sort key
+	SBOMDir        string        // active SBOM-list direction
+	EvSort         string        // active change-log sort key
+	EvDir          string        // active change-log direction
+	SevChart       template.HTML // inline SVG: severity composition over scans
 	HasEvents      bool
 }
 
@@ -98,6 +100,16 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Severity-over-time from scan runs, rendered as a stacked column chart.
+	sevpts, _ := s.store.RepoSeverityTimeline(r.Context(), tn.ID, repo, 60)
+	var points []stackPoint
+	for _, p := range sevpts {
+		points = append(points, stackPoint{Label: p.Day, Segs: []stackSeg{
+			{Sev: "critical", N: p.Critical}, {Sev: "high", N: p.High},
+			{Sev: "medium", N: p.Medium}, {Sev: "low", N: p.Low},
+		}})
+	}
+
 	// Authoritative header totals (independent of SBOM-list paging).
 	sum, err := s.store.RepoSummary(r.Context(), tn.ID, repo)
 	if err != nil {
@@ -127,6 +139,7 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 		SBOMDir:        sbomDir,
 		EvSort:         evSort,
 		EvDir:          evDir,
+		SevChart:       stackedTimeSeries(points, 720),
 		HasEvents:      len(events) > 0,
 	}
 

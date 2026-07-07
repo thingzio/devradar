@@ -19,6 +19,12 @@
   </section>
 
   <div class="card">
+    <div class="card-head"><h2>Findings by severity</h2></div>
+    <p class="muted" style="margin-top:0">Open findings across the fleet at or above your threshold, VEX-suppressed excluded.</p>
+    {{.SevChart}}
+  </div>
+
+  <div class="card">
     <div class="card-head">
       <h2>Highest-risk images</h2>
       <a href="/dashboard" class="muted">All images →</a>
