@@ -78,9 +78,24 @@
     </div>
 
     {{if .Findings}}
+    {{$qs := printf "min_severity=%s" .MinSeverity}}
+    {{if .FixableOnly}}{{$qs = printf "%s&fixable=true" $qs}}{{end}}
+    {{if .ShowSuppressed}}{{$qs = printf "%s&suppressed=true" $qs}}{{end}}
+    {{$base := printf "/sboms/%s" .SBOMID}}
     <table class="findings">
       <thead>
-        <tr><th>Severity</th><th>CVE</th><th>Package</th><th>Version</th><th class="num">CVSS</th><th class="num">EPSS</th><th>KEV</th><th>Fix</th><th>VEX</th><th>Scanner</th></tr>
+        <tr>
+          <th>{{sorth "Severity" "severity" $base $qs .Sort .Dir}}</th>
+          <th>{{sorth "CVE" "cve" $base $qs .Sort .Dir}}</th>
+          <th>{{sorth "Package" "package" $base $qs .Sort .Dir}}</th>
+          <th>Version</th>
+          <th class="num">{{sorth "CVSS" "cvss" $base $qs .Sort .Dir}}</th>
+          <th class="num">{{sorth "EPSS" "epss" $base $qs .Sort .Dir}}</th>
+          <th>KEV</th>
+          <th>{{sorth "Fix" "fixable" $base $qs .Sort .Dir}}</th>
+          <th>VEX</th>
+          <th>{{sorth "Scanner" "scanner" $base $qs .Sort .Dir}}</th>
+        </tr>
       </thead>
       <tbody>
         {{range .Findings}}
@@ -100,7 +115,7 @@
       </tbody>
     </table>
     {{if .NextCursor}}
-    <p class="loadmore"><a href="/sboms/{{.SBOMID}}?min_severity={{.MinSeverity}}{{if .FixableOnly}}&fixable=true{{end}}{{if .ShowSuppressed}}&suppressed=true{{end}}&cursor={{.NextCursor}}">Load more →</a></p>
+    <p class="loadmore"><a href="/sboms/{{.SBOMID}}?min_severity={{.MinSeverity}}{{if .FixableOnly}}&fixable=true{{end}}{{if .ShowSuppressed}}&suppressed=true{{end}}{{if .Sort}}&sort={{.Sort}}&dir={{.Dir}}{{end}}&cursor={{.NextCursor}}">Load more →</a></p>
     {{end}}
     {{else}}
     <p class="muted">No findings{{if .FixableOnly}} with an available fix{{end}} at or above the current severity threshold.</p>

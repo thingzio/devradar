@@ -23,7 +23,35 @@ var staticFS embed.FS
 
 var templates = template.Must(template.New("").Funcs(template.FuncMap{
 	"list": func(items ...string) []string { return items },
+	"sorth": func(label, key, base, qs, activeSort, activeDir string) template.HTML {
+		return sortHeader(label, key, base, qs, "sort", "dir", activeSort, activeDir)
+	},
+	"sorthp": sortHeader, // explicit param-prefix variant (e.g. "sbom_sort"/"sbom_dir")
 }).ParseFS(templateFS, "templates/*.html"))
+
+// sortHeader renders a clickable sortable column header (a full <a>). base is the
+// page path; qs is a query-string prefix carrying the filters to preserve (e.g.
+// "min_severity=high&fixable=true", no leading '?'); sortParam/dirParam are the
+// query keys to write (usually "sort"/"dir", but a page with two sortable tables
+// uses distinct prefixes). Clicking a column sorts descending; clicking the
+// active column flips direction. An arrow shows the active column's direction.
+func sortHeader(label, key, base, qs, sortParam, dirParam, activeSort, activeDir string) template.HTML {
+	arrow, nextDir := "", "desc"
+	if key == activeSort {
+		if activeDir == "asc" {
+			arrow, nextDir = " ↑", "desc"
+		} else {
+			arrow, nextDir = " ↓", "asc"
+		}
+	}
+	sep := "?"
+	if qs != "" {
+		sep = "?" + qs + "&"
+	}
+	href := fmt.Sprintf("%s%s%s=%s&%s=%s", base, sep, sortParam, template.URLQueryEscaper(key), dirParam, nextDir)
+	return template.HTML(fmt.Sprintf(`<a href="%s" class="sorth">%s%s</a>`,
+		template.HTMLEscapeString(href), template.HTMLEscapeString(label), arrow))
+}
 
 const (
 	sessionTTL    = 7 * 24 * time.Hour

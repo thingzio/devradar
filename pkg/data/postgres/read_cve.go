@@ -25,26 +25,38 @@ type FleetCVE struct {
 	Repositories []string `json:"repositories,omitempty"` // sample of affected repos
 }
 
-// FleetCVEs lists a tenant's vulnerabilities grouped by CVE, ranked by blast
-// radius and exploit risk: KEV first, then severity, then EPSS, then image
-// count. Ranked in SQL so page order is global order; keyset-paginated on
-// (risk, cve). minSeverity trims which findings count toward a CVE's presence.
-func (s *Store) FleetCVEs(ctx context.Context, tenantID, minSeverity, cursor string, limit int) (items []FleetCVE, next string, err error) {
+// fleetCVESortCols sort against the outer-query column aliases. Default "risk"
+// is the blast-radius/exploit ranking (KEV → severity → reach → EPSS).
+var fleetCVESortCols = map[string]sortCol{
+	"risk":     {expr: "risk", cast: "double precision", defDesc: true},
+	"severity": {expr: "best_rank", cast: "double precision", defDesc: false}, // rank asc = worst first
+	"images":   {expr: "image_count", cast: "double precision", defDesc: true},
+	"findings": {expr: "finding_count", cast: "double precision", defDesc: true},
+	"cvss":     {expr: "max_score", cast: "double precision", defDesc: true},
+	"epss":     {expr: "COALESCE(epss, -1)", cast: "double precision", defDesc: true},
+	"cve":      {expr: "cve", cast: "text", defDesc: false},
+}
+
+// FleetCVEs lists a tenant's vulnerabilities grouped by CVE. Default ranking is
+// blast radius + exploit risk (KEV → severity → EPSS → reach), sortable by any
+// fleetCVESortCols key. Ranked/sorted in SQL so page order is global order;
+// keyset-paginated. minSeverity trims which findings count toward a CVE.
+func (s *Store) FleetCVEs(ctx context.Context, tenantID, minSeverity, sortKey, sortDir, cursor string, limit int) (items []FleetCVE, next string, err error) {
 	eff, fetch := clampLimit(limit)
-	cur, hasCur := decodeCursor(cursor)
+	sort := resolveSort(sortKey, sortDir, fleetCVESortCols, "risk")
+	cur, hasCur := decodeSortCursor(cursor)
 
 	args := []any{tenantID, pq.Array(data.AllowedSeverities(minSeverity))}
 	keyset := ""
 	if hasCur {
-		keyset = "WHERE (risk, cve) < ($3, $4)"
-		args = append(args, cur.N, cur.ID)
+		keyset = "WHERE " + sort.seek("cve", 3, 4)
+		args = append(args, cur.Val, cur.ID)
 	}
 	args = append(args, fetch)
 	limitPos := fmt.Sprintf("$%d", len(args))
 
 	// risk = KEV(1e18) + worst-severity-rank(1e15..) + image_count(1e9) +
 	// EPSS-scaled + finding_count. Wide multipliers keep tiers from colliding.
-	// Severity rank is inverted (critical highest) via (5 - min(rank)).
 	q := fmt.Sprintf(`
 		WITH cve AS (
 			SELECT f.exposure AS cve,
@@ -71,11 +83,11 @@ func (s *Store) FleetCVEs(ctx context.Context, tenantID, minSeverity, cursor str
 			       + LEAST(finding_count, 999)                       AS risk
 			FROM cve
 		)
-		SELECT cve, best_rank, max_score, image_count, finding_count, fixable, kev, epss, repos, risk
+		SELECT cve, best_rank, max_score, image_count, finding_count, fixable, kev, epss, repos, %s
 		FROM ranked
 		%s
-		ORDER BY risk DESC, cve DESC
-		LIMIT %s`, severityRankSQL, keyset, limitPos)
+		ORDER BY %s
+		LIMIT %s`, severityRankSQL, sort.selectVal(), keyset, sort.orderBy("cve"), limitPos)
 
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -83,25 +95,25 @@ func (s *Store) FleetCVEs(ctx context.Context, tenantID, minSeverity, cursor str
 	}
 	defer func() { _ = rows.Close() }()
 
-	var risks []int64
+	var vals []string
 	for rows.Next() {
 		var c FleetCVE
 		var rank int
-		var risk int64
+		var sortval string
 		if err := rows.Scan(&c.CVE, &rank, &c.MaxScore, &c.ImageCount, &c.FindingCount,
-			&c.Fixable, &c.KEV, &c.EPSS, pq.Array(&c.Repositories), &risk); err != nil {
+			&c.Fixable, &c.KEV, &c.EPSS, pq.Array(&c.Repositories), &sortval); err != nil {
 			return nil, "", fmt.Errorf("scan fleet cve: %w", err)
 		}
 		c.WorstSev = severityForRank(rank)
 		items = append(items, c)
-		risks = append(risks, risk)
+		vals = append(vals, sortval)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, "", err
 	}
 	if len(items) > eff {
 		items = items[:eff]
-		next = encodeCursorN(risks[eff-1], items[len(items)-1].CVE)
+		next = encodeSortCursor(vals[eff-1], items[len(items)-1].CVE)
 	}
 	return items, next, nil
 }

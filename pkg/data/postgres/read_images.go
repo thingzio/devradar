@@ -184,7 +184,15 @@ func (s *Store) RepoSummary(ctx context.Context, tenantID, repository string) (R
 // SBOMsForRepo returns the SBOMs tracked for one repository, newest generation
 // first (falling back to submission time when a generator omitted generated_at),
 // keyset-paginated. This is CUJ-2: "the versions/digests I have for this image".
-func (s *Store) SBOMsForRepo(ctx context.Context, tenantID, repository, cursor string, limit int) (items []RepoSBOM, next string, err error) {
+// repoSBOMSortCols: default "generated" (newest first). "version" sorts by the
+// tag; "packages" by catalogued package count.
+var repoSBOMSortCols = map[string]sortCol{
+	"generated": {expr: "COALESCE(generated_at, submitted_at)", cast: "timestamptz", defDesc: true},
+	"version":   {expr: "COALESCE(version, '')", cast: "text", defDesc: false},
+	"packages":  {expr: "package_count", cast: "double precision", defDesc: true},
+}
+
+func (s *Store) SBOMsForRepo(ctx context.Context, tenantID, repository, sortKey, sortDir, cursor string, limit int) (items []RepoSBOM, next string, err error) {
 	// Ownership/existence: distinguish "no such image" (404) from "empty page".
 	var known bool
 	if err := s.db.QueryRowContext(ctx,
@@ -197,26 +205,26 @@ func (s *Store) SBOMsForRepo(ctx context.Context, tenantID, repository, cursor s
 	}
 
 	eff, fetch := clampLimit(limit)
-	cur, hasCur := decodeCursor(cursor)
+	sort := resolveSort(sortKey, sortDir, repoSBOMSortCols, "generated")
+	cur, hasCur := decodeSortCursor(cursor)
 
-	// Order by effective generation time = COALESCE(generated_at, submitted_at),
-	// id as the unique tiebreaker for a stable keyset.
 	where := `WHERE tenant_id = $1 AND repository = $2 AND status = 'active'`
 	args := []any{tenantID, repository}
 	if hasCur {
-		where += ` AND (COALESCE(generated_at, submitted_at), id) < ($3, $4)`
-		args = append(args, cur.TS, cur.ID)
+		where += " AND " + sort.seek("id", 3, 4)
+		args = append(args, cur.Val, cur.ID)
 	}
 	args = append(args, fetch)
 	limitPos := fmt.Sprintf("$%d", len(args))
 
 	q := fmt.Sprintf(`
 		SELECT id, digest, version, format, tool, tool_version, package_count,
-		       COALESCE(generated_at, submitted_at) AS effective_at, submitted_at
+		       COALESCE(generated_at, submitted_at) AS effective_at, submitted_at,
+		       %s
 		FROM devradar_sbom
 		%s
-		ORDER BY COALESCE(generated_at, submitted_at) DESC, id DESC
-		LIMIT %s`, where, limitPos)
+		ORDER BY %s
+		LIMIT %s`, sort.selectVal(), where, sort.orderBy("id"), limitPos)
 
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -224,25 +232,27 @@ func (s *Store) SBOMsForRepo(ctx context.Context, tenantID, repository, cursor s
 	}
 	defer func() { _ = rows.Close() }()
 
+	var vals []string
 	for rows.Next() {
 		var it RepoSBOM
 		var version, tool, toolVer *string
+		var sortval string
 		if err := rows.Scan(&it.SBOMID, &it.Digest, &version, &it.Format, &tool, &toolVer,
-			&it.PackageCount, &it.EffectiveAt, &it.SubmittedAt); err != nil {
+			&it.PackageCount, &it.EffectiveAt, &it.SubmittedAt, &sortval); err != nil {
 			return nil, "", fmt.Errorf("scan repo sbom: %w", err)
 		}
 		it.Version = deref(version)
 		it.Tool = deref(tool)
 		it.ToolVersion = deref(toolVer)
 		items = append(items, it)
+		vals = append(vals, sortval)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, "", err
 	}
 	if len(items) > eff {
 		items = items[:eff]
-		last := items[len(items)-1]
-		next = encodeCursor(last.EffectiveAt, last.SBOMID)
+		next = encodeSortCursor(vals[eff-1], items[len(items)-1].SBOMID)
 	}
 	return items, next, nil
 }

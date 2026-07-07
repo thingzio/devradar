@@ -18,8 +18,18 @@
 
     {{if .HasData}}
     <table>
+      {{$qs := printf "min_severity=%s" .MinSeverity}}
       <thead>
-        <tr><th>CVE</th><th>Severity</th><th class="num">EPSS</th><th>KEV</th><th class="num">Images</th><th class="num">Findings</th><th>Fix</th><th>Affected</th></tr>
+        <tr>
+          <th>{{sorth "CVE" "cve" "/cves" $qs .Sort .Dir}}</th>
+          <th>{{sorth "Severity" "severity" "/cves" $qs .Sort .Dir}}</th>
+          <th class="num">{{sorth "EPSS" "epss" "/cves" $qs .Sort .Dir}}</th>
+          <th>KEV</th>
+          <th class="num">{{sorth "Images" "images" "/cves" $qs .Sort .Dir}}</th>
+          <th class="num">{{sorth "Findings" "findings" "/cves" $qs .Sort .Dir}}</th>
+          <th>Fix</th>
+          <th>Affected</th>
+        </tr>
       </thead>
       <tbody>
         {{range .CVEs}}
@@ -37,7 +47,7 @@
       </tbody>
     </table>
     {{if .NextCursor}}
-    <p class="loadmore"><a href="/cves?min_severity={{.MinSeverity}}&cursor={{.NextCursor}}">Load more →</a></p>
+    <p class="loadmore"><a href="/cves?min_severity={{.MinSeverity}}{{if .Sort}}&sort={{.Sort}}&dir={{.Dir}}{{end}}&cursor={{.NextCursor}}">Load more →</a></p>
     {{end}}
     {{else}}
     <p class="muted">No vulnerabilities at or above the current severity threshold.</p>

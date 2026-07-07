@@ -26,6 +26,8 @@ type cveListView struct {
 	Email       string
 	Version     string
 	MinSeverity string
+	Sort        string
+	Dir         string
 	NextCursor  string
 	CVEs        []cveListRow
 	HasData     bool
@@ -33,21 +35,22 @@ type cveListView struct {
 
 // handleCVEList renders the fleet-wide CVE list (blast radius): every
 // vulnerability across the tenant's images, ranked KEV-first then severity then
-// reach. Paginated.
+// reach by default; sortable. Paginated.
 func (s *Server) handleCVEList(w http.ResponseWriter, r *http.Request) {
 	tn := middleware.TenantFromContext(r.Context())
 	min := tenantMinSeverity(tn)
 	if q := r.URL.Query().Get("min_severity"); q != "" && data.ValidMinSeverity(q) {
 		min = q
 	}
-	cves, next, err := s.store.FleetCVEs(r.Context(), tn.ID, min, r.URL.Query().Get("cursor"), 100)
+	q := r.URL.Query()
+	cves, next, err := s.store.FleetCVEs(r.Context(), tn.ID, min, q.Get("sort"), q.Get("dir"), q.Get("cursor"), 100)
 	if err != nil {
 		http.Error(w, "failed to load CVEs", http.StatusInternalServerError)
 		return
 	}
 	v := cveListView{
 		Title: "CVEs", SignedIn: true, Email: tn.Email, Version: s.opts.Version,
-		MinSeverity: min, NextCursor: next, HasData: len(cves) > 0,
+		MinSeverity: min, Sort: q.Get("sort"), Dir: q.Get("dir"), NextCursor: next, HasData: len(cves) > 0,
 	}
 	for _, c := range cves {
 		v.CVEs = append(v.CVEs, cveListRow{

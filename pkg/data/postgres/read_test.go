@@ -215,7 +215,7 @@ func TestVEXSuppression(t *testing.T) {
 	}
 
 	countDefault := func() int {
-		f, _, err := st.FindingsBySBOM(ctx, tenantID, sbomID, "negligible", false, false, "", 50)
+		f, _, err := st.FindingsBySBOM(ctx, tenantID, sbomID, "negligible", false, false, "", "", "", 50)
 		if err != nil {
 			t.Fatalf("findings: %v", err)
 		}
@@ -236,7 +236,7 @@ func TestVEXSuppression(t *testing.T) {
 	if got := countDefault(); got != 1 {
 		t.Errorf("post-VEX default findings = %d, want 1 (one suppressed)", got)
 	}
-	all, _, _ := st.FindingsBySBOM(ctx, tenantID, sbomID, "negligible", false, true, "", 50)
+	all, _, _ := st.FindingsBySBOM(ctx, tenantID, sbomID, "negligible", false, true, "", "", "", 50)
 	if len(all) != 2 {
 		t.Fatalf("showSuppressed findings = %d, want 2", len(all))
 	}
@@ -308,7 +308,7 @@ func TestVEXSuppression_RepoScoped(t *testing.T) {
 
 	// Both versions' findings suppressed by the single repo-scoped statement.
 	for _, v := range []string{"v1", "v2"} {
-		f, _, err := st.FindingsBySBOM(ctx, tenantID, "aicr-"+v+"-"+suffix, "negligible", false, false, "", 50)
+		f, _, err := st.FindingsBySBOM(ctx, tenantID, "aicr-"+v+"-"+suffix, "negligible", false, false, "", "", "", 50)
 		if err != nil {
 			t.Fatalf("findings %s: %v", v, err)
 		}
@@ -317,7 +317,7 @@ func TestVEXSuppression_RepoScoped(t *testing.T) {
 		}
 	}
 	// The fleet CVE view drops it too.
-	cves, _, err := st.FleetCVEs(ctx, tenantID, "negligible", "", 50)
+	cves, _, err := st.FleetCVEs(ctx, tenantID, "negligible", "", "", "", 50)
 	if err != nil {
 		t.Fatalf("fleet cves: %v", err)
 	}
@@ -376,7 +376,7 @@ func TestFleetCVEs_BlastRadiusRanking(t *testing.T) {
 		t.Fatalf("seed enrichment: %v", err)
 	}
 
-	cves, _, err := st.FleetCVEs(ctx, tenantID, "negligible", "", 50)
+	cves, _, err := st.FleetCVEs(ctx, tenantID, "negligible", "", "", "", 50)
 	if err != nil {
 		t.Fatalf("fleet cves: %v", err)
 	}
@@ -474,7 +474,7 @@ func TestFindings_PagingFilterRollup(t *testing.T) {
 	var got []string
 	cursor := ""
 	for range 5 {
-		page, next, err := st.FindingsBySBOM(ctx, tenantID, sbomID, "negligible", false, false, cursor, 2)
+		page, next, err := st.FindingsBySBOM(ctx, tenantID, sbomID, "negligible", false, false, "", "", cursor, 2)
 		if err != nil {
 			t.Fatalf("findings page: %v", err)
 		}
@@ -497,7 +497,7 @@ func TestFindings_PagingFilterRollup(t *testing.T) {
 	}
 
 	// Fixable filter: only the 2 fixed findings (1 crit, 1 med).
-	fx, _, err := st.FindingsBySBOM(ctx, tenantID, sbomID, "negligible", true, false, "", 50)
+	fx, _, err := st.FindingsBySBOM(ctx, tenantID, sbomID, "negligible", true, false, "", "", "", 50)
 	if err != nil {
 		t.Fatalf("fixable findings: %v", err)
 	}
@@ -517,6 +517,84 @@ func TestFindings_PagingFilterRollup(t *testing.T) {
 	}
 	if len(pkgs) == 0 || pkgs[0].WorstSev != "critical" {
 		t.Errorf("rollup should lead with a critical package, got %+v", pkgs)
+	}
+}
+
+// TestFindings_Sorting verifies server-side sort by different columns/directions
+// and that keyset pagination walks the sorted order without gaps or duplicates.
+func TestFindings_Sorting(t *testing.T) {
+	st, err := postgres.NewFromEnv(context.Background())
+	if err != nil {
+		t.Skipf("skipping (no database): %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	suffix := hex.EncodeToString(b)
+	var tenantID string
+	if err := st.DB().QueryRowContext(ctx,
+		`INSERT INTO devradar_tenant (email) VALUES ($1) RETURNING id`,
+		"sort-"+suffix+"@example.com").Scan(&tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	sbomID := "sort-" + suffix
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_sbom (id, tenant_id, image_ref, repository, digest, format, object_path)
+		VALUES ($1,$2,'reg/app','reg/app',$3,'cyclonedx','gs://x')`, sbomID, tenantID, "sha256:"+suffix); err != nil {
+		t.Fatalf("seed sbom: %v", err)
+	}
+	// Distinct scores + packages so ordering is unambiguous.
+	seed := func(cve, pkg string, score float32) {
+		if _, err := st.DB().ExecContext(ctx, `
+			INSERT INTO devradar_finding (sbom_id, scanner, finding_id, exposure, package, version, severity, score, is_fixed)
+			VALUES ($1,'grype',$2,$3,$4,'1','medium',$5,false)`,
+			sbomID, cve+"/"+pkg, cve, pkg, score); err != nil {
+			t.Fatalf("seed finding: %v", err)
+		}
+	}
+	seed("CVE-1"+suffix, "zeta", 2.0)
+	seed("CVE-2"+suffix, "alpha", 9.0)
+	seed("CVE-3"+suffix, "mike", 5.0)
+
+	scores := func(sortKey, dir string) []float32 {
+		f, _, err := st.FindingsBySBOM(ctx, tenantID, sbomID, "negligible", false, false, sortKey, dir, "", 50)
+		if err != nil {
+			t.Fatalf("findings sort %s/%s: %v", sortKey, dir, err)
+		}
+		out := make([]float32, len(f))
+		for i, x := range f {
+			out[i] = x.Score
+		}
+		return out
+	}
+
+	// CVSS desc: 9,5,2. asc: 2,5,9.
+	if got := scores("cvss", "desc"); len(got) != 3 || got[0] != 9.0 || got[2] != 2.0 {
+		t.Errorf("cvss desc = %v, want [9 5 2]", got)
+	}
+	if got := scores("cvss", "asc"); len(got) != 3 || got[0] != 2.0 || got[2] != 9.0 {
+		t.Errorf("cvss asc = %v, want [2 5 9]", got)
+	}
+
+	// Package asc: alpha(9), mike(5), zeta(2) → scores 9,5,2.
+	if got := scores("package", "asc"); len(got) != 3 || got[0] != 9.0 || got[2] != 2.0 {
+		t.Errorf("package asc scores = %v, want [9 5 2]", got)
+	}
+
+	// Paging under cvss desc: page size 2 then 1, no gap/overlap.
+	p1, next, err := st.FindingsBySBOM(ctx, tenantID, sbomID, "negligible", false, false, "cvss", "desc", "", 2)
+	if err != nil || len(p1) != 2 || next == "" {
+		t.Fatalf("cvss page1: len=%d next=%q err=%v", len(p1), next, err)
+	}
+	p2, _, err := st.FindingsBySBOM(ctx, tenantID, sbomID, "negligible", false, false, "cvss", "desc", next, 2)
+	if err != nil || len(p2) != 1 {
+		t.Fatalf("cvss page2: len=%d err=%v", len(p2), err)
+	}
+	all := []float32{p1[0].Score, p1[1].Score, p2[0].Score}
+	if all[0] != 9.0 || all[1] != 5.0 || all[2] != 2.0 {
+		t.Errorf("paged cvss desc = %v, want [9 5 2]", all)
 	}
 }
 
@@ -671,7 +749,7 @@ func TestRepoViews(t *testing.T) {
 	}
 
 	// Per-image SBOMs, newest generation first.
-	sboms, _, err := st.SBOMsForRepo(ctx, tenantID, repo, "", 50)
+	sboms, _, err := st.SBOMsForRepo(ctx, tenantID, repo, "", "", "", 50)
 	if err != nil {
 		t.Fatalf("SBOMsForRepo: %v", err)
 	}
@@ -683,7 +761,7 @@ func TestRepoViews(t *testing.T) {
 	}
 
 	// Unknown repo → ErrNotFound; cross-tenant → ErrNotFound.
-	if _, _, err := st.SBOMsForRepo(ctx, tenantID, "quay.io/nope", "", 50); !errors.Is(err, postgres.ErrNotFound) {
+	if _, _, err := st.SBOMsForRepo(ctx, tenantID, "quay.io/nope", "", "", "", 50); !errors.Is(err, postgres.ErrNotFound) {
 		t.Errorf("unknown repo: err = %v, want ErrNotFound", err)
 	}
 

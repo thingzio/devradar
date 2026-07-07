@@ -65,8 +65,9 @@ func (s *Server) handleImageSBOMs(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing repo query parameter")
 		return
 	}
+	q := r.URL.Query()
 	sboms, next, err := s.store.SBOMsForRepo(r.Context(), tn.ID, repo,
-		r.URL.Query().Get("cursor"), pageLimit(r))
+		q.Get("sort"), q.Get("dir"), q.Get("cursor"), pageLimit(r))
 	if err != nil {
 		writeReadErr(w, err, "failed to list sboms")
 		return
@@ -165,8 +166,9 @@ func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
 	}
 	fixableOnly := r.URL.Query().Get("fixable") == "true"
 	showSuppressed := r.URL.Query().Get("suppressed") == "true"
+	q := r.URL.Query()
 	findings, next, err := s.store.FindingsBySBOM(r.Context(), tn.ID, r.PathValue("id"), min,
-		fixableOnly, showSuppressed, r.URL.Query().Get("cursor"), pageLimit(r))
+		fixableOnly, showSuppressed, q.Get("sort"), q.Get("dir"), q.Get("cursor"), pageLimit(r))
 	if err != nil {
 		writeReadErr(w, err, "failed to load findings")
 		return

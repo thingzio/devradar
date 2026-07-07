@@ -58,7 +58,14 @@
     <p class="muted" style="margin-top:0">Each SBOM submitted for this image, newest generation first.</p>
     <table>
       <thead>
-        <tr><th>Version</th><th>Digest</th><th>Generated</th><th class="num">Packages</th><th>Generator</th></tr>
+        {{$sq := printf "repo=%s&min_severity=%s" .Repository .MinSeverity}}
+        <tr>
+          <th>{{sorthp "Version" "version" "/images" $sq "sbom_sort" "sbom_dir" .SBOMSort .SBOMDir}}</th>
+          <th>Digest</th>
+          <th>{{sorthp "Generated" "generated" "/images" $sq "sbom_sort" "sbom_dir" .SBOMSort .SBOMDir}}</th>
+          <th class="num">{{sorthp "Packages" "packages" "/images" $sq "sbom_sort" "sbom_dir" .SBOMSort .SBOMDir}}</th>
+          <th>Generator</th>
+        </tr>
       </thead>
       <tbody>
         {{range .SBOMs}}
@@ -75,7 +82,7 @@
       </tbody>
     </table>
     {{if .SBOMNextCursor}}
-    <p class="loadmore"><a href="/images?repo={{.Repository}}&min_severity={{.MinSeverity}}&sbom_cursor={{.SBOMNextCursor}}">Load more →</a></p>
+    <p class="loadmore"><a href="/images?repo={{.Repository}}&min_severity={{.MinSeverity}}{{if .SBOMSort}}&sbom_sort={{.SBOMSort}}&sbom_dir={{.SBOMDir}}{{end}}&sbom_cursor={{.SBOMNextCursor}}">Load more →</a></p>
     {{end}}
   </div>
 </main>

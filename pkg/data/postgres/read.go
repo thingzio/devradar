@@ -131,18 +131,30 @@ const severityRankSQL = `CASE severity
 	WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2
 	WHEN 'low' THEN 3 WHEN 'negligible' THEN 4 ELSE 5 END`
 
+// findingSortCols is the whitelist of sortable columns for the findings table.
+// Each expr is COALESCE'd non-null; finding_id is the unique tiebreak.
+var findingSortCols = map[string]sortCol{
+	"severity": {expr: severityRankSQL, cast: "double precision", defDesc: false}, // rank asc = worst first
+	"cvss":     {expr: "f.score", cast: "double precision", defDesc: true},
+	"epss":     {expr: "COALESCE(e.epss_score, -1)", cast: "double precision", defDesc: true},
+	"package":  {expr: "f.package", cast: "text", defDesc: false},
+	"cve":      {expr: "f.exposure", cast: "text", defDesc: false},
+	"scanner":  {expr: "f.scanner", cast: "text", defDesc: false},
+	"fixable":  {expr: "f.is_fixed::int", cast: "double precision", defDesc: true},
+}
+
 // FindingsBySBOM returns current findings for one SBOM at or above minSeverity
-// (unknown always included), worst-severity first, keyset-paginated on
-// (severity_rank, exposure, finding_id) so a large finding set pages cleanly.
-// fixableOnly restricts to findings with an available fix. showSuppressed
-// includes findings a VEX statement marked not_affected/fixed (hidden by
-// default). Tenant-scoped; ErrNotFound if not owned.
-func (s *Store) FindingsBySBOM(ctx context.Context, tenantID, sbomID, minSeverity string, fixableOnly, showSuppressed bool, cursor string, limit int) (items []Finding, next string, err error) {
+// (unknown always included), keyset-paginated. Sortable by any findingSortCols
+// key (default "severity" = worst first); fixableOnly restricts to findings with
+// a fix; showSuppressed includes VEX-suppressed findings (hidden by default).
+// Tenant-scoped; ErrNotFound if not owned.
+func (s *Store) FindingsBySBOM(ctx context.Context, tenantID, sbomID, minSeverity string, fixableOnly, showSuppressed bool, sortKey, sortDir, cursor string, limit int) (items []Finding, next string, err error) {
 	if err := s.assertSBOMOwner(ctx, tenantID, sbomID); err != nil {
 		return nil, "", err
 	}
 	eff, fetch := clampLimit(limit)
-	cur, hasCur := decodeCursor(cursor)
+	sort := resolveSort(sortKey, sortDir, findingSortCols, "severity")
+	cur, hasCur := decodeSortCursor(cursor)
 
 	args := []any{sbomID, pq.Array(data.AllowedSeverities(minSeverity))}
 	conds := ""
@@ -153,46 +165,40 @@ func (s *Store) FindingsBySBOM(ctx context.Context, tenantID, sbomID, minSeverit
 		conds += " AND NOT " + vexSuppressedExpr
 	}
 	if hasCur {
-		// Seek past the cursor row in (rank, exposure, finding_id) order.
-		conds += fmt.Sprintf(" AND (%s, f.exposure, f.finding_id) > ($%d, $%d, $%d)",
-			severityRankSQL, len(args)+1, len(args)+2, len(args)+3)
-		args = append(args, cur.N, cur.Str, cur.ID)
+		conds += " AND " + sort.seek("f.finding_id", len(args)+1, len(args)+2)
+		args = append(args, cur.Val, cur.ID)
 	}
 	args = append(args, fetch)
 	limitPos := fmt.Sprintf("$%d", len(args))
 
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
 		SELECT f.scanner, f.exposure, f.package, f.version, f.severity, f.score, f.is_fixed,
-		       f.finding_id, %s AS rank,
+		       f.finding_id,
 		       e.epss_score, e.epss_percentile, COALESCE(e.kev, false),
-		       vex.vex_status
+		       vex.vex_status,
+		       %s
 		FROM devradar_finding f
 		JOIN devradar_sbom sb ON sb.id = f.sbom_id
 		LEFT JOIN devradar_cve_enrichment e ON e.cve = f.exposure%s
 		WHERE f.sbom_id = $1 AND f.severity = ANY($2)%s
-		ORDER BY rank, f.exposure, f.finding_id
-		LIMIT %s`, severityRankSQL, vexStatusJoin, conds, limitPos), args...)
+		ORDER BY %s
+		LIMIT %s`, sort.selectVal(), vexStatusJoin, conds, sort.orderBy("f.finding_id"), limitPos), args...)
 	if err != nil {
 		return nil, "", fmt.Errorf("findings: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	type key struct {
-		rank int64
-		exp  string
-		id   string
-	}
+	type key struct{ val, id string }
 	var keys []key
 	for rows.Next() {
 		var f Finding
 		var k key
 		var vexStatus *string
 		if err := rows.Scan(&f.Scanner, &f.Exposure, &f.Package, &f.Version, &f.Severity, &f.Score, &f.IsFixed,
-			&k.id, &k.rank, &f.EPSS, &f.EPSSPct, &f.KEV, &vexStatus); err != nil {
+			&k.id, &f.EPSS, &f.EPSSPct, &f.KEV, &vexStatus, &k.val); err != nil {
 			return nil, "", fmt.Errorf("scan finding: %w", err)
 		}
 		f.VEXStatus = deref(vexStatus)
-		k.exp = f.Exposure
 		items = append(items, f)
 		keys = append(keys, k)
 	}
@@ -202,7 +208,7 @@ func (s *Store) FindingsBySBOM(ctx context.Context, tenantID, sbomID, minSeverit
 	if len(items) > eff {
 		items = items[:eff]
 		k := keys[eff-1]
-		next = encodeCursorNS(k.rank, k.exp, k.id)
+		next = encodeSortCursor(k.val, k.id)
 	}
 	return items, next, nil
 }

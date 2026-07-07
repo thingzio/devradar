@@ -50,6 +50,8 @@ type imageDetailView struct {
 	Events         []eventRow
 	NextCursor     string // for the change log
 	SBOMNextCursor string // for the versions/SBOMs list
+	SBOMSort       string // active SBOM-list sort key
+	SBOMDir        string // active SBOM-list direction
 	HasEvents      bool
 }
 
@@ -68,10 +70,12 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 		min = q
 	}
 
-	// SBOMs for the image (newest generation first), paginated independently of
-	// the change log via its own cursor param. ErrNotFound ⇒ unknown image.
+	// SBOMs for the image (newest generation first by default), paginated
+	// independently of the change log via its own cursor param. ErrNotFound ⇒
+	// unknown image.
+	sbomSort, sbomDir := r.URL.Query().Get("sbom_sort"), r.URL.Query().Get("sbom_dir")
 	sboms, sbomNext, err := s.store.SBOMsForRepo(r.Context(), tn.ID, repo,
-		r.URL.Query().Get("sbom_cursor"), 50)
+		sbomSort, sbomDir, r.URL.Query().Get("sbom_cursor"), 50)
 	if err != nil {
 		if errors.Is(err, postgres.ErrNotFound) {
 			http.Error(w, "image not found", http.StatusNotFound)
@@ -113,6 +117,8 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 		DigestCount:    sum.DigestCount,
 		NextCursor:     next,
 		SBOMNextCursor: sbomNext,
+		SBOMSort:       sbomSort,
+		SBOMDir:        sbomDir,
 		HasEvents:      len(events) > 0,
 	}
 

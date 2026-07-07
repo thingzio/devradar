@@ -60,6 +60,8 @@ type sbomDetailView struct {
 
 	FixableOnly    bool
 	ShowSuppressed bool
+	Sort           string // active sort key
+	Dir            string // active direction (asc/desc)
 	Findings       []findingRow
 	NextCursor     string
 	Packages       []pkgRow
@@ -78,6 +80,8 @@ func (s *Server) handleSBOMDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	fixableOnly := r.URL.Query().Get("fixable") == "true"
 	showSuppressed := r.URL.Query().Get("suppressed") == "true"
+	sortKey := r.URL.Query().Get("sort")
+	sortDir := r.URL.Query().Get("dir")
 
 	detail, err := s.store.GetSBOM(r.Context(), tn.ID, id, min)
 	if err != nil {
@@ -90,7 +94,7 @@ func (s *Server) handleSBOMDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	findings, next, err := s.store.FindingsBySBOM(r.Context(), tn.ID, id, min, fixableOnly,
-		showSuppressed, r.URL.Query().Get("cursor"), 100)
+		showSuppressed, sortKey, sortDir, r.URL.Query().Get("cursor"), 100)
 	if err != nil {
 		http.Error(w, "failed to load findings", http.StatusInternalServerError)
 		return
@@ -126,6 +130,8 @@ func (s *Server) handleSBOMDetail(w http.ResponseWriter, r *http.Request) {
 		Counts:         detail.Counts,
 		FixableOnly:    fixableOnly,
 		ShowSuppressed: showSuppressed,
+		Sort:           sortKey,
+		Dir:            sortDir,
 		NextCursor:     next,
 	}
 	if detail.GeneratedAt != nil {
