@@ -4,21 +4,57 @@
   <h1 class="page-title">CVEs</h1>
   <p class="sub">Every vulnerability across your images, ranked by exploitation risk and blast radius. Known-exploited (KEV) first, then severity, then reach.</p>
 
+  {{if .UploadMsg}}<div class="msg ok">VEX uploaded: {{.UploadMsg}}</div>{{end}}
+  {{if .UploadErr}}<div class="msg err">VEX upload failed: {{.UploadErr}}</div>{{end}}
+
   <div class="card">
     <div class="card-head">
       <h2>Fleet vulnerabilities</h2>
-      <form class="inline sev" method="get" action="/cves">
-        <label class="muted" for="sev">Min severity</label>
-        <select id="sev" name="min_severity" onchange="this.form.submit()">
-          {{$cur := .MinSeverity}}
-          {{range (list "critical" "high" "medium" "low" "negligible")}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}
-        </select>
+      <form class="inline" method="post" action="/vex/upload" enctype="multipart/form-data">
+        <label class="btn secondary filelabel">Upload VEX<input type="file" name="vex" accept=".json,application/json" onchange="this.form.submit()" hidden></label>
       </form>
     </div>
 
+    {{/* Filter bar. All controls submit via GET so state lives in the URL and
+         survives sort/paging. The severity select stays; add VEX + KEV + fix. */}}
+    <form class="filterbar" method="get" action="/cves">
+      <label class="muted">Severity
+        <select name="min_severity">
+          {{$cur := .MinSeverity}}
+          {{range (list "critical" "high" "medium" "low" "negligible")}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}
+        </select>
+      </label>
+      <label class="muted">VEX
+        <select name="vex">
+          <option value="" {{if eq .FVex ""}}selected{{end}}>any</option>
+          <option value="not_vexed" {{if eq .FVex "not_vexed"}}selected{{end}}>not VEX'd</option>
+          <option value="vexed" {{if eq .FVex "vexed"}}selected{{end}}>any VEX</option>
+          <option value="not_affected" {{if eq .FVex "not_affected"}}selected{{end}}>not_affected</option>
+          <option value="affected" {{if eq .FVex "affected"}}selected{{end}}>affected</option>
+          <option value="under_investigation" {{if eq .FVex "under_investigation"}}selected{{end}}>under_investigation</option>
+          <option value="fixed" {{if eq .FVex "fixed"}}selected{{end}}>fixed</option>
+        </select>
+      </label>
+      <label class="muted">Justification
+        <select name="just">
+          <option value="" {{if eq .FJust ""}}selected{{end}}>any</option>
+          {{$j := .FJust}}
+          {{range .Justifications}}<option value="{{.}}" {{if eq . $j}}selected{{end}}>{{.}}</option>{{end}}
+        </select>
+      </label>
+      <label class="muted chk"><input type="checkbox" name="kev" value="true" {{if .FKEV}}checked{{end}}> KEV only</label>
+      <label class="muted chk"><input type="checkbox" name="fixable" value="true" {{if .FFixable}}checked{{end}}> Fixable only</label>
+      <button class="btn secondary" type="submit">Apply</button>
+      <a class="btn secondary" href="/cves">Reset</a>
+    </form>
+
     {{if .HasData}}
+    {{$qs := printf "min_severity=%s" .MinSeverity}}
+    {{if .FVex}}{{$qs = printf "%s&vex=%s" $qs .FVex}}{{end}}
+    {{if .FJust}}{{$qs = printf "%s&just=%s" $qs .FJust}}{{end}}
+    {{if .FKEV}}{{$qs = printf "%s&kev=true" $qs}}{{end}}
+    {{if .FFixable}}{{$qs = printf "%s&fixable=true" $qs}}{{end}}
     <table>
-      {{$qs := printf "min_severity=%s" .MinSeverity}}
       <thead>
         <tr>
           <th>{{sorth "CVE" "cve" "/cves" $qs .Sort .Dir}}</th>
@@ -28,12 +64,12 @@
           <th class="num">{{sorth "Images" "images" "/cves" $qs .Sort .Dir}}</th>
           <th class="num">{{sorth "Findings" "findings" "/cves" $qs .Sort .Dir}}</th>
           <th>Fix</th>
-          <th>Affected</th>
+          <th>VEX</th>
         </tr>
       </thead>
       <tbody>
         {{range .CVEs}}
-        <tr>
+        <tr{{if .Suppressed}} class="vexed"{{end}}>
           <td><a href="/cves/{{.CVE}}">{{.CVE}}</a></td>
           <td><span class="sev-badge sev-b-{{.WorstSev}}">{{.WorstSev}}</span></td>
           <td class="num">{{if .EPSS}}{{.EPSS}}{{else}}<span class="muted">—</span>{{end}}</td>
@@ -41,16 +77,21 @@
           <td class="num">{{.ImageCount}}</td>
           <td class="num">{{.FindingCount}}</td>
           <td>{{if .Fixable}}<span class="fix">yes</span>{{else}}<span class="muted">no</span>{{end}}</td>
-          <td class="muted small">{{range .Repositories}}<span class="tag">{{.}}</span>{{end}}{{if gt .ImageCount (len .Repositories)}}<span class="muted">…</span>{{end}}</td>
+          <td>
+            {{if .VEXStatus}}
+              <span class="vex-badge vex-{{.VEXStatus}}" title="{{if .Impact}}{{.Impact}}{{else}}{{.Justification}}{{end}}">{{.VEXStatus}}</span>
+              {{if .Justification}}<div class="vex-just muted small">{{.Justification}}</div>{{end}}
+            {{else}}<span class="muted">—</span>{{end}}
+          </td>
         </tr>
         {{end}}
       </tbody>
     </table>
     {{if .NextCursor}}
-    <p class="loadmore"><a href="/cves?min_severity={{.MinSeverity}}{{if .Sort}}&sort={{.Sort}}&dir={{.Dir}}{{end}}&cursor={{.NextCursor}}">Load more →</a></p>
+    <p class="loadmore"><a href="/cves?{{$qs}}{{if .Sort}}&sort={{.Sort}}&dir={{.Dir}}{{end}}&cursor={{.NextCursor}}">Load more →</a></p>
     {{end}}
     {{else}}
-    <p class="muted">No vulnerabilities at or above the current severity threshold.</p>
+    <p class="muted">No vulnerabilities match the current filters.</p>
     {{end}}
   </div>
 </main>

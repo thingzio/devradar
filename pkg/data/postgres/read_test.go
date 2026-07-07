@@ -316,14 +316,28 @@ func TestVEXSuppression_RepoScoped(t *testing.T) {
 			t.Errorf("%s: %d findings, want 0 (repo-scoped VEX should suppress)", v, len(f))
 		}
 	}
-	// The fleet CVE view drops it too.
-	cves, _, err := st.FleetCVEs(ctx, tenantID, "negligible", "", "", "", 50)
+	// The fleet CVE view now SHOWS the repo-suppressed CVE, annotated as
+	// not_affected (shown-but-dimmed), and a not_vexed filter excludes it.
+	cves, _, err := st.FleetCVEs(ctx, tenantID, "negligible", postgres.FleetCVEFilter{}, "", "", "", 50)
 	if err != nil {
 		t.Fatalf("fleet cves: %v", err)
 	}
-	for _, c := range cves {
+	var got *postgres.FleetCVE
+	for i := range cves {
+		if cves[i].CVE == cve {
+			got = &cves[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("repo-suppressed CVE %s should appear (annotated), not be dropped", cve)
+	}
+	if got.VEXStatus != "not_affected" || !got.Suppressed {
+		t.Errorf("repo-suppressed CVE should be annotated not_affected/suppressed: %+v", got)
+	}
+	nv, _, _ := st.FleetCVEs(ctx, tenantID, "negligible", postgres.FleetCVEFilter{VEXState: "not_vexed"}, "", "", "", 50)
+	for _, c := range nv {
 		if c.CVE == cve {
-			t.Errorf("repo-suppressed CVE %s should not appear in fleet CVEs", cve)
+			t.Errorf("not_vexed filter should exclude repo-suppressed CVE %s", cve)
 		}
 	}
 }
@@ -376,7 +390,7 @@ func TestFleetCVEs_BlastRadiusRanking(t *testing.T) {
 		t.Fatalf("seed enrichment: %v", err)
 	}
 
-	cves, _, err := st.FleetCVEs(ctx, tenantID, "negligible", "", "", "", 50)
+	cves, _, err := st.FleetCVEs(ctx, tenantID, "negligible", postgres.FleetCVEFilter{}, "", "", "", 50)
 	if err != nil {
 		t.Fatalf("fleet cves: %v", err)
 	}
@@ -424,6 +438,89 @@ func TestFleetCVEs_BlastRadiusRanking(t *testing.T) {
 	// Unknown CVE → ErrNotFound.
 	if _, err := st.CVEDetail(ctx, tenantID, "CVE-nope-"+suffix); !errors.Is(err, postgres.ErrNotFound) {
 		t.Errorf("unknown cve: err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestFleetCVEs_VEXAnnotationAndFilters verifies VEX'd CVEs are INCLUDED in the
+// fleet list (not dropped), annotated with status/justification/impact, and that
+// the VEX/justification/KEV/fixable filters work.
+func TestFleetCVEs_VEXAnnotationAndFilters(t *testing.T) {
+	st, err := postgres.NewFromEnv(context.Background())
+	if err != nil {
+		t.Skipf("skipping (no database): %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	suffix := hex.EncodeToString(b)
+	var tenantID string
+	if err := st.DB().QueryRowContext(ctx,
+		`INSERT INTO devradar_tenant (email) VALUES ($1) RETURNING id`,
+		"vexcve-"+suffix+"@example.com").Scan(&tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	repo := "reg/app-" + suffix
+	digest := "sha256:" + suffix
+	sbomID := "vc-" + suffix
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_sbom (id, tenant_id, image_ref, repository, digest, format, object_path)
+		VALUES ($1,$2,$3,$3,$4,'cyclonedx','gs://x')`, sbomID, tenantID, repo, digest); err != nil {
+		t.Fatalf("seed sbom: %v", err)
+	}
+	openCVE, vexdCVE := "CVE-OPEN-"+suffix, "CVE-VEXD-"+suffix
+	for _, cve := range []string{openCVE, vexdCVE} {
+		if _, err := st.DB().ExecContext(ctx, `
+			INSERT INTO devradar_finding (sbom_id, scanner, finding_id, exposure, package, version, severity, score, is_fixed)
+			VALUES ($1,'grype',$2,$3,'p','1','high',7.0,false)`, sbomID, cve+"/p/1", cve); err != nil {
+			t.Fatalf("seed finding: %v", err)
+		}
+	}
+	// VEX only the second CVE as not_affected, with a justification + impact.
+	doc := &vex.Document{Author: "sec", Raw: []byte(`{}`), Statements: []vex.Statement{{
+		ProductDigest: digest, Vulnerability: vexdCVE, Status: vex.StatusNotAffected,
+		Justification: "vulnerable_code_not_in_execute_path", ImpactStatement: "not on the execution path",
+	}}}
+	if _, m, err := st.SaveVEXDocument(ctx, tenantID, doc); err != nil || m != 1 {
+		t.Fatalf("save vex: matched=%d err=%v", m, err)
+	}
+
+	find := func(cves []postgres.FleetCVE, cve string) *postgres.FleetCVE {
+		for i := range cves {
+			if cves[i].CVE == cve {
+				return &cves[i]
+			}
+		}
+		return nil
+	}
+
+	// No filter: BOTH CVEs appear; the VEX'd one is annotated + Suppressed.
+	all, _, err := st.FleetCVEs(ctx, tenantID, "negligible", postgres.FleetCVEFilter{}, "", "", "", 50)
+	if err != nil {
+		t.Fatalf("fleet cves: %v", err)
+	}
+	if find(all, openCVE) == nil || find(all, vexdCVE) == nil {
+		t.Fatalf("both CVEs should appear (VEX'd shown, not dropped); got %d", len(all))
+	}
+	v := find(all, vexdCVE)
+	if v.VEXStatus != "not_affected" || !v.Suppressed || v.Justification != "vulnerable_code_not_in_execute_path" || v.Impact == "" {
+		t.Errorf("VEX'd CVE not annotated: %+v", v)
+	}
+	if o := find(all, openCVE); o.VEXStatus != "" {
+		t.Errorf("open CVE should have no VEX status, got %q", o.VEXStatus)
+	}
+
+	// Filter not_vexed → only the open CVE.
+	nv, _, _ := st.FleetCVEs(ctx, tenantID, "negligible", postgres.FleetCVEFilter{VEXState: "not_vexed"}, "", "", "", 50)
+	if find(nv, openCVE) == nil || find(nv, vexdCVE) != nil {
+		t.Errorf("not_vexed filter should show only the open CVE")
+	}
+	// Filter by justification → only the VEX'd CVE.
+	jf, _, _ := st.FleetCVEs(ctx, tenantID, "negligible",
+		postgres.FleetCVEFilter{Justification: "vulnerable_code_not_in_execute_path"}, "", "", "", 50)
+	if find(jf, vexdCVE) == nil || find(jf, openCVE) != nil {
+		t.Errorf("justification filter should show only the VEX'd CVE")
 	}
 }
 

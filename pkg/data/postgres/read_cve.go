@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/lib/pq"
 	"github.com/thingzio/devradar/pkg/data"
@@ -23,6 +24,22 @@ type FleetCVE struct {
 	KEV          bool     `json:"kev"`
 	EPSS         *float32 `json:"epss,omitempty"`
 	Repositories []string `json:"repositories,omitempty"` // sample of affected repos
+	// VEX context (aggregated across the CVE's occurrences). VEXStatus is the
+	// tenant's assertion where one applies to every occurrence ("" if none, or if
+	// the CVE is only partially VEX'd). Suppressed is true when VEXStatus is
+	// not_affected/fixed — such CVEs are shown but de-emphasized in the UI.
+	VEXStatus     string `json:"vex_status,omitempty"`
+	Justification string `json:"justification,omitempty"`
+	Impact        string `json:"impact_statement,omitempty"`
+	Suppressed    bool   `json:"suppressed,omitempty"`
+}
+
+// FleetCVEFilter narrows the fleet CVE list. Zero value = no filtering.
+type FleetCVEFilter struct {
+	VEXState      string // "", "vexed" (any statement), "not_vexed", or a specific status
+	Justification string // OpenVEX justification, e.g. vulnerable_code_not_in_execute_path
+	KEVOnly       bool
+	FixableOnly   bool
 }
 
 // fleetCVESortCols sort against the outer-query column aliases. Default "risk"
@@ -39,24 +56,55 @@ var fleetCVESortCols = map[string]sortCol{
 
 // FleetCVEs lists a tenant's vulnerabilities grouped by CVE. Default ranking is
 // blast radius + exploit risk (KEV → severity → EPSS → reach), sortable by any
-// fleetCVESortCols key. Ranked/sorted in SQL so page order is global order;
-// keyset-paginated. minSeverity trims which findings count toward a CVE.
-func (s *Store) FleetCVEs(ctx context.Context, tenantID, minSeverity, sortKey, sortDir, cursor string, limit int) (items []FleetCVE, next string, err error) {
+// fleetCVESortCols key. VEX'd CVEs are INCLUDED (annotated with status/impact,
+// de-emphasized in the UI) — the filter narrows the set. Ranked/sorted in SQL so
+// page order is global order; keyset-paginated. minSeverity trims which findings
+// count toward a CVE.
+func (s *Store) FleetCVEs(ctx context.Context, tenantID, minSeverity string, filter FleetCVEFilter, sortKey, sortDir, cursor string, limit int) (items []FleetCVE, next string, err error) {
 	eff, fetch := clampLimit(limit)
 	sort := resolveSort(sortKey, sortDir, fleetCVESortCols, "risk")
 	cur, hasCur := decodeSortCursor(cursor)
 
 	args := []any{tenantID, pq.Array(data.AllowedSeverities(minSeverity))}
-	keyset := ""
+
+	// Post-aggregation filters live in the outer WHERE (they reference computed
+	// columns). Build them with positional args after the fixed two.
+	conds := []string{}
+	if filter.KEVOnly {
+		conds = append(conds, "kev")
+	}
+	if filter.FixableOnly {
+		conds = append(conds, "fixable")
+	}
+	switch filter.VEXState {
+	case "vexed":
+		conds = append(conds, "vex_status IS NOT NULL")
+	case "not_vexed":
+		conds = append(conds, "vex_status IS NULL")
+	case "not_affected", "affected", "fixed", "under_investigation":
+		args = append(args, filter.VEXState)
+		conds = append(conds, fmt.Sprintf("vex_status = $%d", len(args)))
+	}
+	if filter.Justification != "" {
+		args = append(args, filter.Justification)
+		conds = append(conds, fmt.Sprintf("vex_just = $%d", len(args)))
+	}
 	if hasCur {
-		keyset = "WHERE " + sort.seek("cve", 3, 4)
 		args = append(args, cur.Val, cur.ID)
+		conds = append(conds, sort.seek("cve", len(args)-1, len(args)))
+	}
+	where := ""
+	if len(conds) > 0 {
+		where = "WHERE " + strings.Join(conds, " AND ")
 	}
 	args = append(args, fetch)
 	limitPos := fmt.Sprintf("$%d", len(args))
 
 	// risk = KEV(1e18) + worst-severity-rank(1e15..) + image_count(1e9) +
 	// EPSS-scaled + finding_count. Wide multipliers keep tiers from colliding.
+	// vex_* aggregate the tenant's statements for the CVE: a status is attributed
+	// to the CVE only when it applies to EVERY occurrence (bool_and), so a
+	// partially-VEX'd CVE still reads as open.
 	q := fmt.Sprintf(`
 		WITH cve AS (
 			SELECT f.exposure AS cve,
@@ -67,13 +115,22 @@ func (s *Store) FleetCVEs(ctx context.Context, tenantID, minSeverity, sortKey, s
 			       bool_or(f.is_fixed)                       AS fixable,
 			       COALESCE(bool_or(e.kev), false)           AS kev,
 			       MAX(e.epss_score)                         AS epss,
-			       (array_agg(DISTINCT sb.repository))[1:3]  AS repos
+			       (array_agg(DISTINCT sb.repository))[1:3]  AS repos,
+			       bool_and(vex.vex_status IS NOT NULL)      AS all_vexed,
+			       (array_agg(vex.vex_status)   FILTER (WHERE vex.vex_status IS NOT NULL))[1] AS a_status,
+			       (array_agg(vex.vex_just)     FILTER (WHERE vex.vex_just IS NOT NULL))[1]   AS a_just,
+			       (array_agg(vex.vex_impact)   FILTER (WHERE vex.vex_impact IS NOT NULL))[1] AS a_impact
 			FROM devradar_finding f
 			JOIN devradar_sbom sb ON sb.id = f.sbom_id
-			LEFT JOIN devradar_cve_enrichment e ON e.cve = f.exposure
+			LEFT JOIN devradar_cve_enrichment e ON e.cve = f.exposure%s
 			WHERE sb.tenant_id = $1 AND sb.status = 'active' AND f.severity = ANY($2)
-			  AND NOT `+vexSuppressedByDigestCVE+`
 			GROUP BY f.exposure
+		), agg AS (
+			SELECT cve, best_rank, max_score, image_count, finding_count, fixable, kev, epss, repos,
+			       CASE WHEN all_vexed THEN a_status ELSE NULL END AS vex_status,
+			       CASE WHEN all_vexed THEN a_just   ELSE NULL END AS vex_just,
+			       CASE WHEN all_vexed THEN a_impact ELSE NULL END AS vex_impact
+			FROM cve
 		), ranked AS (
 			SELECT *,
 			       (CASE WHEN kev THEN 1000000000000000000::bigint ELSE 0 END)
@@ -81,13 +138,14 @@ func (s *Store) FleetCVEs(ctx context.Context, tenantID, minSeverity, sortKey, s
 			       + LEAST(image_count, 100000) * 1000000::bigint
 			       + LEAST((COALESCE(epss,0) * 1000)::bigint, 1000) * 1000
 			       + LEAST(finding_count, 999)                       AS risk
-			FROM cve
+			FROM agg
 		)
-		SELECT cve, best_rank, max_score, image_count, finding_count, fixable, kev, epss, repos, %s
+		SELECT cve, best_rank, max_score, image_count, finding_count, fixable, kev, epss, repos,
+		       vex_status, vex_just, vex_impact, %s
 		FROM ranked
 		%s
 		ORDER BY %s
-		LIMIT %s`, severityRankSQL, sort.selectVal(), keyset, sort.orderBy("cve"), limitPos)
+		LIMIT %s`, severityRankSQL, vexStatusJoin, sort.selectVal(), where, sort.orderBy("cve"), limitPos)
 
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -100,10 +158,14 @@ func (s *Store) FleetCVEs(ctx context.Context, tenantID, minSeverity, sortKey, s
 		var c FleetCVE
 		var rank int
 		var sortval string
+		var vstatus, vjust, vimpact *string
 		if err := rows.Scan(&c.CVE, &rank, &c.MaxScore, &c.ImageCount, &c.FindingCount,
-			&c.Fixable, &c.KEV, &c.EPSS, pq.Array(&c.Repositories), &sortval); err != nil {
+			&c.Fixable, &c.KEV, &c.EPSS, pq.Array(&c.Repositories),
+			&vstatus, &vjust, &vimpact, &sortval); err != nil {
 			return nil, "", fmt.Errorf("scan fleet cve: %w", err)
 		}
+		c.VEXStatus, c.Justification, c.Impact = deref(vstatus), deref(vjust), deref(vimpact)
+		c.Suppressed = c.VEXStatus == "not_affected" || c.VEXStatus == "fixed"
 		c.WorstSev = severityForRank(rank)
 		items = append(items, c)
 		vals = append(vals, sortval)

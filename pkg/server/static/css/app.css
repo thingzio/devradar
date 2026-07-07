@@ -124,6 +124,17 @@ a:hover { text-decoration: underline; }
 .user-menu-item:hover { background: var(--surface-alt); text-decoration: none; }
 .user-menu-signout { color: var(--danger); }
 
+/* Filter bar (CVEs page) */
+.filterbar {
+  display: flex; align-items: flex-end; gap: 0.75rem; flex-wrap: wrap;
+  margin: 1rem 0 0.5rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border);
+}
+.filterbar label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.78rem; }
+.filterbar label.chk { flex-direction: row; align-items: center; gap: 0.35rem; }
+.filterbar select { min-width: 8rem; }
+.filelabel { cursor: pointer; }
+.vex-just { margin-top: 0.15rem; }
+
 /* Unified search box (Overview + Images) */
 .searchbar { display: flex; gap: 0.5rem; margin: 1.25rem 0; }
 .searchbar input[type=search] {

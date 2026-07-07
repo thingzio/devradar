@@ -9,17 +9,31 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/thingzio/devradar/pkg/data/postgres"
 	"github.com/thingzio/devradar/pkg/gcs"
+	"github.com/thingzio/devradar/pkg/middleware"
 	"github.com/thingzio/devradar/pkg/server"
 	"github.com/thingzio/devradar/pkg/tenant"
 )
+
+// seedSession mints a UI session cookie for a tenant so tests can exercise
+// authenticated browser routes (not just API-token routes).
+func seedSession(t *testing.T, st *postgres.Store, tenantID string) *http.Cookie {
+	t.Helper()
+	raw, err := tenant.CreateSession(context.Background(), st.DB(), tenantID, time.Hour)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	return &http.Cookie{Name: middleware.SessionCookieName(), Value: raw}
+}
 
 func testServer(t *testing.T) (*server.Server, *postgres.Store) {
 	t.Helper()
@@ -541,4 +555,67 @@ func mustRand(t *testing.T, n int) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// TestVEX_UIUpload covers the browser VEX upload on the CVEs tab: a multipart
+// file post is parsed + persisted and suppresses/annotates the matched CVE.
+func TestVEX_UIUpload(t *testing.T) {
+	srv, st := testServer(t)
+	tenantID, _ := seedTenantToken(t, st)
+	h := srv.Handler()
+	ctx := context.Background()
+	cookie := seedSession(t, st, tenantID)
+
+	digest := "sha256:" + hex.EncodeToString(mustRand(t, 32))
+	sbomID := "vexui-" + tenantID
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_sbom (id, tenant_id, image_ref, repository, digest, format, object_path)
+		VALUES ($1,$2,'reg/app','reg/app',$3,'cyclonedx','gs://x')`, sbomID, tenantID, digest); err != nil {
+		t.Fatalf("seed sbom: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_finding (sbom_id, scanner, finding_id, exposure, package, version, severity, score, is_fixed)
+		VALUES ($1,'grype','CVE-UI-1/p/1','CVE-UI-1','p','1','high',7.0,false)`, sbomID); err != nil {
+		t.Fatalf("seed finding: %v", err)
+	}
+
+	// Build a multipart upload with the VEX doc.
+	doc := `{"@context":"https://openvex.dev/ns","author":"a","statements":[
+		{"vulnerability":"CVE-UI-1","products":[{"@id":"` + digest + `"}],
+		 "status":"not_affected","justification":"component_not_present"}]}`
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, _ := mw.CreateFormFile("vex", "vex.json")
+	_, _ = fw.Write([]byte(doc))
+	_ = mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/vex/upload", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("upload = %d, want 303: %s", rec.Code, rec.Body.String())
+	}
+	if loc := rec.Header().Get("Location"); !strings.Contains(loc, "uploaded=") {
+		t.Errorf("redirect should carry an upload summary, got %q", loc)
+	}
+
+	// The CVE now shows a not_affected VEX status in the fleet list.
+	cves, _, err := st.FleetCVEs(ctx, tenantID, "negligible", postgres.FleetCVEFilter{}, "", "", "", 50)
+	if err != nil {
+		t.Fatalf("fleet cves: %v", err)
+	}
+	var found bool
+	for _, c := range cves {
+		if c.CVE == "CVE-UI-1" {
+			found = true
+			if c.VEXStatus != "not_affected" || !c.Suppressed {
+				t.Errorf("uploaded VEX not reflected: %+v", c)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("CVE-UI-1 should still appear (VEX'd shown, not dropped)")
+	}
 }

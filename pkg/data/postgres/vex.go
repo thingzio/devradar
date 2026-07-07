@@ -22,7 +22,8 @@ const vexRepoKeyExpr = `lower(split_part(sb.repository, '/', array_length(string
 const (
 	vexStatusJoin = `
 		LEFT JOIN LATERAL (
-			SELECT vs.status AS vex_status
+			SELECT vs.status AS vex_status, vs.justification AS vex_just,
+			       vs.impact_statement AS vex_impact
 			FROM devradar_vex_statement vs
 			WHERE vs.tenant_id = sb.tenant_id
 			  AND vs.vulnerability = f.exposure
