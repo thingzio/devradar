@@ -42,16 +42,16 @@ var repoImageSortCols = map[string]sortCol{
 // page order. Keyset on (<sort-col>, repository). Every active SBOM contributes;
 // counts are the union of findings across the repo's SBOMs, trimmed to
 // minSeverity. Risk uses raw (untrimmed) counts, so ranking is threshold-stable.
-func (s *Store) ListRepoImages(ctx context.Context, tenantID, minSeverity, nameFilter, sortKey, sortDir, cursor string, limit int) (items []RepoImage, next string, err error) {
+func (s *Store) ListRepoImages(ctx context.Context, tenantID, minSeverity, nameFilter, tagFilter, sortKey, sortDir, cursor string, limit int) (items []RepoImage, next string, err error) {
 	eff, fetch := clampLimit(limit)
 	sort := resolveSort(sortKey, sortDir, repoImageSortCols, "risk")
 	cur, hasCur := decodeSortCursor(cursor)
 
-	// $1 tenant, $2 name filter (empty = no filter); keyset args follow.
-	args := []any{tenantID, nameFilter}
+	// $1 tenant, $2 name filter, $3 tag filter (empty = no filter); keyset follows.
+	args := []any{tenantID, nameFilter, tagFilter}
 	keyset := ""
 	if hasCur {
-		keyset = "WHERE " + sort.seek("repository", 3, 4)
+		keyset = "WHERE " + sort.seek("repository", 4, 5)
 		args = append(args, cur.Val, cur.ID)
 	}
 	args = append(args, fetch)
@@ -83,6 +83,7 @@ func (s *Store) ListRepoImages(ctx context.Context, tenantID, minSeverity, nameF
 				AND NOT `+vexSuppressedByDigestCVE+`
 			WHERE sb.tenant_id = $1 AND sb.status = 'active'
 			  AND ($2 = '' OR sb.repository ILIKE '%%' || $2 || '%%')
+			  AND ($3 = '' OR $3 = ANY(sb.tags))
 			GROUP BY sb.tenant_id, sb.repository
 		)
 		SELECT repository, sbom_count, digest_count, versions, latest_at,
@@ -120,6 +121,29 @@ func (s *Store) ListRepoImages(ctx context.Context, tenantID, minSeverity, nameF
 		next = encodeSortCursor(vals[eff-1], items[len(items)-1].Repository)
 	}
 	return items, next, nil
+}
+
+// TenantTags returns the distinct tags across a tenant's active SBOMs, sorted —
+// the option set for the image tag filter.
+func (s *Store) TenantTags(ctx context.Context, tenantID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT unnest(tags) AS tag
+		FROM devradar_sbom
+		WHERE tenant_id = $1 AND status = 'active'
+		ORDER BY tag`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("tenant tags: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, fmt.Errorf("scan tag: %w", err)
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
 }
 
 // FleetStats is the tenant-wide rollup for the dashboard headline. It is

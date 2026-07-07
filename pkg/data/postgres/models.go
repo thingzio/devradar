@@ -18,6 +18,7 @@ type SBOM struct {
 	ObjectPath         string
 	VerificationStatus string
 	Status             string
+	Tags               []string // tenant grouping tags, set at submission
 	GeneratedAt        time.Time
 	SubmittedAt        time.Time
 }

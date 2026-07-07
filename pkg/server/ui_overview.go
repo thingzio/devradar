@@ -45,7 +45,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Top 5 images by risk (default sort), no filter.
-	images, _, err := s.store.ListRepoImages(r.Context(), tn.ID, min, "", "", "", "", 5)
+	images, _, err := s.store.ListRepoImages(r.Context(), tn.ID, min, "", "", "", "", "", 5)
 	if err != nil {
 		http.Error(w, "failed to load overview", http.StatusInternalServerError)
 		return

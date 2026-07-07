@@ -790,7 +790,7 @@ func TestListRepoImages_RiskOrderAndPaging(t *testing.T) {
 	}
 
 	// Full list: risk order must be A (crit) → B (high) → C (medium).
-	all, _, err := st.ListRepoImages(ctx, tenantID, "negligible", "", "", "", "", 50)
+	all, _, err := st.ListRepoImages(ctx, tenantID, "negligible", "", "", "", "", "", 50)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -805,11 +805,11 @@ func TestListRepoImages_RiskOrderAndPaging(t *testing.T) {
 	}
 
 	// Paginate 2 at a time: page1 = [A,B] + cursor, page2 = [C] + no cursor.
-	p1, next, err := st.ListRepoImages(ctx, tenantID, "negligible", "", "", "", "", 2)
+	p1, next, err := st.ListRepoImages(ctx, tenantID, "negligible", "", "", "", "", "", 2)
 	if err != nil || len(p1) != 2 || next == "" {
 		t.Fatalf("page1: len=%d next=%q err=%v", len(p1), next, err)
 	}
-	p2, next2, err := st.ListRepoImages(ctx, tenantID, "negligible", "", "", "", next, 2)
+	p2, next2, err := st.ListRepoImages(ctx, tenantID, "negligible", "", "", "", "", next, 2)
 	if err != nil || len(p2) != 1 || next2 != "" {
 		t.Fatalf("page2: len=%d next=%q err=%v", len(p2), next2, err)
 	}
@@ -818,7 +818,7 @@ func TestListRepoImages_RiskOrderAndPaging(t *testing.T) {
 	}
 
 	// Sort by repository ascending overrides the risk default.
-	byRepo, _, err := st.ListRepoImages(ctx, tenantID, "negligible", "", "repository", "asc", "", 50)
+	byRepo, _, err := st.ListRepoImages(ctx, tenantID, "negligible", "", "", "repository", "asc", "", 50)
 	if err != nil {
 		t.Fatalf("sort by repository: %v", err)
 	}
@@ -826,12 +826,81 @@ func TestListRepoImages_RiskOrderAndPaging(t *testing.T) {
 		t.Errorf("repository asc = %v, want a,b,c", []string{byRepo[0].Repository, byRepo[1].Repository, byRepo[2].Repository})
 	}
 	// Sort by total desc: C(3) → B(2) → A(1).
-	byTotal, _, err := st.ListRepoImages(ctx, tenantID, "negligible", "", "total", "desc", "", 50)
+	byTotal, _, err := st.ListRepoImages(ctx, tenantID, "negligible", "", "", "total", "desc", "", 50)
 	if err != nil {
 		t.Fatalf("sort by total: %v", err)
 	}
 	if byTotal[0].Repository != "reg/c-"+suffix || byTotal[2].Repository != "reg/a-"+suffix {
 		t.Errorf("total desc = %v, want c,b,a", []string{byTotal[0].Repository, byTotal[1].Repository, byTotal[2].Repository})
+	}
+}
+
+// TestSBOMTags verifies tags are stored at upsert (union on re-submit), listed
+// per tenant, and filter the image list.
+func TestSBOMTags(t *testing.T) {
+	st, err := postgres.NewFromEnv(context.Background())
+	if err != nil {
+		t.Skipf("skipping (no database): %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	suffix := hex.EncodeToString(b)
+	var tenantID string
+	if err := st.DB().QueryRowContext(ctx,
+		`INSERT INTO devradar_tenant (email) VALUES ($1) RETURNING id`,
+		"tag-"+suffix+"@example.com").Scan(&tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	// Two images: prodImg tagged "prod", edgeImg tagged "edge".
+	mk := func(repo string, tags []string) {
+		if _, _, err := st.UpsertSBOM(ctx, &postgres.SBOM{
+			ID: repo + suffix, TenantID: tenantID, ImageRef: repo, Repository: repo,
+			Digest: "sha256:" + repo + suffix, Format: "cyclonedx", ObjectPath: "gs://x", Tags: tags,
+		}); err != nil {
+			t.Fatalf("upsert %s: %v", repo, err)
+		}
+	}
+	mk("reg/prod-"+suffix, []string{"prod"})
+	mk("reg/edge-"+suffix, []string{"edge"})
+
+	// Re-submit prod image with an extra tag → union, no dup.
+	mk("reg/prod-"+suffix, []string{"prod", "team-x"})
+
+	tags, err := st.TenantTags(ctx, tenantID)
+	if err != nil {
+		t.Fatalf("tenant tags: %v", err)
+	}
+	// Expect edge, prod, team-x (sorted, deduped).
+	want := map[string]bool{"edge": true, "prod": true, "team-x": true}
+	if len(tags) != 3 {
+		t.Fatalf("tenant tags = %v, want 3 distinct", tags)
+	}
+	for _, tg := range tags {
+		if !want[tg] {
+			t.Errorf("unexpected tag %q", tg)
+		}
+	}
+
+	// Filter by "edge" → only the edge image.
+	edge, _, err := st.ListRepoImages(ctx, tenantID, "negligible", "", "edge", "", "", "", 50)
+	if err != nil {
+		t.Fatalf("filter edge: %v", err)
+	}
+	if len(edge) != 1 || edge[0].Repository != "reg/edge-"+suffix {
+		t.Errorf("tag=edge filter = %v, want just the edge image", edge)
+	}
+	// Filter by "team-x" (added on re-submit) → only the prod image.
+	tx, _, _ := st.ListRepoImages(ctx, tenantID, "negligible", "", "team-x", "", "", "", 50)
+	if len(tx) != 1 || tx[0].Repository != "reg/prod-"+suffix {
+		t.Errorf("tag=team-x filter = %v, want just the prod image", tx)
+	}
+	// No filter → both images.
+	all, _, _ := st.ListRepoImages(ctx, tenantID, "negligible", "", "", "", "", "", 50)
+	if len(all) != 2 {
+		t.Errorf("no tag filter = %d images, want 2", len(all))
 	}
 }
 
@@ -883,7 +952,7 @@ func TestRepoViews(t *testing.T) {
 	seed("sha256:c"+suffix, "v1.1.0", t0.Add(48*time.Hour)) // rescan of same version
 
 	// Grouped images: one row for the whole repository, 3 SBOMs / 3 digests.
-	imgs, _, err := st.ListRepoImages(ctx, tenantID, "negligible", "", "", "", "", 50)
+	imgs, _, err := st.ListRepoImages(ctx, tenantID, "negligible", "", "", "", "", "", 50)
 	if err != nil {
 		t.Fatalf("ListRepoImages: %v", err)
 	}

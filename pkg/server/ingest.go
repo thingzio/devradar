@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/thingzio/devradar/pkg/config"
@@ -46,10 +47,11 @@ func maybeGunzip(b []byte, limit int) ([]byte, error) {
 // submitRequest is the POST /v1/sboms body. Only `sbom` is required; the rest
 // are overrides for when the SBOM's self-reporting is weak.
 type submitRequest struct {
-	SBOM        string `json:"sbom"`                   // base64-encoded bytes (required)
-	ImageRef    string `json:"image_ref,omitempty"`    // override the image reference
-	Version     string `json:"version,omitempty"`      // human tag (e.g. "v1.20.2"); else parsed from image_ref
-	GeneratedAt string `json:"generated_at,omitempty"` // RFC3339 override
+	SBOM        string   `json:"sbom"`                   // base64-encoded bytes (required)
+	ImageRef    string   `json:"image_ref,omitempty"`    // override the image reference
+	Version     string   `json:"version,omitempty"`      // human tag (e.g. "v1.20.2"); else parsed from image_ref
+	Tags        []string `json:"tags,omitempty"`         // tenant grouping tags (e.g. "team-x","prod")
+	GeneratedAt string   `json:"generated_at,omitempty"` // RFC3339 override
 }
 
 type submitResponse struct {
@@ -168,6 +170,7 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 		ToolVersion:  subj.ToolVersion,
 		PackageCount: subj.PackageCount,
 		ObjectPath:   objectPath,
+		Tags:         normalizeTags(req.Tags),
 		GeneratedAt:  generatedAt,
 	})
 	if err != nil {
@@ -188,4 +191,27 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 		SBOMID: effID, ImageRef: imageRef, Digest: subj.Digest,
 		Format: string(subj.Format), Existing: !inserted,
 	})
+}
+
+// normalizeTags cleans tenant-supplied tags: trim, lowercase, drop empties,
+// dedupe, and bound count/length so an abusive submission can't bloat the row.
+func normalizeTags(in []string) []string {
+	const maxTags, maxLen = 20, 64
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(in))
+	for _, t := range in {
+		t = strings.ToLower(strings.TrimSpace(t))
+		if t == "" || len(t) > maxLen {
+			continue
+		}
+		if _, dup := seen[t]; dup {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+		if len(out) >= maxTags {
+			break
+		}
+	}
+	return out
 }

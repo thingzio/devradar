@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"fmt"
+
+	"github.com/lib/pq"
 )
 
 // UpsertSBOM inserts a submitted SBOM, or returns the existing one. The natural
@@ -20,6 +22,10 @@ func (s *Store) UpsertSBOM(ctx context.Context, sb *SBOM) (id string, inserted b
 	if !sb.GeneratedAt.IsZero() {
 		generatedAt = sb.GeneratedAt.UTC()
 	}
+	tags := sb.Tags
+	if tags == nil {
+		tags = []string{} // pq.Array(nil) sends SQL NULL; the column is NOT NULL
+	}
 	// The SBOM bytes are immutable and content-addressed, so on conflict we never
 	// touch content-derived columns (digest/format/package_count/tool/…). But the
 	// version (tag) is a caller-supplied *label*: a re-submit that now carries a
@@ -27,20 +33,23 @@ func (s *Store) UpsertSBOM(ctx context.Context, sb *SBOM) (id string, inserted b
 	// digest-only submit omits it, so the label is never wiped. `xmax = 0` is
 	// true only for a freshly inserted row (false for the DO UPDATE path), which
 	// is how we report `inserted` accurately without a second query.
+	// Tags union on conflict so a re-submit adds tags without dropping prior ones.
 	err = s.db.QueryRowContext(ctx, `
 		INSERT INTO devradar_sbom
 			(id, tenant_id, image_ref, repository, version, digest, format, spec_version,
 			 tool, tool_version, package_count, object_path, verification_status, status,
-			 generated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+			 tags, generated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 		ON CONFLICT (tenant_id, digest, format) DO UPDATE
-		SET version = COALESCE(EXCLUDED.version, devradar_sbom.version)
+		SET version = COALESCE(EXCLUDED.version, devradar_sbom.version),
+		    tags = (SELECT COALESCE(array_agg(DISTINCT t), '{}')
+		            FROM unnest(devradar_sbom.tags || EXCLUDED.tags) t)
 		RETURNING id, (xmax = 0)`,
 		sb.ID, sb.TenantID, sb.ImageRef, sb.Repository, nullStr(sb.Version),
 		sb.Digest, sb.Format, sb.SpecVersion,
 		nullStr(sb.Tool), nullStr(sb.ToolVersion), sb.PackageCount, sb.ObjectPath,
 		defaultStr(sb.VerificationStatus, "unverified"), defaultStr(sb.Status, "active"),
-		generatedAt,
+		pq.Array(tags), generatedAt,
 	).Scan(&id, &inserted)
 	if err != nil {
 		return "", false, fmt.Errorf("upsert sbom: %w", err)
