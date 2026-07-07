@@ -148,6 +148,74 @@ func TestRunner_PanicIsolation(t *testing.T) {
 	}
 }
 
+// TestRunner_EnsureDBFailureDropsScanner: a scanner whose DB refresh fails is
+// dropped for the run (recorded as an ensure-db failure), and the healthy
+// scanner still scans the whole corpus. The run must not abort.
+func TestRunner_EnsureDBFailureDropsScanner(t *testing.T) {
+	store := &fakeStore{sboms: []*postgres.SBOM{
+		{ID: "s1", TenantID: "t1", Format: "cyclonedx", PackageCount: 50, ObjectPath: "x"},
+	}}
+	bad := &fakeScanner{name: "trivy", out: grypeDoc, ensureErr: errors.New("db download timeout")}
+	good := &fakeScanner{name: "grype", out: grypeDoc}
+	r := NewRunner(store, fakeFetcher{data: []byte(`{"bomFormat":"CycloneDX"}`)},
+		sbom.NewPassthroughCanonicalizer(), []scanner.Scanner{bad, good},
+		converter.DefaultRegistry(), nil, DefaultOptions())
+
+	if err := r.Execute(context.Background()); err != nil {
+		t.Fatalf("run must survive one scanner's db failure: %v", err)
+	}
+	// Healthy scanner scanned the SBOM; failed scanner did not.
+	if store.applied != 1 {
+		t.Errorf("ApplyScan calls = %d, want 1 (only the healthy scanner)", store.applied)
+	}
+	if len(store.failures) != 1 || store.failures[0] != "ensure-db" {
+		t.Errorf("want one ensure-db failure, got %v", store.failures)
+	}
+	if len(store.failedIDs) != 1 || store.failedIDs[0] != runFailureSentinel {
+		t.Errorf("ensure-db failure should record the run sentinel, got %v", store.failedIDs)
+	}
+}
+
+// TestRunner_AllScannersFailDBAborts: if every scanner's DB refresh fails, there
+// is nothing to scan and Execute returns an error (a genuine whole-run failure).
+func TestRunner_AllScannersFailDBAborts(t *testing.T) {
+	store := &fakeStore{sboms: []*postgres.SBOM{{ID: "s1", Format: "cyclonedx", ObjectPath: "x"}}}
+	bad := &fakeScanner{name: "grype", ensureErr: errors.New("boom")}
+	r := NewRunner(store, fakeFetcher{data: []byte(`{"bomFormat":"CycloneDX"}`)},
+		sbom.NewPassthroughCanonicalizer(), []scanner.Scanner{bad},
+		converter.DefaultRegistry(), nil, DefaultOptions())
+
+	if err := r.Execute(context.Background()); err == nil {
+		t.Fatal("want error when no scanner survives db refresh")
+	}
+	if store.applied != 0 {
+		t.Errorf("nothing should scan, got %d applied", store.applied)
+	}
+}
+
+// TestRunner_ScanTimeoutRecorded: a scan that outlives the per-scan budget is
+// killed via context and recorded as a scan failure; the batch advances.
+func TestRunner_ScanTimeoutRecorded(t *testing.T) {
+	store := &fakeStore{sboms: []*postgres.SBOM{
+		{ID: "s1", TenantID: "t1", Format: "cyclonedx", PackageCount: 50, ObjectPath: "x"},
+	}}
+	sc := &fakeScanner{name: "grype", out: grypeDoc, hang: true}
+	opts := Options{DBMaxAge: 24 * time.Hour, ScanTimeout: 50 * time.Millisecond}
+	r := NewRunner(store, fakeFetcher{data: []byte(`{"bomFormat":"CycloneDX"}`)},
+		sbom.NewPassthroughCanonicalizer(), []scanner.Scanner{sc},
+		converter.DefaultRegistry(), nil, opts)
+
+	if err := r.Execute(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if store.applied != 0 {
+		t.Errorf("a timed-out scan must not persist, got %d applied", store.applied)
+	}
+	if len(store.failures) != 1 || store.failures[0] != "scan" {
+		t.Errorf("want one scan failure from timeout, got %v", store.failures)
+	}
+}
+
 // TestRunner_EnrichmentRefresh verifies the post-scan enrichment step calls the
 // enricher with the store's distinct CVEs and upserts what it returns; and that a
 // nil enricher (disabled) is a no-op.
@@ -209,23 +277,31 @@ func (f *fakeEnricher) Fetch(_ context.Context, cves []string) ([]enrich.Record,
 // ── fake scanner plumbing ─────────────────────────────────────────────────────
 
 type fakeScanner struct {
-	name    string
-	out     string
-	panicOn string // if non-empty, ScanSBOM panics when the SBOM's id appears in the temp path
+	name      string
+	out       string
+	panicOn   string // if non-empty, ScanSBOM panics when the SBOM's id appears in the temp path
+	ensureErr error  // if non-nil, EnsureDB fails (simulates a DB-refresh outage)
+	hang      bool   // if true, ScanSBOM blocks until ctx is cancelled (simulates a hung scan)
 }
 
-func (f *fakeScanner) Name() string                                  { return f.name }
-func (f *fakeScanner) Version() string                               { return "test-1.0" }
-func (f *fakeScanner) DBVersion() string                             { return "db-test" }
-func (f *fakeScanner) EnsureDB(context.Context, time.Duration) error { return nil }
-func (f *fakeScanner) IsAvailable() bool                             { return true }
-func (f *fakeScanner) ConverterName() string                         { return f.name }
-func (f *fakeScanner) ScanSBOM(_ context.Context, sbomPath, outPath string) error {
+func (f *fakeScanner) Name() string      { return f.name }
+func (f *fakeScanner) Version() string   { return "test-1.0" }
+func (f *fakeScanner) DBVersion() string { return "db-test" }
+func (f *fakeScanner) EnsureDB(context.Context, time.Duration) error {
+	return f.ensureErr
+}
+func (f *fakeScanner) IsAvailable() bool     { return true }
+func (f *fakeScanner) ConverterName() string { return f.name }
+func (f *fakeScanner) ScanSBOM(ctx context.Context, sbomPath, outPath string) error {
 	// writeTemp names the file "devradar-sbom-<id>-*.json", so the poison SBOM's
 	// id shows up in the path — match on it to simulate a scanner faulting on one
 	// specific untrusted input.
 	if f.panicOn != "" && strings.Contains(sbomPath, f.panicOn) {
 		panic("boom: poison SBOM")
+	}
+	if f.hang {
+		<-ctx.Done() // block until the per-scan timeout fires
+		return ctx.Err()
 	}
 	return os.WriteFile(outPath, []byte(f.out), 0o600)
 }

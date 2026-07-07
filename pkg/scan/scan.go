@@ -50,12 +50,30 @@ type Enricher interface {
 
 // Options configures a scan run.
 type Options struct {
-	DBMaxAge time.Duration // refresh a scanner DB older than this at job start
+	DBMaxAge    time.Duration // refresh a scanner DB older than this at job start
+	ScanTimeout time.Duration // per-SBOM-per-scanner wall-clock budget; 0 = no limit
 }
 
-// DefaultOptions returns sensible defaults.
+// DefaultOptions returns sensible defaults. ScanTimeout bounds a single
+// SBOM×scanner invocation so one hung/pathological scan converts to a recorded
+// failure and the batch advances, rather than starving every later SBOM until
+// the whole job's Cloud Run timeout expires.
 func DefaultOptions() Options {
-	return Options{DBMaxAge: 24 * time.Hour}
+	return Options{DBMaxAge: 24 * time.Hour, ScanTimeout: 10 * time.Minute}
+}
+
+// runFailureSentinel is the sbom_id recorded for whole-run (not per-SBOM)
+// failures such as a scanner's DB refresh failing at job start. devradar_scan_failure.sbom_id
+// is NOT NULL, so run-level failures need a stable non-empty marker to stay queryable.
+const runFailureSentinel = "-"
+
+// readyScanner is a scanner that passed EnsureDB, paired with the version axes
+// captured once at job start. The DB is frozen for the run, so these values are
+// constant across every SBOM — capturing them here avoids re-shelling out
+// (grype db status / trivy version) for every SBOM×scanner.
+type readyScanner struct {
+	scanner.Scanner
+	ver postgres.Versions
 }
 
 // Runner ties the pieces together.
@@ -117,32 +135,50 @@ func Run(ctx context.Context, opts Options) error {
 }
 
 // Execute runs one full pass over all active SBOMs. It returns an error only for
-// whole-run failures (DB prep, listing); per-SBOM and per-scanner failures are
-// recorded to the failure surface and do not abort the run.
+// whole-run failures (DB prep for ALL scanners, listing); per-SBOM and
+// per-scanner failures are recorded to the failure surface and do not abort the
+// run.
 func (r *Runner) Execute(ctx context.Context) error {
 	// Freeze each scanner's DB once, up front: refresh if stale, then every scan
 	// in this run shares that version — which is what keeps cause attribution
-	// honest (no DB drift mid-run).
+	// honest (no DB drift mid-run). A scanner whose DB refresh fails (e.g. a
+	// transient network blip) is DROPPED for this run, not fatal: the healthy
+	// scanner(s) still scan the whole corpus. We abort only if none survive.
+	canonVer := r.canon.Version()
+	ready := make([]readyScanner, 0, len(r.scanners))
 	for _, sc := range r.scanners {
 		if err := sc.EnsureDB(ctx, r.opts.DBMaxAge); err != nil {
-			return fmt.Errorf("ensure db for %s: %w", sc.Name(), err)
+			// Record it against the run sentinel so it's queryable, then continue.
+			r.recordFailure(ctx, runFailureSentinel, sc.Name(), "ensure-db", err)
+			continue
 		}
+		// Capture the version axes once: the DB is now frozen, so these are
+		// constant for the run — no need to re-probe per SBOM.
+		rs := readyScanner{Scanner: sc, ver: postgres.Versions{
+			DBVersion:            sc.DBVersion(),
+			ScannerVersion:       sc.Version(),
+			CanonicalizerVersion: canonVer,
+		}}
+		ready = append(ready, rs)
 		slog.Info("scanner ready", "scanner", sc.Name(),
-			"version", sc.Version(), "db_version", sc.DBVersion())
+			"version", rs.ver.ScannerVersion, "db_version", rs.ver.DBVersion)
+	}
+	if len(ready) == 0 {
+		return fmt.Errorf("no scanners available after db refresh (%d attempted)", len(r.scanners))
 	}
 
 	sboms, err := r.store.ListActiveSBOMs(ctx)
 	if err != nil {
 		return fmt.Errorf("list active sboms: %w", err)
 	}
-	slog.Info("scan run starting", "sbom_count", len(sboms), "scanners", len(r.scanners))
+	slog.Info("scan run starting", "sbom_count", len(sboms), "scanners", len(ready))
 
 	scanned := 0
 	for _, sb := range sboms {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		r.scanOne(ctx, sb)
+		r.scanOne(ctx, sb, ready)
 		scanned++
 	}
 	slog.Info("scan run complete", "scanned", scanned)
@@ -195,7 +231,7 @@ func (r *Runner) refreshEnrichment(ctx context.Context) {
 // crashing the whole daily job — which would then retry onto the same poison
 // SBOM. Per-scanner panics are recovered separately in scanWith so one scanner
 // faulting still lets the other run on the same SBOM.
-func (r *Runner) scanOne(ctx context.Context, sb *postgres.SBOM) {
+func (r *Runner) scanOne(ctx context.Context, sb *postgres.SBOM, ready []readyScanner) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			r.recordFailure(ctx, sb.ID, "", "panic", fmt.Errorf("panic: %v", rec))
@@ -221,12 +257,12 @@ func (r *Runner) scanOne(ctx context.Context, sb *postgres.SBOM) {
 	}
 	defer cleanup()
 
-	for _, sc := range r.scanners {
+	for _, sc := range ready {
 		r.scanWith(ctx, sb, sc, local)
 	}
 }
 
-func (r *Runner) scanWith(ctx context.Context, sb *postgres.SBOM, sc scanner.Scanner, sbomPath string) {
+func (r *Runner) scanWith(ctx context.Context, sb *postgres.SBOM, sc readyScanner, sbomPath string) {
 	// Recover per-scanner so a fault in one scanner (or its converter) is a
 	// recorded failure that still lets the other scanner run on this SBOM.
 	defer func() {
@@ -235,6 +271,16 @@ func (r *Runner) scanWith(ctx context.Context, sb *postgres.SBOM, sc scanner.Sca
 		}
 	}()
 
+	// Bound this single scan: a hung/pathological scanner invocation on one
+	// untrusted SBOM must not starve every SBOM after it. On timeout, ScanSBOM's
+	// exec is killed via ctx and this becomes a recorded "scan" failure.
+	scanCtx := ctx
+	if r.opts.ScanTimeout > 0 {
+		var cancel context.CancelFunc
+		scanCtx, cancel = context.WithTimeout(ctx, r.opts.ScanTimeout)
+		defer cancel()
+	}
+
 	out, cleanup, err := tempOut(sb.ID, sc.Name())
 	if err != nil {
 		r.recordFailure(ctx, sb.ID, sc.Name(), "scan", err)
@@ -242,7 +288,7 @@ func (r *Runner) scanWith(ctx context.Context, sb *postgres.SBOM, sc scanner.Sca
 	}
 	defer cleanup()
 
-	if err := sc.ScanSBOM(ctx, sbomPath, out); err != nil {
+	if err := sc.ScanSBOM(scanCtx, sbomPath, out); err != nil {
 		r.recordFailure(ctx, sb.ID, sc.Name(), "scan", err)
 		return
 	}
@@ -256,7 +302,7 @@ func (r *Runner) scanWith(ctx context.Context, sb *postgres.SBOM, sc scanner.Sca
 		r.recordFailure(ctx, sb.ID, sc.Name(), "detect", err)
 		return
 	}
-	vulns, err := conv.Convert(ctx, doc)
+	vulns, err := conv.Convert(scanCtx, doc)
 	if err != nil {
 		r.recordFailure(ctx, sb.ID, sc.Name(), "convert", err)
 		return
@@ -271,12 +317,8 @@ func (r *Runner) scanWith(ctx context.Context, sb *postgres.SBOM, sc scanner.Sca
 		return
 	}
 
-	ver := postgres.Versions{
-		DBVersion:            sc.DBVersion(),
-		ScannerVersion:       sc.Version(),
-		CanonicalizerVersion: r.canon.Version(),
-	}
-	if err := r.store.ApplyScan(ctx, sb, sc.Name(), ver, vulns); err != nil {
+	// ver was captured once at job start (DB is frozen for the run).
+	if err := r.store.ApplyScan(ctx, sb, sc.Name(), sc.ver, vulns); err != nil {
 		r.recordFailure(ctx, sb.ID, sc.Name(), "persist", err)
 	}
 }
