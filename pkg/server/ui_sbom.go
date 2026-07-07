@@ -41,6 +41,7 @@ type failureRow struct {
 type sbomDetailView struct {
 	Title       string
 	SignedIn    bool
+	Tab         string
 	Email       string
 	Version     string
 	MinSeverity string
@@ -114,6 +115,7 @@ func (s *Server) handleSBOMDetail(w http.ResponseWriter, r *http.Request) {
 	v := sbomDetailView{
 		Title:          shortDigest(detail.Digest),
 		SignedIn:       true,
+		Tab:            "images",
 		Email:          tn.Email,
 		Version:        s.opts.Version,
 		MinSeverity:    min,

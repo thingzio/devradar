@@ -72,6 +72,8 @@ func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("POST /auth/logout", s.handleLogout)
 
 	authed := middleware.RequireAuth(db, loginPath)
+	mux.Handle("GET /overview", authed(http.HandlerFunc(s.handleOverview)))
+	mux.Handle("GET /search", authed(http.HandlerFunc(s.handleSearch)))
 	mux.Handle("GET /dashboard", authed(http.HandlerFunc(s.handleDashboard)))
 	mux.Handle("GET /images", authed(http.HandlerFunc(s.handleImageDetail)))
 	mux.Handle("GET /sboms/{id}", authed(http.HandlerFunc(s.handleSBOMDetail)))
@@ -87,7 +89,7 @@ func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 	// Already signed in → straight to the dashboard.
 	if c, err := r.Cookie(middleware.SessionCookieName()); err == nil {
 		if _, err := tenant.ValidateSession(r.Context(), s.store.DB(), c.Value); err == nil {
-			http.Redirect(w, r, "/dashboard", http.StatusFound)
+			http.Redirect(w, r, "/overview", http.StatusFound)
 			return
 		}
 	}
@@ -157,7 +159,7 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	middleware.SetSessionCookie(w, sess, int(sessionTTL.Seconds()))
-	http.Redirect(w, r, "/dashboard", http.StatusFound)
+	http.Redirect(w, r, "/overview", http.StatusFound)
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {

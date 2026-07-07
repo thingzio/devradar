@@ -1,8 +1,14 @@
 {{template "head" .}}
 {{template "nav" .}}
 <main class="page-content">
-  <h1 class="page-title">Dashboard</h1>
+  <h1 class="page-title">Images</h1>
   <p class="sub">Vulnerability overview across your tracked images.</p>
+
+  <form class="searchbar" method="get" action="/dashboard">
+    <input type="search" name="q" value="{{.Query}}" placeholder="Filter images by name…" autocomplete="off">
+    <button class="btn" type="submit">Search</button>
+    {{if .Query}}<a class="btn secondary" href="/dashboard">Clear</a>{{end}}
+  </form>
 
   {{if .HasData}}
   <section class="stats stats-5">
@@ -26,7 +32,7 @@
       </form>
     </div>
 
-    {{$qs := printf "min_severity=%s" .MinSeverity}}
+    {{$qs := printf "min_severity=%s" .MinSeverity}}{{if .Query}}{{$qs = printf "%s&q=%s" $qs .Query}}{{end}}
     <table class="images">
       <thead>
         <tr>
@@ -65,7 +71,7 @@
       </tbody>
     </table>
     {{if .NextCursor}}
-    <p class="loadmore"><a href="/dashboard?min_severity={{.MinSeverity}}{{if .Sort}}&sort={{.Sort}}&dir={{.Dir}}{{end}}&cursor={{.NextCursor}}">Load more →</a></p>
+    <p class="loadmore"><a href="/dashboard?min_severity={{.MinSeverity}}{{if .Query}}&q={{.Query}}{{end}}{{if .Sort}}&sort={{.Sort}}&dir={{.Dir}}{{end}}&cursor={{.NextCursor}}">Load more →</a></p>
     {{end}}
   </div>
 </main>

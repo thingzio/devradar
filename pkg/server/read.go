@@ -42,7 +42,7 @@ func (s *Server) handleListImages(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid min_severity (want critical|high|medium|low|negligible)")
 		return
 	}
-	images, next, err := s.store.ListRepoImages(r.Context(), tn.ID, min,
+	images, next, err := s.store.ListRepoImages(r.Context(), tn.ID, min, r.URL.Query().Get("q"),
 		r.URL.Query().Get("sort"), r.URL.Query().Get("dir"), r.URL.Query().Get("cursor"), pageLimit(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list images")

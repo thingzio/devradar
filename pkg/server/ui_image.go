@@ -36,6 +36,7 @@ type eventRow struct {
 type imageDetailView struct {
 	Title       string
 	SignedIn    bool
+	Tab         string
 	Email       string
 	Version     string
 	MinSeverity string
@@ -111,6 +112,7 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 	v := imageDetailView{
 		Title:          lastPath(repo),
 		SignedIn:       true,
+		Tab:            "images",
 		Email:          tn.Email,
 		Version:        s.opts.Version,
 		MinSeverity:    min,

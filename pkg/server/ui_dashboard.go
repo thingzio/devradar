@@ -36,9 +36,11 @@ type barSeg struct {
 type dashboardView struct {
 	Title       string
 	SignedIn    bool
+	Tab         string
 	Email       string
 	Version     string
 	MinSeverity string
+	Query       string // active image name search
 	Sort        string
 	Dir         string
 	NextCursor  string
@@ -55,8 +57,8 @@ type dashboardView struct {
 	HasData    bool
 }
 
-// handleDashboard renders the fleet overview (CUJ-1): headline stats plus a
-// risk-ranked table of tracked images, each with a stacked severity bar.
+// handleDashboard renders the Images tab: fleet headline stats + a sortable,
+// searchable, risk-ranked table of tracked images.
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	tn := middleware.TenantFromContext(r.Context())
 	min := tenantMinSeverity(tn)
@@ -73,9 +75,10 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Image list: one page, sorted in SQL (default risk-rank; so page order is
-	// global order).
+	// global order). Optional ?q filters by repository substring.
 	q := r.URL.Query()
-	images, next, err := s.store.ListRepoImages(r.Context(), tn.ID, min,
+	query := q.Get("q")
+	images, next, err := s.store.ListRepoImages(r.Context(), tn.ID, min, query,
 		q.Get("sort"), q.Get("dir"), q.Get("cursor"), 50)
 	if err != nil {
 		http.Error(w, "failed to load dashboard", http.StatusInternalServerError)
@@ -83,11 +86,13 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v := dashboardView{
-		Title:       "Dashboard",
+		Title:       "Images",
 		SignedIn:    true,
+		Tab:         "images",
 		Email:       tn.Email,
 		Version:     s.opts.Version,
 		MinSeverity: min,
+		Query:       query,
 		Sort:        q.Get("sort"),
 		Dir:         q.Get("dir"),
 		NextCursor:  next,

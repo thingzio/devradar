@@ -23,6 +23,7 @@ type cveListRow struct {
 type cveListView struct {
 	Title       string
 	SignedIn    bool
+	Tab         string
 	Email       string
 	Version     string
 	MinSeverity string
@@ -49,7 +50,7 @@ func (s *Server) handleCVEList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := cveListView{
-		Title: "CVEs", SignedIn: true, Email: tn.Email, Version: s.opts.Version,
+		Title: "CVEs", SignedIn: true, Tab: "cves", Email: tn.Email, Version: s.opts.Version,
 		MinSeverity: min, Sort: q.Get("sort"), Dir: q.Get("dir"), NextCursor: next, HasData: len(cves) > 0,
 	}
 	for _, c := range cves {
@@ -78,6 +79,7 @@ type cveOccRow struct {
 type cveDetailView struct {
 	Title       string
 	SignedIn    bool
+	Tab         string
 	Email       string
 	Version     string
 	CVE         string
@@ -103,7 +105,7 @@ func (s *Server) handleCVEDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := cveDetailView{
-		Title: cve, SignedIn: true, Email: tn.Email, Version: s.opts.Version,
+		Title: cve, SignedIn: true, Tab: "cves", Email: tn.Email, Version: s.opts.Version,
 		CVE: cve, KEV: d.KEV, KEVAdded: d.KEVAdded, EPSS: formatEPSS(d.EPSS),
 	}
 	repos := map[string]struct{}{}

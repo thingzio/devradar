@@ -6,23 +6,34 @@
   <title>{{.Title}} — DevRadar</title>
   <meta name="description" content="Container vulnerability tracking — submit an SBOM, track how its vulnerabilities change over time.">
   <link rel="stylesheet" href="/static/css/app.css">
+  <script src="/static/js/app.js" defer></script>
 </head>
 <body>{{end}}
 
 {{define "nav"}}
 <nav class="top-nav">
-  <a href="{{if .SignedIn}}/dashboard{{else}}/{{end}}" class="top-nav-brand">
+  <a href="{{if .SignedIn}}/overview{{else}}/{{end}}" class="top-nav-brand">
     <svg class="nav-logo" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><line x1="12" y1="12" x2="19" y2="5"/></svg>
     Dev<span class="accent">Radar</span>
   </a>
   {{if .SignedIn}}
-  <span class="nav-right">
-    <a href="/dashboard">Dashboard</a>
-    <a href="/cves">CVEs</a>
-    <a href="/tokens">Tokens &amp; settings</a>
-    <span class="muted">{{.Email}}</span>
-    <form class="inline" method="post" action="/auth/logout"><button class="btn secondary">Sign out</button></form>
-  </span>
+  <div class="tabs">
+    <a href="/overview" class="tab {{if eq .Tab "overview"}}active{{end}}">Overview</a>
+    <a href="/dashboard" class="tab {{if eq .Tab "images"}}active{{end}}">Images</a>
+    <a href="/cves" class="tab {{if eq .Tab "cves"}}active{{end}}">CVEs</a>
+  </div>
+  <div class="user-menu-wrap">
+    <button class="user-avatar-btn" id="user-menu-toggle" aria-label="Account menu" aria-haspopup="true" aria-expanded="false">
+      <span class="user-avatar">{{if .Email}}{{slice .Email 0 1}}{{else}}?{{end}}</span>
+    </button>
+    <div class="user-menu" id="user-menu" hidden>
+      <div class="user-menu-header">{{.Email}}</div>
+      <div class="user-menu-divider"></div>
+      <a href="/tokens" class="user-menu-item">Tokens &amp; settings</a>
+      <div class="user-menu-divider"></div>
+      <form method="post" action="/auth/logout"><button class="user-menu-item user-menu-signout" type="submit">Sign out</button></form>
+    </div>
+  </div>
   {{end}}
 </nav>
 {{end}}

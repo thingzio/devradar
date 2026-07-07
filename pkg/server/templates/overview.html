@@ -1,0 +1,51 @@
+{{template "head" .}}
+{{template "nav" .}}
+<main class="page-content">
+  <h1 class="page-title">Overview</h1>
+  <p class="sub">Search an image or CVE, or jump into the tabs above.</p>
+
+  <form class="searchbar" method="get" action="/search">
+    <input type="search" name="q" placeholder="Search images (e.g. nginx) or a CVE (e.g. CVE-2025-1234)…" autofocus autocomplete="off">
+    <button class="btn" type="submit">Search</button>
+  </form>
+
+  {{if .HasData}}
+  <section class="stats stats-5">
+    <div class="stat"><span class="stat-n">{{.ImageCount}}</span><span class="stat-l">Images</span></div>
+    <div class="stat"><span class="stat-n">{{.TotalCount}}</span><span class="stat-l">Findings</span></div>
+    <div class="stat"><span class="stat-n danger-n">{{.CriticalCT}}</span><span class="stat-l">Critical</span></div>
+    <div class="stat"><span class="stat-n kev-n">{{.KEVCount}}</span><span class="stat-l" title="CISA Known Exploited Vulnerabilities">KEV — exploited</span></div>
+    <div class="stat"><span class="stat-n ok-n">{{.FixablePct}}%</span><span class="stat-l">Fixable now</span></div>
+  </section>
+
+  <div class="card">
+    <div class="card-head">
+      <h2>Highest-risk images</h2>
+      <a href="/dashboard" class="muted">All images →</a>
+    </div>
+    <table class="images">
+      <thead><tr><th>Image</th><th class="col-bar">Severity breakdown</th><th class="num">Total</th></tr></thead>
+      <tbody>
+        {{range .TopImages}}
+        <tr>
+          <td><a href="/images?repo={{.Repository}}" class="img-name" title="{{.Repository}}">{{.Short}}</a></td>
+          <td class="col-bar">
+            {{if .Bar}}<div class="bar" title="critical {{.Critical}} · high {{.High}} · medium {{.Medium}} · low {{.Low}}">
+              {{range .Bar}}<span class="{{.Class}}" style="width:{{.Pct}}%"></span>{{end}}
+            </div>{{else}}<span class="muted">no findings ≥ threshold</span>{{end}}
+          </td>
+          <td class="num">{{.Total}}</td>
+        </tr>
+        {{else}}
+        <tr><td colspan="3" class="muted">No images tracked yet.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <div class="card">
+    <p class="muted" style="margin:0">No images tracked yet. Submit an SBOM to get started — see <a href="/tokens">API tokens</a>.</p>
+  </div>
+  {{end}}
+</main>
+{{template "foot" .}}
