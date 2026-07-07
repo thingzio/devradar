@@ -73,9 +73,17 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Bound the request body before decode (base64 inflates ~4/3).
-	body, err := io.ReadAll(io.LimitReader(r.Body, (maxSBOMBytes*4/3)+1024))
+	// MaxBytesReader (not LimitReader) so an over-cap body is a real error we can
+	// map to 413, rather than a silent truncation that later fails as bad JSON.
+	r.Body = http.MaxBytesReader(w, r.Body, (maxSBOMBytes*4/3)+1024)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeError(w, http.StatusRequestEntityTooLarge, "request too large")
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request too large")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "could not read request body")
 		return
 	}
 	var req submitRequest

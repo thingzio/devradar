@@ -162,6 +162,13 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		// Defense-in-depth behind html/template escaping. Scripts are first-party
+		// only (one external app.js — no inline script). Styles allow 'unsafe-inline'
+		// for the small number of inline style= attributes; charts are inline SVG
+		// markup (not affected by CSP). No plugins, no framing, no <base> hijack.
+		h.Set("Content-Security-Policy",
+			"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "+
+				"img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
 		if middleware.SessionCookieName() == "__Host-session" {
 			h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
 		}

@@ -103,6 +103,51 @@ func TestIngest_RejectsBadBody(t *testing.T) {
 	}
 }
 
+// TestSecurityHeaders asserts the hardening headers (incl. CSP) are present on
+// every response — they're set in the outermost middleware, so even /health has them.
+func TestSecurityHeaders(t *testing.T) {
+	srv, _ := testServer(t)
+	h := srv.Handler()
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	want := map[string]string{
+		"X-Content-Type-Options": "nosniff",
+		"X-Frame-Options":        "DENY",
+	}
+	for k, v := range want {
+		if got := rec.Header().Get(k); got != v {
+			t.Errorf("%s = %q, want %q", k, got, v)
+		}
+	}
+	csp := rec.Header().Get("Content-Security-Policy")
+	for _, must := range []string{"default-src 'self'", "script-src 'self'", "object-src 'none'", "frame-ancestors 'none'"} {
+		if !strings.Contains(csp, must) {
+			t.Errorf("CSP missing %q; got %q", must, csp)
+		}
+	}
+}
+
+// TestIngest_OversizedBody413 verifies an over-cap request body is rejected with
+// 413 (MaxBytesReader), not silently truncated into a 400 bad-JSON.
+func TestIngest_OversizedBody413(t *testing.T) {
+	srv, st := testServer(t)
+	_, tok := seedTenantToken(t, st)
+	h := srv.Handler()
+
+	// Just over the (maxSBOMBytes*4/3)+1024 body cap (~26.7 MiB). Content is
+	// irrelevant — the reader trips the cap before any decode.
+	huge := strings.Repeat("A", (20<<20)*4/3+1024+4096)
+	req := httptest.NewRequest(http.MethodPost, "/v1/sboms", strings.NewReader(`{"sbom":"`+huge+`"}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %d, want 413", rec.Code)
+	}
+}
+
 func TestIngest_AndRead(t *testing.T) {
 	srv, st := testServer(t)
 	_, tok := seedTenantToken(t, st)

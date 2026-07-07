@@ -165,8 +165,12 @@ func (s *Server) handleCVEDetail(w http.ResponseWriter, r *http.Request) {
 // redirects back to /cves with a result summary in the query string.
 func (s *Server) handleUploadVEX(w http.ResponseWriter, r *http.Request) {
 	tn := middleware.TenantFromContext(r.Context())
+	// Bound the whole request body BEFORE parsing. ParseMultipartForm's argument
+	// is only the in-memory threshold — larger parts stream to a temp file with no
+	// ceiling — so without this an authenticated user could exhaust container disk.
+	r.Body = http.MaxBytesReader(w, r.Body, maxVEXBytes+4096) // headroom for multipart framing
 	if err := r.ParseMultipartForm(maxVEXBytes + 1024); err != nil {
-		http.Redirect(w, r, "/cves?upload_err="+url.QueryEscape("could not read upload"), http.StatusSeeOther)
+		http.Redirect(w, r, "/cves?upload_err="+url.QueryEscape("file too large or unreadable"), http.StatusSeeOther)
 		return
 	}
 	file, _, err := r.FormFile("vex")
