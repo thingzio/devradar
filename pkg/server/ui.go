@@ -36,8 +36,9 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 // uses distinct prefixes). Clicking a column sorts descending; clicking the
 // active column flips direction. An arrow shows the active column's direction.
 func sortHeader(label, key, base, qs, sortParam, dirParam, activeSort, activeDir string) template.HTML {
-	arrow, nextDir := "", "desc"
+	arrow, nextDir, cls := "", "desc", "sorth"
 	if key == activeSort {
+		cls = "sorth active"
 		if activeDir == "asc" {
 			arrow, nextDir = " ↑", "desc"
 		} else {
@@ -49,8 +50,8 @@ func sortHeader(label, key, base, qs, sortParam, dirParam, activeSort, activeDir
 		sep = "?" + qs + "&"
 	}
 	href := fmt.Sprintf("%s%s%s=%s&%s=%s", base, sep, sortParam, template.URLQueryEscaper(key), dirParam, nextDir)
-	return template.HTML(fmt.Sprintf(`<a href="%s" class="sorth">%s%s</a>`,
-		template.HTMLEscapeString(href), template.HTMLEscapeString(label), arrow))
+	return template.HTML(fmt.Sprintf(`<a href="%s" class="%s">%s%s</a>`,
+		template.HTMLEscapeString(href), cls, template.HTMLEscapeString(label), arrow))
 }
 
 const (

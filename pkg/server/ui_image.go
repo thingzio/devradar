@@ -52,6 +52,8 @@ type imageDetailView struct {
 	SBOMNextCursor string // for the versions/SBOMs list
 	SBOMSort       string // active SBOM-list sort key
 	SBOMDir        string // active SBOM-list direction
+	EvSort         string // active change-log sort key
+	EvDir          string // active change-log direction
 	HasEvents      bool
 }
 
@@ -85,9 +87,11 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Cross-digest change log, severity-filtered, paginated.
+	// Cross-digest change log, severity-filtered, sortable, paginated (its own
+	// param prefix so it doesn't collide with the SBOMs table on this page).
+	evSort, evDir := r.URL.Query().Get("ev_sort"), r.URL.Query().Get("ev_dir")
 	events, next, err := s.store.RepoTimeline(r.Context(), tn.ID, repo, min,
-		r.URL.Query().Get("cursor"), 50)
+		evSort, evDir, r.URL.Query().Get("cursor"), 50)
 	if err != nil {
 		http.Error(w, "failed to load change log", http.StatusInternalServerError)
 		return
@@ -119,6 +123,8 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 		SBOMNextCursor: sbomNext,
 		SBOMSort:       sbomSort,
 		SBOMDir:        sbomDir,
+		EvSort:         evSort,
+		EvDir:          evDir,
 		HasEvents:      len(events) > 0,
 	}
 

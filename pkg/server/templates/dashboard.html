@@ -26,13 +26,14 @@
       </form>
     </div>
 
+    {{$qs := printf "min_severity=%s" .MinSeverity}}
     <table class="images">
       <thead>
         <tr>
-          <th>Image</th>
+          <th>{{sorth "Image" "repository" "/dashboard" $qs .Sort .Dir}}</th>
           <th class="col-bar">Severity breakdown</th>
-          <th class="num">Total</th>
-          <th class="num">Fixable</th>
+          <th class="num">{{sorth "Total" "total" "/dashboard" $qs .Sort .Dir}}</th>
+          <th class="num">{{sorth "Fixable" "fixable" "/dashboard" $qs .Sort .Dir}}</th>
           <th></th>
         </tr>
       </thead>
@@ -64,7 +65,7 @@
       </tbody>
     </table>
     {{if .NextCursor}}
-    <p class="loadmore"><a href="/dashboard?min_severity={{.MinSeverity}}&cursor={{.NextCursor}}">Load more →</a></p>
+    <p class="loadmore"><a href="/dashboard?min_severity={{.MinSeverity}}{{if .Sort}}&sort={{.Sort}}&dir={{.Dir}}{{end}}&cursor={{.NextCursor}}">Load more →</a></p>
     {{end}}
   </div>
 </main>

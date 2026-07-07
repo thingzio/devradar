@@ -652,7 +652,7 @@ func TestListRepoImages_RiskOrderAndPaging(t *testing.T) {
 	}
 
 	// Full list: risk order must be A (crit) → B (high) → C (medium).
-	all, _, err := st.ListRepoImages(ctx, tenantID, "negligible", "", 50)
+	all, _, err := st.ListRepoImages(ctx, tenantID, "negligible", "", "", "", 50)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -667,16 +667,33 @@ func TestListRepoImages_RiskOrderAndPaging(t *testing.T) {
 	}
 
 	// Paginate 2 at a time: page1 = [A,B] + cursor, page2 = [C] + no cursor.
-	p1, next, err := st.ListRepoImages(ctx, tenantID, "negligible", "", 2)
+	p1, next, err := st.ListRepoImages(ctx, tenantID, "negligible", "", "", "", 2)
 	if err != nil || len(p1) != 2 || next == "" {
 		t.Fatalf("page1: len=%d next=%q err=%v", len(p1), next, err)
 	}
-	p2, next2, err := st.ListRepoImages(ctx, tenantID, "negligible", next, 2)
+	p2, next2, err := st.ListRepoImages(ctx, tenantID, "negligible", "", "", next, 2)
 	if err != nil || len(p2) != 1 || next2 != "" {
 		t.Fatalf("page2: len=%d next=%q err=%v", len(p2), next2, err)
 	}
 	if p1[0].Repository != wantOrder[0] || p1[1].Repository != wantOrder[1] || p2[0].Repository != wantOrder[2] {
 		t.Errorf("paged order wrong: %s,%s then %s", p1[0].Repository, p1[1].Repository, p2[0].Repository)
+	}
+
+	// Sort by repository ascending overrides the risk default.
+	byRepo, _, err := st.ListRepoImages(ctx, tenantID, "negligible", "repository", "asc", "", 50)
+	if err != nil {
+		t.Fatalf("sort by repository: %v", err)
+	}
+	if byRepo[0].Repository != "reg/a-"+suffix || byRepo[2].Repository != "reg/c-"+suffix {
+		t.Errorf("repository asc = %v, want a,b,c", []string{byRepo[0].Repository, byRepo[1].Repository, byRepo[2].Repository})
+	}
+	// Sort by total desc: C(3) → B(2) → A(1).
+	byTotal, _, err := st.ListRepoImages(ctx, tenantID, "negligible", "total", "desc", "", 50)
+	if err != nil {
+		t.Fatalf("sort by total: %v", err)
+	}
+	if byTotal[0].Repository != "reg/c-"+suffix || byTotal[2].Repository != "reg/a-"+suffix {
+		t.Errorf("total desc = %v, want c,b,a", []string{byTotal[0].Repository, byTotal[1].Repository, byTotal[2].Repository})
 	}
 }
 
@@ -728,7 +745,7 @@ func TestRepoViews(t *testing.T) {
 	seed("sha256:c"+suffix, "v1.1.0", t0.Add(48*time.Hour)) // rescan of same version
 
 	// Grouped images: one row for the whole repository, 3 SBOMs / 3 digests.
-	imgs, _, err := st.ListRepoImages(ctx, tenantID, "negligible", "", 50)
+	imgs, _, err := st.ListRepoImages(ctx, tenantID, "negligible", "", "", "", 50)
 	if err != nil {
 		t.Fatalf("ListRepoImages: %v", err)
 	}
@@ -767,14 +784,14 @@ func TestRepoViews(t *testing.T) {
 
 	// Keyset pagination on the repo timeline: page size 2 → 2 rows + a cursor,
 	// then the remaining 1 with no further cursor. No overlap, no gap.
-	p1, next, err := st.RepoTimeline(ctx, tenantID, repo, "negligible", "", 2)
+	p1, next, err := st.RepoTimeline(ctx, tenantID, repo, "negligible", "", "", "", 2)
 	if err != nil {
 		t.Fatalf("RepoTimeline p1: %v", err)
 	}
 	if len(p1) != 2 || next == "" {
 		t.Fatalf("page1: len=%d next=%q, want 2 + cursor", len(p1), next)
 	}
-	p2, next2, err := st.RepoTimeline(ctx, tenantID, repo, "negligible", next, 2)
+	p2, next2, err := st.RepoTimeline(ctx, tenantID, repo, "negligible", "", "", next, 2)
 	if err != nil {
 		t.Fatalf("RepoTimeline p2: %v", err)
 	}

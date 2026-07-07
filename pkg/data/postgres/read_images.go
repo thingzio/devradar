@@ -24,26 +24,34 @@ type RepoImage struct {
 	Failures    int            `json:"failures,omitempty"`
 }
 
-// ListRepoImages returns a tenant's tracked images grouped by repository,
-// **risk-ranked in SQL** (critical, then high, then total finding count), so the
-// database order is the display order — which is what makes keyset pagination
-// correct (no re-sort in Go could reorder across pages). Keyset on
-// (risk_score DESC, repository DESC). Every active SBOM contributes; counts are
-// the union of findings across the repo's SBOMs, trimmed to minSeverity like the
-// per-SBOM views. Risk uses the raw (untrimmed) severity counts, so ranking is a
-// stable property of the image, independent of the viewer's threshold.
-func (s *Store) ListRepoImages(ctx context.Context, tenantID, minSeverity, cursor string, limit int) (items []RepoImage, next string, err error) {
-	eff, fetch := clampLimit(limit)
-	cur, hasCur := decodeCursor(cursor)
+// repoImageSortCols sort against the img-CTE output aliases. Default "risk" is
+// the crit→high→total ranking. "repository" alphabetizes; the count columns sort
+// by their aggregate.
+var repoImageSortCols = map[string]sortCol{
+	"risk":       {expr: "risk", cast: "double precision", defDesc: true},
+	"repository": {expr: "repository", cast: "text", defDesc: false},
+	"total":      {expr: "total", cast: "double precision", defDesc: true},
+	"critical":   {expr: "crit", cast: "double precision", defDesc: true},
+	"fixable":    {expr: "fixable", cast: "double precision", defDesc: true},
+	"sboms":      {expr: "sbom_count", cast: "double precision", defDesc: true},
+}
 
-	// Rank in a CTE so `risk` is a real column usable in both ORDER BY and the
-	// keyset predicate. risk = crit*1e9 + high*1e5 + total (bounded fields;
-	// wide multipliers keep the tiers from colliding at realistic corpus sizes).
+// ListRepoImages returns a tenant's tracked images grouped by repository,
+// sorted in SQL (default "risk" = critical → high → total). Sorting in SQL (not
+// a Go re-sort) is what makes keyset pagination correct — the DB order is the
+// page order. Keyset on (<sort-col>, repository). Every active SBOM contributes;
+// counts are the union of findings across the repo's SBOMs, trimmed to
+// minSeverity. Risk uses raw (untrimmed) counts, so ranking is threshold-stable.
+func (s *Store) ListRepoImages(ctx context.Context, tenantID, minSeverity, sortKey, sortDir, cursor string, limit int) (items []RepoImage, next string, err error) {
+	eff, fetch := clampLimit(limit)
+	sort := resolveSort(sortKey, sortDir, repoImageSortCols, "risk")
+	cur, hasCur := decodeSortCursor(cursor)
+
 	args := []any{tenantID}
 	keyset := ""
 	if hasCur {
-		keyset = "WHERE (risk, repository) < ($2, $3)"
-		args = append(args, cur.N, cur.ID)
+		keyset = "WHERE " + sort.seek("repository", 2, 3)
+		args = append(args, cur.Val, cur.ID)
 	}
 	args = append(args, fetch)
 	limitPos := fmt.Sprintf("$%d", len(args))
@@ -76,11 +84,11 @@ func (s *Store) ListRepoImages(ctx context.Context, tenantID, minSeverity, curso
 			GROUP BY sb.tenant_id, sb.repository
 		)
 		SELECT repository, sbom_count, digest_count, versions, latest_at,
-		       crit, high, med, low, neg, unk, total, fixable, failures, risk
+		       crit, high, med, low, neg, unk, total, fixable, failures, %s
 		FROM img
 		%s
-		ORDER BY risk DESC, repository DESC
-		LIMIT %s`, keyset, limitPos)
+		ORDER BY %s
+		LIMIT %s`, sort.selectVal(), keyset, sort.orderBy("repository"), limitPos)
 
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -88,27 +96,26 @@ func (s *Store) ListRepoImages(ctx context.Context, tenantID, minSeverity, curso
 	}
 	defer func() { _ = rows.Close() }()
 
-	var risks []int64
+	var vals []string
 	for rows.Next() {
 		var im RepoImage
 		var c SeverityCounts
-		var risk int64
+		var sortval string
 		if err := rows.Scan(&im.Repository, &im.SBOMCount, &im.DigestCount, pq.Array(&im.Versions),
 			&im.LatestAt, &c.Critical, &c.High, &c.Medium, &c.Low, &c.Negligible, &c.Unknown,
-			&c.Total, &im.Fixable, &im.Failures, &risk); err != nil {
+			&c.Total, &im.Fixable, &im.Failures, &sortval); err != nil {
 			return nil, "", fmt.Errorf("scan repo image: %w", err)
 		}
 		im.Counts = applyThreshold(c, minSeverity)
 		items = append(items, im)
-		risks = append(risks, risk)
+		vals = append(vals, sortval)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, "", err
 	}
 	if len(items) > eff {
 		items = items[:eff]
-		last := items[len(items)-1]
-		next = encodeCursorN(risks[eff-1], last.Repository)
+		next = encodeSortCursor(vals[eff-1], items[len(items)-1].Repository)
 	}
 	return items, next, nil
 }
@@ -270,10 +277,19 @@ type RepoSBOM struct {
 	SubmittedAt  time.Time `json:"submitted_at"`
 }
 
+// repoTimelineSortCols: default "occurred" (newest change first). "severity"
+// worst-first, "cause"/"cve" alphabetical. Tiebreak is the event id.
+var repoTimelineSortCols = map[string]sortCol{
+	"occurred": {expr: "e.occurred_at", cast: "timestamptz", defDesc: true},
+	"severity": {expr: severityRankSQLCol("e.severity"), cast: "double precision", defDesc: false},
+	"cause":    {expr: "e.cause", cast: "text", defDesc: false},
+	"cve":      {expr: "e.exposure", cast: "text", defDesc: false},
+}
+
 // RepoTimeline returns the change history for a repository across ALL its
-// digests, newest first, keyset-paginated on (occurred_at, id). This is CUJ-3:
-// "how this image's vulnerabilities changed over time", spanning every version.
-func (s *Store) RepoTimeline(ctx context.Context, tenantID, repository, minSeverity, cursor string, limit int) (items []TimelineEvent, next string, err error) {
+// digests (CUJ-3), sortable (default "occurred" = newest first), keyset-
+// paginated on the chosen column + event id.
+func (s *Store) RepoTimeline(ctx context.Context, tenantID, repository, minSeverity, sortKey, sortDir, cursor string, limit int) (items []TimelineEvent, next string, err error) {
 	var known bool
 	if err := s.db.QueryRowContext(ctx,
 		`SELECT EXISTS(SELECT 1 FROM devradar_sbom WHERE tenant_id = $1 AND repository = $2)`,
@@ -285,25 +301,26 @@ func (s *Store) RepoTimeline(ctx context.Context, tenantID, repository, minSever
 	}
 
 	eff, fetch := clampLimit(limit)
-	cur, hasCur := decodeCursor(cursor)
+	sort := resolveSort(sortKey, sortDir, repoTimelineSortCols, "occurred")
+	cur, hasCur := decodeSortCursor(cursor)
 
 	args := []any{tenantID, repository, pq.Array(data.AllowedSeverities(minSeverity))}
 	keyset := ""
 	if hasCur {
-		keyset = ` AND (e.occurred_at, e.id) < ($4, $5)`
-		args = append(args, cur.TS, cur.ID)
+		keyset = " AND " + sort.seek("e.id::text", 4, 5)
+		args = append(args, cur.Val, cur.ID)
 	}
 	args = append(args, fetch)
 	limitPos := fmt.Sprintf("$%d", len(args))
 
 	q := fmt.Sprintf(`
 		SELECT e.id, sb.digest, e.sbom_id, e.scanner, e.event_type, e.exposure, e.package,
-		       e.severity, e.score, e.cause, e.occurred_at
+		       e.severity, e.score, e.cause, e.occurred_at, %s
 		FROM devradar_finding_event e
 		JOIN devradar_sbom sb ON sb.id = e.sbom_id
 		WHERE e.tenant_id = $1 AND sb.repository = $2 AND e.severity = ANY($3)%s
-		ORDER BY e.occurred_at DESC, e.id DESC
-		LIMIT %s`, keyset, limitPos)
+		ORDER BY %s
+		LIMIT %s`, sort.selectVal(), keyset, sort.orderBy("e.id::text"), limitPos)
 
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -311,15 +328,18 @@ func (s *Store) RepoTimeline(ctx context.Context, tenantID, repository, minSever
 	}
 	defer func() { _ = rows.Close() }()
 
-	var ids []int64 // event id per item, for the keyset cursor tiebreaker
+	var vals []string
+	var ids []int64
 	for rows.Next() {
 		var t TimelineEvent
 		var id int64
+		var sortval string
 		if err := rows.Scan(&id, &t.Digest, &t.SBOMID, &t.Scanner, &t.EventType, &t.Exposure,
-			&t.Package, &t.Severity, &t.Score, &t.Cause, &t.OccurredAt); err != nil {
+			&t.Package, &t.Severity, &t.Score, &t.Cause, &t.OccurredAt, &sortval); err != nil {
 			return nil, "", fmt.Errorf("scan timeline event: %w", err)
 		}
 		items = append(items, t)
+		vals = append(vals, sortval)
 		ids = append(ids, id)
 	}
 	if err := rows.Err(); err != nil {
@@ -327,8 +347,7 @@ func (s *Store) RepoTimeline(ctx context.Context, tenantID, repository, minSever
 	}
 	if len(items) > eff {
 		items = items[:eff]
-		last := items[len(items)-1]
-		next = encodeCursor(last.OccurredAt, strconv.FormatInt(ids[eff-1], 10))
+		next = encodeSortCursor(vals[eff-1], strconv.FormatInt(ids[eff-1], 10))
 	}
 	return items, next, nil
 }

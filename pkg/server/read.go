@@ -43,7 +43,7 @@ func (s *Server) handleListImages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	images, next, err := s.store.ListRepoImages(r.Context(), tn.ID, min,
-		r.URL.Query().Get("cursor"), pageLimit(r))
+		r.URL.Query().Get("sort"), r.URL.Query().Get("dir"), r.URL.Query().Get("cursor"), pageLimit(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list images")
 		return
@@ -93,7 +93,7 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 	// Preferred: group by repository across every version/digest.
 	if repo := r.URL.Query().Get("repo"); repo != "" {
 		events, next, err := s.store.RepoTimeline(r.Context(), tn.ID, repo, min,
-			r.URL.Query().Get("cursor"), pageLimit(r))
+			r.URL.Query().Get("sort"), r.URL.Query().Get("dir"), r.URL.Query().Get("cursor"), pageLimit(r))
 		if err != nil {
 			writeReadErr(w, err, "failed to load timeline")
 			return

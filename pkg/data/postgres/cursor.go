@@ -19,7 +19,6 @@ const (
 // rather than OFFSET (which degrades and can skip/duplicate rows under writes).
 type keysetCursor struct {
 	TS time.Time `json:"t,omitzero"`
-	N  int64     `json:"n,omitempty"`
 	ID string    `json:"i"`
 }
 
@@ -27,16 +26,6 @@ type keysetCursor struct {
 // there is no next page.
 func encodeCursor(ts time.Time, id string) string {
 	b, err := json.Marshal(keysetCursor{TS: ts.UTC(), ID: id})
-	if err != nil {
-		return ""
-	}
-	return base64.RawURLEncoding.EncodeToString(b)
-}
-
-// encodeCursorN returns an opaque base64 token for an integer-keyed list (e.g. a
-// risk score), with id as the unique tiebreaker.
-func encodeCursorN(n int64, id string) string {
-	b, err := json.Marshal(keysetCursor{N: n, ID: id})
 	if err != nil {
 		return ""
 	}

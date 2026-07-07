@@ -29,7 +29,16 @@
     {{if .HasEvents}}
     <table class="events">
       <thead>
-        <tr><th>When</th><th>Change</th><th>Cause</th><th>Severity</th><th>CVE</th><th>Package</th><th>Digest</th></tr>
+        {{$eq := printf "repo=%s&min_severity=%s" .Repository .MinSeverity}}
+        <tr>
+          <th>{{sorthp "When" "occurred" "/images" $eq "ev_sort" "ev_dir" .EvSort .EvDir}}</th>
+          <th>Change</th>
+          <th>{{sorthp "Cause" "cause" "/images" $eq "ev_sort" "ev_dir" .EvSort .EvDir}}</th>
+          <th>{{sorthp "Severity" "severity" "/images" $eq "ev_sort" "ev_dir" .EvSort .EvDir}}</th>
+          <th>{{sorthp "CVE" "cve" "/images" $eq "ev_sort" "ev_dir" .EvSort .EvDir}}</th>
+          <th>Package</th>
+          <th>Digest</th>
+        </tr>
       </thead>
       <tbody>
         {{range .Events}}
@@ -46,7 +55,7 @@
       </tbody>
     </table>
     {{if .NextCursor}}
-    <p class="loadmore"><a href="/images?repo={{.Repository}}&min_severity={{.MinSeverity}}&cursor={{.NextCursor}}">Load more →</a></p>
+    <p class="loadmore"><a href="/images?repo={{.Repository}}&min_severity={{.MinSeverity}}{{if .EvSort}}&ev_sort={{.EvSort}}&ev_dir={{.EvDir}}{{end}}&cursor={{.NextCursor}}">Load more →</a></p>
     {{end}}
     {{else}}
     <p class="muted">No changes at or above the current severity threshold yet.</p>

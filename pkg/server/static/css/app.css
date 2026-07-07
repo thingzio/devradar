@@ -186,9 +186,17 @@ td.small .tag { font-size: 0.72rem; }
 .vex-affected     { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
 tr.vexed td { opacity: 0.65; }
 
-/* Sortable column headers */
-a.sorth { color: var(--muted); text-decoration: none; white-space: nowrap; }
-a.sorth:hover { color: var(--accent); }
+/* Sortable column headers — a clear affordance: dotted underline + a faint
+   ⇅ hint on inactive columns, accent + arrow on the active one. */
+a.sorth {
+  color: var(--muted); text-decoration: none; white-space: nowrap; cursor: pointer;
+  border-bottom: 1px dotted var(--border); padding-bottom: 1px;
+}
+a.sorth::after { content: " ⇅"; opacity: 0.35; font-size: 0.85em; }
+a.sorth:hover { color: var(--accent); border-bottom-color: var(--accent); }
+/* Active column shows its own ↑/↓ in the label, so drop the ⇅ hint + accent it. */
+a.sorth.active { color: var(--accent); border-bottom-color: var(--accent); }
+a.sorth.active::after { content: ""; }
 th a.sorth { font: inherit; letter-spacing: inherit; text-transform: inherit; }
 
 /* ── Image table + severity bar ────────────────────────────────────────────── */

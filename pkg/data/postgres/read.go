@@ -131,6 +131,14 @@ const severityRankSQL = `CASE severity
 	WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2
 	WHEN 'low' THEN 3 WHEN 'negligible' THEN 4 ELSE 5 END`
 
+// severityRankSQLCol is severityRankSQL for a specific column reference (needed
+// when a query has multiple tables and the bare column is ambiguous).
+func severityRankSQLCol(col string) string {
+	return `CASE ` + col + `
+		WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2
+		WHEN 'low' THEN 3 WHEN 'negligible' THEN 4 ELSE 5 END`
+}
+
 // findingSortCols is the whitelist of sortable columns for the findings table.
 // Each expr is COALESCE'd non-null; finding_id is the unique tiebreak.
 var findingSortCols = map[string]sortCol{

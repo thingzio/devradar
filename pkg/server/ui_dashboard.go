@@ -39,6 +39,8 @@ type dashboardView struct {
 	Email       string
 	Version     string
 	MinSeverity string
+	Sort        string
+	Dir         string
 	NextCursor  string
 	Images      []imageRow
 	// Fleet headline stats.
@@ -70,9 +72,11 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Image list: one page, risk-ranked in SQL (so page order is global order).
+	// Image list: one page, sorted in SQL (default risk-rank; so page order is
+	// global order).
+	q := r.URL.Query()
 	images, next, err := s.store.ListRepoImages(r.Context(), tn.ID, min,
-		r.URL.Query().Get("cursor"), 50)
+		q.Get("sort"), q.Get("dir"), q.Get("cursor"), 50)
 	if err != nil {
 		http.Error(w, "failed to load dashboard", http.StatusInternalServerError)
 		return
@@ -84,6 +88,8 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		Email:       tn.Email,
 		Version:     s.opts.Version,
 		MinSeverity: min,
+		Sort:        q.Get("sort"),
+		Dir:         q.Get("dir"),
 		NextCursor:  next,
 		ImageCount:  fs.Images,
 		TotalCount:  fs.Total,
