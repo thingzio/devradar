@@ -1,6 +1,6 @@
 // Package middleware provides HTTP auth and the tenant context. DevRadar has two
-// auth surfaces: API tokens (Bearer) for CI submitting SBOMs, and GitHub-OAuth
-// session cookies for the token-minting UI.
+// passwordless auth surfaces: API tokens (Bearer) for CI submitting SBOMs, and
+// magic-link session cookies for the token-minting UI.
 package middleware
 
 import (

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 //go:embed sql/migrations/*.sql
@@ -80,6 +81,35 @@ func (s *Store) Migrate(ctx context.Context) error {
 		if _, err := conn.ExecContext(ctx,
 			"INSERT INTO "+schemaVersionTable+" (version) VALUES ($1) ON CONFLICT DO NOTHING", version); err != nil {
 			return fmt.Errorf("record migration %d: %w", version, err)
+		}
+	}
+	return nil
+}
+
+// partitionMonthsAhead is how many future monthly partitions of
+// devradar_finding_event to pre-create. The daily scan job runs Migrate (and
+// thus this) at least monthly, and this keeps partitions well ahead of now(),
+// so events never fall into the catch-all DEFAULT partition — which, once it
+// holds rows, would block creating that month's real partition.
+const partitionMonthsAhead = 3
+
+// EnsureEventPartitions idempotently creates monthly partitions of
+// devradar_finding_event for the current month through partitionMonthsAhead
+// months out. Safe to run on every boot (CREATE TABLE IF NOT EXISTS). base is
+// normally time.Now().UTC(); it is a parameter so the logic is unit-testable.
+func (s *Store) EnsureEventPartitions(ctx context.Context, base time.Time) error {
+	base = base.UTC()
+	for i := 0; i <= partitionMonthsAhead; i++ {
+		start := time.Date(base.Year(), base.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, i, 0)
+		end := start.AddDate(0, 1, 0)
+		name := fmt.Sprintf("devradar_finding_event_%04d_%02d", start.Year(), int(start.Month()))
+		// Identifiers/dates are code-derived (not user input); values are formatted
+		// as literals because PARTITION bounds cannot be parameterized.
+		stmt := fmt.Sprintf(
+			`CREATE TABLE IF NOT EXISTS %s PARTITION OF devradar_finding_event FOR VALUES FROM ('%s') TO ('%s')`,
+			name, start.Format("2006-01-02"), end.Format("2006-01-02"))
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("ensure partition %s: %w", name, err)
 		}
 	}
 	return nil

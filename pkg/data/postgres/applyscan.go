@@ -19,9 +19,14 @@ import (
 // version axis changed since the previous run, so alerting can ignore changes
 // the tenant didn't cause (a scanner upgrade must never page anyone).
 //
-// The method is idempotent: re-running the same (sbom, scanner, db_version,
-// scanner_version) recomputes the identical incoming set and the event UNIQUE
-// constraint absorbs any duplicate rows, so a Cloud Run Job retry is safe.
+// The method is idempotent by state convergence, not by the event UNIQUE
+// constraint (which includes occurred_at = the run's wall clock, so it does NOT
+// absorb a retry's re-fired events). A committed first run leaves devradar_finding
+// holding the current state; a retry then recomputes the identical incoming set,
+// finds changed()==false for every finding, and emits zero events. A retry that
+// crashes before commit rolls back and writes nothing. So a Cloud Run Job retry
+// is safe. (This holds for the serial single-worker scan job; concurrent runs of
+// the same (sbom, scanner) are out of scope by design.)
 func (s *Store) ApplyScan(ctx context.Context, sb *SBOM, scanner string, ver Versions, vulns []data.Vulnerability) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

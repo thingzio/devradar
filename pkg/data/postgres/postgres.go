@@ -90,6 +90,12 @@ func New(ctx context.Context, dsn string, cfg PoolConfig) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	// Keep the append-only event log's monthly partitions ahead of now() so rows
+	// never fall into the DEFAULT partition. Idempotent; runs every boot.
+	if err := s.EnsureEventPartitions(ctx, time.Now()); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("ensure event partitions: %w", err)
+	}
 	return s, nil
 }
 
