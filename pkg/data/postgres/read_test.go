@@ -92,6 +92,130 @@ func TestListImages_ThresholdTrimsBreakdown(t *testing.T) {
 	}
 }
 
+// TestListImages_DedupsAcrossScanners verifies a CVE reported by BOTH grype and
+// trivy (two devradar_finding rows sharing one finding_id) counts ONCE, not
+// twice — the fleet/image rollups count distinct finding_id, not raw rows.
+func TestListImages_DedupsAcrossScanners(t *testing.T) {
+	st, err := postgres.NewFromEnv(context.Background())
+	if err != nil {
+		t.Skipf("skipping (no database): %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	var tenantID string
+	if err := st.DB().QueryRowContext(ctx,
+		`INSERT INTO devradar_tenant (email) VALUES ($1) RETURNING id`,
+		"dup-"+hex.EncodeToString(b)+"@example.com").Scan(&tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	sbomID := "dup-" + hex.EncodeToString(b)
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_sbom (id, tenant_id, image_ref, digest, format, object_path)
+		VALUES ($1,$2,'img','sha256:dup','cyclonedx','gs://x')`, sbomID, tenantID); err != nil {
+		t.Fatalf("seed sbom: %v", err)
+	}
+	// Same finding_id under two scanners = one real CVE seen twice.
+	for _, sc := range []string{"grype", "trivy"} {
+		if _, err := st.DB().ExecContext(ctx, `
+			INSERT INTO devradar_finding (sbom_id, scanner, finding_id, exposure, package, version, severity, score, is_fixed)
+			VALUES ($1,$2,'shared-fid','CVE-DUP','pkg','1.0','critical',9.8,false)`,
+			sbomID, sc); err != nil {
+			t.Fatalf("seed finding %s: %v", sc, err)
+		}
+	}
+
+	imgs, err := st.ListImages(ctx, tenantID, "low")
+	if err != nil {
+		t.Fatalf("ListImages: %v", err)
+	}
+	if len(imgs) != 1 {
+		t.Fatalf("got %d images, want 1", len(imgs))
+	}
+	if imgs[0].Counts.Critical != 1 {
+		t.Errorf("critical = %d, want 1 (dual-scanner CVE must not double-count)", imgs[0].Counts.Critical)
+	}
+	if imgs[0].Counts.Total != 1 {
+		t.Errorf("total = %d, want 1", imgs[0].Counts.Total)
+	}
+
+	fs, err := st.FleetStats(ctx, tenantID)
+	if err != nil {
+		t.Fatalf("FleetStats: %v", err)
+	}
+	if fs.Total != 1 || fs.Critical != 1 {
+		t.Errorf("FleetStats total=%d critical=%d, want 1/1 (deduped)", fs.Total, fs.Critical)
+	}
+}
+
+// TestFindingsBySBOM_DualScannerPaging is the keyset-tiebreak guard: when a CVE
+// is found by both scanners (two rows, one finding_id) and results are paged so
+// the twin pair straddles the boundary, BOTH rows must appear across the pages —
+// a finding_id-only tiebreak would silently drop one.
+func TestFindingsBySBOM_DualScannerPaging(t *testing.T) {
+	st, err := postgres.NewFromEnv(context.Background())
+	if err != nil {
+		t.Skipf("skipping (no database): %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	var tenantID string
+	if err := st.DB().QueryRowContext(ctx,
+		`INSERT INTO devradar_tenant (email) VALUES ($1) RETURNING id`,
+		"pg-"+hex.EncodeToString(b)+"@example.com").Scan(&tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	sbomID := "pg-" + hex.EncodeToString(b)
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_sbom (id, tenant_id, image_ref, digest, format, object_path)
+		VALUES ($1,$2,'img','sha256:pg','cyclonedx','gs://x')`, sbomID, tenantID); err != nil {
+		t.Fatalf("seed sbom: %v", err)
+	}
+	// Three distinct CVEs, each found by BOTH scanners = 6 rows, all critical
+	// (so they tie on the default severity sort and the tiebreak alone orders them).
+	for i, cve := range []string{"CVE-A", "CVE-B", "CVE-C"} {
+		fid := "fid-" + hex.EncodeToString([]byte{byte(i)})
+		for _, sc := range []string{"grype", "trivy"} {
+			if _, err := st.DB().ExecContext(ctx, `
+				INSERT INTO devradar_finding (sbom_id, scanner, finding_id, exposure, package, version, severity, score, is_fixed)
+				VALUES ($1,$2,$3,$4,'pkg','1.0','critical',9.8,false)`,
+				sbomID, sc, fid, cve); err != nil {
+				t.Fatalf("seed finding: %v", err)
+			}
+		}
+	}
+
+	// Page through 2 at a time; collect every (finding_id,scanner) seen.
+	seen := map[string]int{}
+	cursor := ""
+	for range 10 {
+		items, next, err := st.FindingsBySBOM(ctx, tenantID, sbomID, "low", false, false, "", "", cursor, 2)
+		if err != nil {
+			t.Fatalf("FindingsBySBOM: %v", err)
+		}
+		for _, f := range items {
+			seen[f.Exposure+"|"+f.Scanner]++
+		}
+		if next == "" {
+			break
+		}
+		cursor = next
+	}
+	if len(seen) != 6 {
+		t.Errorf("saw %d distinct (cve,scanner) rows across pages, want 6 (no twin dropped): %v", len(seen), seen)
+	}
+	for k, n := range seen {
+		if n != 1 {
+			t.Errorf("%s appeared %d times, want exactly 1", k, n)
+		}
+	}
+}
+
 // TestImageTimeline_AcrossDigests verifies the cross-digest history: two SBOMs
 // sharing one image_ref (an image whose digest changed) produce a merged,
 // severity-filtered, newest-first timeline; an unknown ref is 404; and the

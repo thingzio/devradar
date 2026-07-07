@@ -64,20 +64,20 @@ func (s *Store) ListRepoImages(ctx context.Context, tenantID, minSeverity, nameF
 			       COUNT(DISTINCT sb.digest)                         AS digest_count,
 			       COALESCE(array_agg(DISTINCT sb.version) FILTER (WHERE sb.version IS NOT NULL), '{}') AS versions,
 			       MAX(sb.submitted_at)                              AS latest_at,
-			       COUNT(*) FILTER (WHERE f.severity = 'critical')   AS crit,
-			       COUNT(*) FILTER (WHERE f.severity = 'high')       AS high,
-			       COUNT(*) FILTER (WHERE f.severity = 'medium')     AS med,
-			       COUNT(*) FILTER (WHERE f.severity = 'low')        AS low,
-			       COUNT(*) FILTER (WHERE f.severity = 'negligible') AS neg,
-			       COUNT(*) FILTER (WHERE f.severity = 'unknown')    AS unk,
-			       COUNT(f.finding_id)                               AS total,
-			       COUNT(*) FILTER (WHERE f.is_fixed)                AS fixable,
+			       COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.severity = 'critical')   AS crit,
+			       COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.severity = 'high')       AS high,
+			       COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.severity = 'medium')     AS med,
+			       COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.severity = 'low')        AS low,
+			       COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.severity = 'negligible') AS neg,
+			       COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.severity = 'unknown')    AS unk,
+			       COUNT(DISTINCT (sb.id, f.finding_id))                               AS total,
+			       COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.is_fixed)     AS fixable,
 			       (SELECT COUNT(*) FROM devradar_scan_failure sf
 			          JOIN devradar_sbom sb2 ON sb2.id = sf.sbom_id
 			         WHERE sb2.tenant_id = sb.tenant_id AND sb2.repository = sb.repository) AS failures,
-			       COUNT(*) FILTER (WHERE f.severity = 'critical') * 1000000000::bigint
-			         + COUNT(*) FILTER (WHERE f.severity = 'high') * 100000::bigint
-			         + COUNT(f.finding_id)                         AS risk
+			       COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.severity = 'critical') * 1000000000::bigint
+			         + COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.severity = 'high') * 100000::bigint
+			         + COUNT(DISTINCT (sb.id, f.finding_id))     AS risk
 			FROM devradar_sbom sb
 			LEFT JOIN devradar_finding f ON f.sbom_id = sb.id
 				AND NOT `+vexSuppressedByDigestCVE+`
@@ -222,16 +222,16 @@ func (s *Store) FleetStats(ctx context.Context, tenantID string) (FleetStats, er
 		SELECT
 			(SELECT COUNT(DISTINCT repository) FROM devradar_sbom
 			   WHERE tenant_id = $1 AND status = 'active'),
-			COUNT(f.finding_id),
-			COUNT(*) FILTER (WHERE f.severity = 'critical'),
-			COUNT(*) FILTER (WHERE f.severity = 'high'),
-			COUNT(*) FILTER (WHERE f.severity = 'medium'),
-			COUNT(*) FILTER (WHERE f.severity = 'low'),
-			COUNT(*) FILTER (WHERE f.is_fixed),
-			COUNT(*) FILTER (WHERE f.is_fixed AND f.severity = 'critical'),
-			COUNT(*) FILTER (WHERE f.is_fixed AND f.severity = 'high'),
-			COUNT(*) FILTER (WHERE f.is_fixed AND f.severity = 'medium'),
-			COUNT(*) FILTER (WHERE f.is_fixed AND f.severity = 'low'),
+			COUNT(DISTINCT (f.sbom_id, f.finding_id)),
+			COUNT(DISTINCT (f.sbom_id, f.finding_id)) FILTER (WHERE f.severity = 'critical'),
+			COUNT(DISTINCT (f.sbom_id, f.finding_id)) FILTER (WHERE f.severity = 'high'),
+			COUNT(DISTINCT (f.sbom_id, f.finding_id)) FILTER (WHERE f.severity = 'medium'),
+			COUNT(DISTINCT (f.sbom_id, f.finding_id)) FILTER (WHERE f.severity = 'low'),
+			COUNT(DISTINCT (f.sbom_id, f.finding_id)) FILTER (WHERE f.is_fixed),
+			COUNT(DISTINCT (f.sbom_id, f.finding_id)) FILTER (WHERE f.is_fixed AND f.severity = 'critical'),
+			COUNT(DISTINCT (f.sbom_id, f.finding_id)) FILTER (WHERE f.is_fixed AND f.severity = 'high'),
+			COUNT(DISTINCT (f.sbom_id, f.finding_id)) FILTER (WHERE f.is_fixed AND f.severity = 'medium'),
+			COUNT(DISTINCT (f.sbom_id, f.finding_id)) FILTER (WHERE f.is_fixed AND f.severity = 'low'),
 			COUNT(DISTINCT f.exposure) FILTER (WHERE e.kev),
 			(SELECT COUNT(*) FROM devradar_scan_failure sf
 			   JOIN devradar_sbom s2 ON s2.id = sf.sbom_id

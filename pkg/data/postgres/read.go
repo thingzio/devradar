@@ -48,18 +48,24 @@ type Image struct {
 // per-severity breakdown to levels at or above the threshold (unknown always
 // kept), zeroing the rest. Total still reflects all findings. Tenant-scoped.
 func (s *Store) ListImages(ctx context.Context, tenantID, minSeverity string) ([]Image, error) {
+	// COUNT(DISTINCT f.finding_id): a CVE found by both grype and trivy is two
+	// rows sharing one finding_id; counting rows would double it. finding_id is
+	// the scanner-independent identity, so DISTINCT gives a true per-image count
+	// consistent with FleetStats/ListRepoImages. VEX-suppressed findings are
+	// excluded from the join (matching the SBOM-detail totals in GetSBOM).
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT sb.id, sb.image_ref, sb.digest, sb.format, sb.submitted_at,
-		       COUNT(*) FILTER (WHERE f.severity = 'critical')   AS crit,
-		       COUNT(*) FILTER (WHERE f.severity = 'high')       AS high,
-		       COUNT(*) FILTER (WHERE f.severity = 'medium')     AS med,
-		       COUNT(*) FILTER (WHERE f.severity = 'low')        AS low,
-		       COUNT(*) FILTER (WHERE f.severity = 'negligible') AS neg,
-		       COUNT(*) FILTER (WHERE f.severity = 'unknown')    AS unk,
-		       COUNT(f.finding_id)                               AS total,
+		       COUNT(DISTINCT f.finding_id) FILTER (WHERE f.severity = 'critical')   AS crit,
+		       COUNT(DISTINCT f.finding_id) FILTER (WHERE f.severity = 'high')       AS high,
+		       COUNT(DISTINCT f.finding_id) FILTER (WHERE f.severity = 'medium')     AS med,
+		       COUNT(DISTINCT f.finding_id) FILTER (WHERE f.severity = 'low')        AS low,
+		       COUNT(DISTINCT f.finding_id) FILTER (WHERE f.severity = 'negligible') AS neg,
+		       COUNT(DISTINCT f.finding_id) FILTER (WHERE f.severity = 'unknown')    AS unk,
+		       COUNT(DISTINCT f.finding_id)                                          AS total,
 		       (SELECT COUNT(*) FROM devradar_scan_failure sf WHERE sf.sbom_id = sb.id) AS failures
 		FROM devradar_sbom sb
 		LEFT JOIN devradar_finding f ON f.sbom_id = sb.id
+			AND NOT `+vexSuppressedByDigestCVE+`
 		WHERE sb.tenant_id = $1 AND sb.status = 'active'
 		GROUP BY sb.id, sb.image_ref, sb.digest, sb.format, sb.submitted_at
 		ORDER BY sb.submitted_at DESC`, tenantID)
@@ -164,6 +170,14 @@ func (s *Store) FindingsBySBOM(ctx context.Context, tenantID, sbomID, minSeverit
 	sort := resolveSort(sortKey, sortDir, findingSortCols, "severity")
 	cur, hasCur := decodeSortCursor(cursor)
 
+	// A CVE found by both grype and trivy yields two devradar_finding rows sharing
+	// one finding_id (PK is (sbom_id, scanner, finding_id)). finding_id alone is
+	// therefore NOT a unique keyset tiebreak — twins that tie on the sort value
+	// would straddle a page boundary and one could be silently dropped by the
+	// seek. Use the genuinely-unique composite (finding_id|scanner); finding_id is
+	// sha256 hex, so '|' never collides.
+	const tiebreak = "(f.finding_id || '|' || f.scanner)"
+
 	args := []any{sbomID, pq.Array(data.AllowedSeverities(minSeverity))}
 	conds := ""
 	if fixableOnly {
@@ -173,7 +187,7 @@ func (s *Store) FindingsBySBOM(ctx context.Context, tenantID, sbomID, minSeverit
 		conds += " AND NOT " + vexSuppressedExpr
 	}
 	if hasCur {
-		conds += " AND " + sort.seek("f.finding_id", len(args)+1, len(args)+2)
+		conds += " AND " + sort.seek(tiebreak, len(args)+1, len(args)+2)
 		args = append(args, cur.Val, cur.ID)
 	}
 	args = append(args, fetch)
@@ -181,7 +195,7 @@ func (s *Store) FindingsBySBOM(ctx context.Context, tenantID, sbomID, minSeverit
 
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
 		SELECT f.scanner, f.exposure, f.package, f.version, f.severity, f.score, f.is_fixed,
-		       f.finding_id,
+		       %s,
 		       e.epss_score, e.epss_percentile, COALESCE(e.kev, false),
 		       vex.vex_status,
 		       %s
@@ -190,7 +204,7 @@ func (s *Store) FindingsBySBOM(ctx context.Context, tenantID, sbomID, minSeverit
 		LEFT JOIN devradar_cve_enrichment e ON e.cve = f.exposure%s
 		WHERE f.sbom_id = $1 AND f.severity = ANY($2)%s
 		ORDER BY %s
-		LIMIT %s`, sort.selectVal(), vexStatusJoin, conds, sort.orderBy("f.finding_id"), limitPos), args...)
+		LIMIT %s`, tiebreak, sort.selectVal(), vexStatusJoin, conds, sort.orderBy(tiebreak), limitPos), args...)
 	if err != nil {
 		return nil, "", fmt.Errorf("findings: %w", err)
 	}
