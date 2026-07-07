@@ -34,9 +34,12 @@ var validStatus = map[string]bool{
 // bare digest, a pkg:oci purl, or a ref@sha256:... string.
 var digestRE = regexp.MustCompile(`sha256:[0-9a-f]{64}`)
 
-// Statement is one flattened (product, vulnerability) assertion.
+// Statement is one flattened (product, vulnerability) assertion. Exactly one of
+// ProductDigest (version-precise) or ProductRepo (all versions of an image) is
+// set — real OpenVEX often scopes by image name/PURL with no digest.
 type Statement struct {
-	ProductDigest   string
+	ProductDigest   string // sha256:...; empty when scoped by repo
+	ProductRepo     string // image name key (e.g. "aicr"); empty when digest-pinned
 	Vulnerability   string
 	Subcomponent    string // purl, may be empty
 	Status          string
@@ -133,7 +136,13 @@ func Parse(raw []byte) (*Document, error) {
 		}
 		for _, p := range st.Products {
 			digest := digestOf(p)
+			repo := ""
 			if digest == "" {
+				// No digest: fall back to a repository key (image name), so the
+				// statement scopes to every version of that image.
+				repo = repoKeyOf(p)
+			}
+			if digest == "" && repo == "" {
 				out.Skipped++
 				continue
 			}
@@ -142,14 +151,14 @@ func Parse(raw []byte) (*Document, error) {
 				sub = p.Subcomponents[0].ID
 			}
 			out.Statements = append(out.Statements, Statement{
-				ProductDigest: digest, Vulnerability: cve, Subcomponent: sub,
+				ProductDigest: digest, ProductRepo: repo, Vulnerability: cve, Subcomponent: sub,
 				Status: status, Justification: st.Justification,
 				ImpactStatement: st.ImpactState, Timestamp: ts,
 			})
 		}
 	}
 	if len(out.Statements) == 0 {
-		return nil, fmt.Errorf("vex: no statement resolved to an image digest (product @id must contain sha256:...)")
+		return nil, fmt.Errorf("vex: no statement resolved to an image digest or name")
 	}
 	return out, nil
 }
@@ -175,6 +184,42 @@ func vulnName(raw json.RawMessage) string {
 		return digestRE.FindString(obj.ID) // unlikely, but be lenient
 	}
 	return ""
+}
+
+// repoKeyOf derives a repository match key (the image name) from a digest-less
+// product identifier — e.g. "pkg:oci/aicr" -> "aicr",
+// "pkg:oci/ghcr.io/nvidia/aicr" -> "aicr". The key is the last path segment with
+// any tag/version stripped, lowercased. The store matches it against the last
+// segment of a tracked repository, so registry-prefix differences don't matter.
+func repoKeyOf(p rawProduct) string {
+	id := p.ID
+	if id == "" {
+		if purl, ok := p.Identifiers["purl"].(string); ok {
+			id = purl
+		}
+	}
+	if id == "" {
+		return ""
+	}
+	// Strip a pkg:oci/ (or any pkg:type/) PURL scheme prefix.
+	if i := strings.Index(id, ":"); i >= 0 && strings.HasPrefix(id, "pkg:") {
+		if j := strings.Index(id[i:], "/"); j >= 0 {
+			id = id[i+j+1:]
+		}
+	}
+	// Drop PURL qualifiers (?...) and version (@... that isn't a digest handled earlier).
+	if i := strings.IndexAny(id, "?@"); i >= 0 {
+		id = id[:i]
+	}
+	// Last path segment.
+	if i := strings.LastIndex(id, "/"); i >= 0 {
+		id = id[i+1:]
+	}
+	// Strip a :tag.
+	if i := strings.LastIndex(id, ":"); i >= 0 {
+		id = id[:i]
+	}
+	return strings.ToLower(strings.TrimSpace(id))
 }
 
 // digestOf resolves a product's image digest from its @id or identifiers.

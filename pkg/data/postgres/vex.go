@@ -15,14 +15,19 @@ import (
 //
 // Suppression: a finding is suppressed when vex_status IN ('not_affected','fixed').
 // vexSuppressed is the predicate; vexNotSuppressed its negation-including-null.
+// vexRepoKeyExpr is the last path segment of an sbom's repository, lowercased —
+// the key a digest-less (repository-scoped) VEX statement matches against.
+const vexRepoKeyExpr = `lower(split_part(sb.repository, '/', array_length(string_to_array(sb.repository,'/'),1)))`
+
 const (
 	vexStatusJoin = `
 		LEFT JOIN LATERAL (
 			SELECT vs.status AS vex_status
 			FROM devradar_vex_statement vs
 			WHERE vs.tenant_id = sb.tenant_id
-			  AND vs.product_digest = sb.digest
 			  AND vs.vulnerability = f.exposure
+			  AND (vs.product_digest = sb.digest
+			       OR vs.product_repo = ` + vexRepoKeyExpr + `)
 			ORDER BY vs.created_at DESC
 			LIMIT 1
 		) vex ON true`
@@ -41,8 +46,9 @@ const (
 	// latest-wins; the per-finding view uses proper latest-wins.)
 	vexSuppressedByDigestCVE = `EXISTS (
 		SELECT 1 FROM devradar_vex_statement vs
-		WHERE vs.tenant_id = sb.tenant_id AND vs.product_digest = sb.digest
+		WHERE vs.tenant_id = sb.tenant_id
 		  AND vs.vulnerability = f.exposure
+		  AND (vs.product_digest = sb.digest OR vs.product_repo = ` + vexRepoKeyExpr + `)
 		  AND vs.status IN ('not_affected','fixed'))`
 )
 
@@ -59,14 +65,18 @@ func (s *Store) SaveVEXDocument(ctx context.Context, tenantID string, doc *vex.D
 	defer func() { _ = tx.Rollback() }()
 
 	// Count how many statements hit a real finding in one of the tenant's SBOMs.
+	// A statement matches by exact digest, or (digest-less) by repository key —
+	// the last path segment of the tracked repository.
 	for _, st := range doc.Statements {
 		var hit bool
 		if err := tx.QueryRowContext(ctx, `
 			SELECT EXISTS(
 				SELECT 1 FROM devradar_finding f
 				JOIN devradar_sbom sb ON sb.id = f.sbom_id
-				WHERE sb.tenant_id = $1 AND sb.digest = $2 AND f.exposure = $3)`,
-			tenantID, st.ProductDigest, st.Vulnerability).Scan(&hit); err != nil {
+				WHERE sb.tenant_id = $1 AND f.exposure = $2
+				  AND (($3 <> '' AND sb.digest = $3)
+				       OR ($4 <> '' AND lower(split_part(sb.repository, '/', array_length(string_to_array(sb.repository,'/'),1))) = $4)))`,
+			tenantID, st.Vulnerability, st.ProductDigest, st.ProductRepo).Scan(&hit); err != nil {
 			return "", 0, fmt.Errorf("vex match check: %w", err)
 		}
 		if hit {
@@ -83,9 +93,9 @@ func (s *Store) SaveVEXDocument(ctx context.Context, tenantID string, doc *vex.D
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO devradar_vex_statement
-			(tenant_id, document_id, product_digest, vulnerability, subcomponent,
+			(tenant_id, document_id, product_digest, product_repo, vulnerability, subcomponent,
 			 status, justification, impact_statement, timestamp)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`)
 	if err != nil {
 		return "", 0, fmt.Errorf("prepare vex statement: %w", err)
 	}
@@ -96,8 +106,8 @@ func (s *Store) SaveVEXDocument(ctx context.Context, tenantID string, doc *vex.D
 		if st.Timestamp != "" {
 			ts = st.Timestamp
 		}
-		if _, err := stmt.ExecContext(ctx, tenantID, id, st.ProductDigest, st.Vulnerability,
-			nullStr(st.Subcomponent), st.Status, nullStr(st.Justification),
+		if _, err := stmt.ExecContext(ctx, tenantID, id, nullStr(st.ProductDigest), nullStr(st.ProductRepo),
+			st.Vulnerability, nullStr(st.Subcomponent), st.Status, nullStr(st.Justification),
 			nullStr(st.ImpactStatement), ts); err != nil {
 			return "", 0, fmt.Errorf("insert vex statement: %w", err)
 		}

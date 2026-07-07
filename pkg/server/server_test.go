@@ -468,6 +468,72 @@ func TestVEX_SubmitAndSuppress(t *testing.T) {
 	}
 }
 
+// TestVEX_RealAICRFile validates the real NVIDIA AICR OpenVEX document (fixture)
+// end-to-end: it's digest-less (repository-scoped), so it must suppress the
+// matching CVE on a tracked aicr image across versions.
+func TestVEX_RealAICRFile(t *testing.T) {
+	raw, err := os.ReadFile("testdata/aicr.openvex.json")
+	if err != nil {
+		t.Skipf("fixture missing: %v", err)
+	}
+	srv, st := testServer(t)
+	tenantID, tok := seedTenantToken(t, st)
+	h := srv.Handler()
+	ctx := context.Background()
+
+	// A tracked ghcr.io/nvidia/aicr image with CVE-2026-45447 (which the AICR VEX
+	// marks not_affected for pkg:oci/aicr).
+	digest := "sha256:" + hex.EncodeToString(mustRand(t, 32))
+	sbomID := "aicr-" + tenantID
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_sbom (id, tenant_id, image_ref, repository, digest, format, object_path)
+		VALUES ($1,$2,'ghcr.io/nvidia/aicr','ghcr.io/nvidia/aicr',$3,'cyclonedx','gs://x')`,
+		sbomID, tenantID, digest); err != nil {
+		t.Fatalf("seed sbom: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_finding (sbom_id, scanner, finding_id, exposure, package, version, severity, score, is_fixed)
+		VALUES ($1,'grype','CVE-2026-45447/p/1','CVE-2026-45447','p','1','high',7.0,false)`, sbomID); err != nil {
+		t.Fatalf("seed finding: %v", err)
+	}
+
+	do := func(method, path string, body []byte) *httptest.ResponseRecorder {
+		rq := httptest.NewRequest(method, path, bytes.NewReader(body))
+		rq.Header.Set("Authorization", "Bearer "+tok)
+		rc := httptest.NewRecorder()
+		h.ServeHTTP(rc, rq)
+		return rc
+	}
+	findings := func(query string) int {
+		rc := do(http.MethodGet, "/v1/sboms/"+sbomID+"/findings?min_severity=negligible"+query, nil)
+		var b struct {
+			Findings []json.RawMessage `json:"findings"`
+		}
+		_ = json.Unmarshal(rc.Body.Bytes(), &b)
+		return len(b.Findings)
+	}
+
+	if findings("") != 1 {
+		t.Fatalf("pre-VEX findings = %d, want 1", findings(""))
+	}
+	// Submit the real AICR document.
+	rc := do(http.MethodPost, "/v1/vex", raw)
+	if rc.Code != http.StatusAccepted {
+		t.Fatalf("POST real AICR VEX = %d: %s", rc.Code, rc.Body.String())
+	}
+	// It parses all 56 statements and matches the one for our aicr image.
+	if !strings.Contains(rc.Body.String(), `"matched":1`) {
+		t.Errorf("AICR VEX should match 1 finding, got: %s", rc.Body.String())
+	}
+	// The finding is now suppressed (repository-scoped, digest-less statement).
+	if findings("") != 0 {
+		t.Errorf("post-VEX findings = %d, want 0 (repo-scoped suppression)", findings(""))
+	}
+	if findings("&suppressed=true") != 1 {
+		t.Errorf("suppressed=true findings = %d, want 1", findings("&suppressed=true"))
+	}
+}
+
 func mustRand(t *testing.T, n int) []byte {
 	t.Helper()
 	b := make([]byte, n)

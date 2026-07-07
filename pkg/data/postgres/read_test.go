@@ -259,6 +259,75 @@ func TestVEXSuppression(t *testing.T) {
 	}
 }
 
+// TestVEXSuppression_RepoScoped verifies a digest-less VEX statement (scoped to
+// an image name) suppresses the CVE across every version of a matching
+// repository, correlating on the repo's last path segment.
+func TestVEXSuppression_RepoScoped(t *testing.T) {
+	st, err := postgres.NewFromEnv(context.Background())
+	if err != nil {
+		t.Skipf("skipping (no database): %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	suffix := hex.EncodeToString(b)
+	var tenantID string
+	if err := st.DB().QueryRowContext(ctx,
+		`INSERT INTO devradar_tenant (email) VALUES ($1) RETURNING id`,
+		"vexr-"+suffix+"@example.com").Scan(&tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	// Repository ghcr.io/nvidia/aicr-<suffix>; two versions (digests), same CVE.
+	repo := "ghcr.io/nvidia/aicr-" + suffix
+	cve := "CVE-2026-45447-" + suffix
+	for _, v := range []string{"v1", "v2"} {
+		sbomID := "aicr-" + v + "-" + suffix
+		digest := "sha256:" + v + suffix
+		if _, err := st.DB().ExecContext(ctx, `
+			INSERT INTO devradar_sbom (id, tenant_id, image_ref, repository, digest, format, object_path)
+			VALUES ($1,$2,$3,$4,$5,'cyclonedx','gs://x')`, sbomID, tenantID, repo, repo, digest); err != nil {
+			t.Fatalf("seed sbom %s: %v", v, err)
+		}
+		if _, err := st.DB().ExecContext(ctx, `
+			INSERT INTO devradar_finding (sbom_id, scanner, finding_id, exposure, package, version, severity, score, is_fixed)
+			VALUES ($1,'grype',$2,$3,'p','1','high',7.0,false)`, sbomID, cve+"/p/1", cve); err != nil {
+			t.Fatalf("seed finding %s: %v", v, err)
+		}
+	}
+
+	// Repo-scoped VEX (no digest, repo key = "aicr-<suffix>" — the repo's last segment).
+	doc := &vex.Document{Author: "nvidia", Raw: []byte(`{}`), Statements: []vex.Statement{
+		{ProductRepo: "aicr-" + suffix, Vulnerability: cve, Status: vex.StatusNotAffected,
+			Justification: "vulnerable_code_not_in_execute_path"},
+	}}
+	if _, matched, err := st.SaveVEXDocument(ctx, tenantID, doc); err != nil || matched != 1 {
+		t.Fatalf("save repo VEX: matched=%d err=%v", matched, err)
+	}
+
+	// Both versions' findings suppressed by the single repo-scoped statement.
+	for _, v := range []string{"v1", "v2"} {
+		f, _, err := st.FindingsBySBOM(ctx, tenantID, "aicr-"+v+"-"+suffix, "negligible", false, false, "", 50)
+		if err != nil {
+			t.Fatalf("findings %s: %v", v, err)
+		}
+		if len(f) != 0 {
+			t.Errorf("%s: %d findings, want 0 (repo-scoped VEX should suppress)", v, len(f))
+		}
+	}
+	// The fleet CVE view drops it too.
+	cves, _, err := st.FleetCVEs(ctx, tenantID, "negligible", "", 50)
+	if err != nil {
+		t.Fatalf("fleet cves: %v", err)
+	}
+	for _, c := range cves {
+		if c.CVE == cve {
+			t.Errorf("repo-suppressed CVE %s should not appear in fleet CVEs", cve)
+		}
+	}
+}
+
 // TestFleetCVEs_BlastRadiusRanking verifies CVEs are grouped across images,
 // ranked KEV-first then severity then blast radius, and that CVEDetail lists
 // every occurrence.

@@ -53,16 +53,41 @@ func TestParse_Rejections(t *testing.T) {
 	}
 }
 
-func TestParse_SkipsUnresolvableProduct(t *testing.T) {
-	// A product with no digest is skipped, not fatal — but if none resolve, error.
+func TestParse_RepoScopedProduct(t *testing.T) {
+	// A digest-less product resolves to a repository key (all versions); a
+	// digest-pinned one stays precise.
 	doc := `{"statements":[
-	  {"vulnerability":"CVE-1","products":[{"@id":"pkg:oci/app:latest"}],"status":"affected"},
+	  {"vulnerability":"CVE-1","products":[{"@id":"pkg:oci/aicr"}],"status":"not_affected","justification":"component_not_present"},
 	  {"vulnerability":"CVE-2","products":[{"@id":"` + dig + `"}],"status":"fixed"}]}`
 	d, err := Parse([]byte(doc))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if len(d.Statements) != 1 || d.Skipped != 1 {
-		t.Errorf("want 1 resolved + 1 skipped, got %d resolved / %d skipped", len(d.Statements), d.Skipped)
+	if len(d.Statements) != 2 {
+		t.Fatalf("statements = %d, want 2", len(d.Statements))
+	}
+	// Repo-scoped: digest empty, repo = "aicr".
+	if d.Statements[0].ProductDigest != "" || d.Statements[0].ProductRepo != "aicr" {
+		t.Errorf("stmt0 = digest=%q repo=%q, want digest='' repo='aicr'", d.Statements[0].ProductDigest, d.Statements[0].ProductRepo)
+	}
+	// Digest-scoped: digest set, repo empty.
+	if d.Statements[1].ProductDigest != dig || d.Statements[1].ProductRepo != "" {
+		t.Errorf("stmt1 = digest=%q repo=%q, want digest set, repo ''", d.Statements[1].ProductDigest, d.Statements[1].ProductRepo)
+	}
+}
+
+func TestRepoKeyOf(t *testing.T) {
+	cases := map[string]string{
+		"pkg:oci/aicr":                "aicr",
+		"pkg:oci/ghcr.io/nvidia/aicr": "aicr",
+		"pkg:oci/aicr-gate":           "aicr-gate",
+		"pkg:oci/app:latest":          "app",
+		"pkg:oci/app?arch=amd64":      "app",
+		"ghcr.io/nvidia/aicr":         "aicr",
+	}
+	for in, want := range cases {
+		if got := repoKeyOf(rawProduct{ID: in}); got != want {
+			t.Errorf("repoKeyOf(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
