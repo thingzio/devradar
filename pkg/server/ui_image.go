@@ -68,6 +68,7 @@ type imageDetailView struct {
 	// License inventory for this image's SBOMs (per-package, policy-evaluated).
 	Packages          []packageRow
 	LicenseViolations int
+	PackageTotal      int // full count (Packages may be capped)
 	HasPackages       bool
 }
 
@@ -152,9 +153,11 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 	failures, _ := s.store.FailuresByRepo(r.Context(), tn.ID, repo, 50)
 
 	// License inventory for this image, classified + evaluated against the tenant
-	// policy. Best-effort (licenses are additive).
+	// policy. Best-effort (licenses are additive). Capped (violations-first) so a
+	// large image doesn't render thousands of rows.
+	const pkgTableLimit = 200
 	policy, _ := s.store.GetLicensePolicy(r.Context(), tn.ID)
-	pkgs, _ := s.store.PackagesByRepo(r.Context(), tn.ID, repo, policy)
+	pkgs, pkgTotal, _ := s.store.PackagesByRepo(r.Context(), tn.ID, repo, policy, pkgTableLimit)
 
 	v := imageDetailView{
 		Title:          lastPath(repo),
@@ -179,6 +182,7 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 		HasEvents:      len(events) > 0,
 		HasFailures:    len(failures) > 0,
 		HasPackages:    len(pkgs) > 0,
+		PackageTotal:   pkgTotal,
 	}
 
 	for _, f := range failures {

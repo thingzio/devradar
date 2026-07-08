@@ -131,9 +131,9 @@
       <h2>Packages &amp; licenses</h2>
       {{if .LicenseViolations}}<span class="pill" style="background:color-mix(in srgb, var(--danger) 15%, transparent); color:var(--danger)">{{.LicenseViolations}} policy violation{{if ne .LicenseViolations 1}}s{{end}}</span>{{end}}
     </div>
-    <p class="muted" style="margin-top:0">Every package catalogued in this image's SBOMs, with its license and obligation category. Set a <a href="/licenses">compliance policy</a> to flag denied licenses — violations are listed first.</p>
-    <table>
-      <thead><tr><th>Package</th><th>Version</th><th>License(s)</th><th>Category</th><th>Policy</th></tr></thead>
+    <p class="muted" style="margin-top:0">Every package catalogued in this image's SBOMs, with its license and obligation category. Set a <a href="/licenses">compliance policy</a> to flag denied licenses — violations are listed first.{{if gt .PackageTotal (len .Packages)}} Showing the first {{len .Packages}} of {{.PackageTotal}} packages.{{end}}</p>
+    <table class="packages">
+      <thead><tr><th>Package</th><th>Version</th><th class="lic-col">License(s)</th><th>Category</th><th>Policy</th></tr></thead>
       <tbody>
         {{range .Packages}}
         <tr{{if .Violation}} class="row-violation"{{end}}>

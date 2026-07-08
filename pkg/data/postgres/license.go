@@ -114,8 +114,16 @@ func (s *Store) ListSBOMPackages(ctx context.Context, tenantID, sbomID string, p
 // first. The distinct-package identity is (package, version) with licenses
 // merged across the repo's digests, so a dependency common to several versions
 // appears once. Tenant-scoped via the join to devradar_sbom.
-func (s *Store) PackagesByRepo(ctx context.Context, tenantID, repository string, policy data.LicensePolicy) ([]PackageLicenseRow, error) {
-	rows, err := s.db.QueryContext(ctx, `
+//
+// Returns at most limit rows plus the total count, so the UI can bound a large
+// image (a Node/Python base can catalog thousands of packages) and say "showing
+// N of M". Ordering is violations-first, so the cap keeps the rows that matter.
+// A limit <= 0 applies a sane default.
+func (s *Store) PackagesByRepo(ctx context.Context, tenantID, repository string, policy data.LicensePolicy, limit int) (rows []PackageLicenseRow, total int, err error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	qrows, err := s.db.QueryContext(ctx, `
 		SELECT p.package, p.version,
 		       COALESCE(array_agg(DISTINCT lic) FILTER (WHERE lic IS NOT NULL), '{}')
 		FROM devradar_sbom_package p
@@ -125,26 +133,32 @@ func (s *Store) PackagesByRepo(ctx context.Context, tenantID, repository string,
 		GROUP BY p.package, p.version
 		ORDER BY p.package, p.version`, tenantID, repository)
 	if err != nil {
-		return nil, fmt.Errorf("repo packages: %w", err)
+		return nil, 0, fmt.Errorf("repo packages: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { _ = qrows.Close() }()
 
-	var out []PackageLicenseRow
-	for rows.Next() {
+	var all []PackageLicenseRow
+	for qrows.Next() {
 		var r PackageLicenseRow
-		if err := rows.Scan(&r.Package, &r.Version, pq.Array(&r.Licenses)); err != nil {
-			return nil, fmt.Errorf("scan repo package: %w", err)
+		if err := qrows.Scan(&r.Package, &r.Version, pq.Array(&r.Licenses)); err != nil {
+			return nil, 0, fmt.Errorf("scan repo package: %w", err)
 		}
 		pkg := data.PackageLicense{Package: r.Package, Version: r.Version, Licenses: r.Licenses}
 		r.Category = string(worstCategory(r.Licenses))
 		r.Violation, r.Reason = policy.Evaluate(pkg)
-		out = append(out, r)
+		all = append(all, r)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+	if err := qrows.Err(); err != nil {
+		return nil, 0, err
 	}
-	sortViolationsFirst(out)
-	return out, nil
+	// Sort violations-first in Go (policy is evaluated in Go), then cap. total is
+	// the full count so the UI can note how many are hidden.
+	sortViolationsFirst(all)
+	total = len(all)
+	if len(all) > limit {
+		all = all[:limit]
+	}
+	return all, total, nil
 }
 
 // LicenseCount is one distribution bucket: a license family or category and the

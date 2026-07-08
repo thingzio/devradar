@@ -274,6 +274,17 @@ code {
 .lic-proprietary     { background: color-mix(in srgb, #8250df 18%, transparent); color: #8250df; }
 .lic-unknown         { background: var(--surface-hover); color: var(--muted); }
 tr.row-violation { background: color-mix(in srgb, var(--danger) 6%, transparent); }
+
+/* Packages table: let the License(s) column absorb slack so Category/Policy sit
+   next to the license text, not stranded at the page edge. Other columns size to
+   content; License(s) takes the rest and wraps long SPDX expressions. */
+table.packages { table-layout: auto; }
+table.packages .lic-col { width: 100%; }
+table.packages td:nth-child(3) { word-break: break-word; }
+table.packages td:nth-child(4),
+table.packages th:nth-child(4),
+table.packages td:nth-child(5),
+table.packages th:nth-child(5) { white-space: nowrap; width: 1%; }
 .empty-cta { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; margin-top: 0.8rem; }
 
 /* Scan heartbeat line (freshness + cadence) */
