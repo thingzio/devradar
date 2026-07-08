@@ -793,9 +793,29 @@ CREATE TABLE devradar_scan_failure (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     sbom_id     TEXT NOT NULL,
     scanner     TEXT,
-    stage       TEXT NOT NULL,  -- download|canonicalize|scan|parse|detect|convert|zero-findings|persist|panic
+    stage       TEXT NOT NULL,  -- download|canonicalize|scan|parse|detect|convert|zero-findings|persist|panic|license-extract
     error       TEXT NOT NULL,
     occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Frozen per-digest license inventory, written once at ingest (immutable, like
+-- the SBOM itself). NOT part of the scan/delta path.
+CREATE TABLE devradar_sbom_package (
+    sbom_id  TEXT NOT NULL REFERENCES devradar_sbom(id) ON DELETE CASCADE,
+    package  TEXT NOT NULL,
+    version  TEXT NOT NULL DEFAULT '',
+    purl     TEXT NOT NULL DEFAULT '',
+    licenses TEXT[] NOT NULL DEFAULT '{}',  -- raw SPDX IDs / names / expressions, multi-license preserved
+    PRIMARY KEY (sbom_id, package, version)
+);  -- + GIN index on licenses
+
+-- Per-tenant compliance policy (opt-in; empty/absent row denies nothing).
+CREATE TABLE devradar_license_policy (
+    tenant_id         UUID PRIMARY KEY REFERENCES devradar_tenant(id) ON DELETE CASCADE,
+    denied_categories TEXT[] NOT NULL DEFAULT '{}',  -- LicenseCategory values
+    allow_exceptions  TEXT[] NOT NULL DEFAULT '{}',  -- license IDs permitted despite denied category
+    deny_exceptions   TEXT[] NOT NULL DEFAULT '{}',  -- license IDs always flagged
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
 
@@ -815,6 +835,33 @@ The original design appended every finding on every scan — ~159M rows/year, of
 
 - **Per-plan caps** — a retention job drops or archives partitions older than the tenant's plan allows.
 - **Roll-ups** — a derived `devradar_finding_event_rollup` table (per `image_ref` × month × severity: counts, net delta) materialized from the event log gives long-range trend views while detailed CVE-level events are kept only for the last N days. The raw log stays the source of truth.
+
+---
+
+## License Inventory & Compliance
+
+DevRadar's second data product rides on the same SBOM. Every CycloneDX `component` / SPDX `package` carries a license, so DevRadar captures it **once at ingest** — no second scan, no registry access — and turns the fleet's OSS-license landscape into an inventory + an opt-in compliance policy. Design lessons (not code) come from [disco](https://github.com/mchmarny/disco); DevRadar deliberately fixes two disco weaknesses noted below.
+
+**Where it lives in the pipeline.** License data is a property of the **frozen inventory** (immutable per digest), so it is *not* on the daily scan/delta path — it behaves like the `devradar_cve_enrichment` overlay, computed off to the side. `handleSubmitSBOM` calls `sbom.ExtractPackages(raw)` and `store.UpsertSBOMPackages(...)` **only for a newly-inserted SBOM**, and treats both as best-effort: a weak/absent/oversized license block records a `license-extract` failure and is otherwise ignored — it must **never** reject an otherwise-valid submission. Re-submitting the same content is a no-op (`ON CONFLICT DO NOTHING`).
+
+**Backfill (SBOMs ingested before capture existed).** Resubmission is *not* required and would be a no-op anyway (ingest capture is gated on `inserted`). Instead the daily scan job self-heals: `scanOne` already fetches the original SBOM bytes from GCS, so right after fetch it calls `backfillLicenses`, which extracts + upserts the inventory **only when `HasSBOMPackages` reports none stored yet**. This runs off the raw bytes (no canonicalization needed — `ExtractPackages` reads both formats), is fully isolated from the vulnerability scan (a failure is a recorded `license-extract` failure, never touching findings), and converges after the first post-deploy run — steady-state cost is one PK-covered `EXISTS` per SBOM. Rollout is therefore just a normal deploy: new SBOMs capture at ingest, existing active SBOMs backfill on their next scan. (Archived SBOMs are not in `ListActiveSBOMs`, so they are never backfilled — correct, they're out of the product surface. Trade-off: because the gate is existence-only, a later extractor fix does **not** re-extract already-populated SBOMs; that would need a capture-version marker column.)
+
+**Extraction (`pkg/sbom/licenses.go`).** Format-specific gabs walkers, reusing the same helpers as digest extraction:
+- **CycloneDX** — `components[].licenses[]`, where each entry is `{license:{id}}`, `{license:{name}}`, or `{expression}`. All three captured verbatim, deduped. **`type:"file"` components are skipped** — Syft emits thousands of per-file components that are not packages and would drown the dependency inventory (nginx: 152 library + 1 OS vs 3225 files).
+- **SPDX** — `packages[].licenseDeclared || licenseConcluded || licenseInfoFromFiles[]` (prefer declared → concluded → files). The document root image package is skipped; `NOASSERTION`/`NONE` placeholders are dropped (a package left with zero licenses is correctly `unknown`). PURL comes from `externalRefs`.
+- Both preserve the **full license set** per package — **disco fix #1**: disco kept only the first license (`PackageLicenseInfoFromFiles[0]`, first-wins) and never decomposed expressions.
+
+**Taxonomy & policy (`pkg/data/license.go`, evaluated in Go at read time).** Raw IDs are stored; classification and policy are applied on read, so a taxonomy or policy change re-applies instantly with no migration and no rewrite of frozen data. This is **disco fix #2** — disco derived license "families" with fragile SQL string-splitting (`SPLIT(name,'-')[0]`) that misfires on expressions.
+- `Classify(id) → LicenseCategory` — a versioned map (`licenseTaxonomyVersion`) + family-prefix fallback maps an SPDX ID to `permissive | weak-copyleft | strong-copyleft | proprietary | unknown`. Modifier suffixes (`-only`, `-or-later`, `+`) are normalized; unrecognized/`NOASSERTION`/`LicenseRef-*` → `unknown` (fail-visible, never silently permissive).
+- **Expression semantics.** `ParseExpression` tokenizes `A OR B`, `A AND B`, `X WITH exception`, and parens into referenced IDs (the `WITH` operand is an exception, not a license). `EvaluateExpression`: **`OR` = allowed if any operand is allowed** (the licensee may choose), **`AND` = allowed only if all are**. A documented simplification: nested parens are flattened rather than fully parsed — intentionally permissive, matches real SBOMs.
+- **Conjunction across entries.** A package's *separate* license entries are a conjunction (the package is bound by all): CycloneDX lists `apt` as 5 entries; SPDX joins them with `AND`. So a package violates if **any** entry is denied; choice (`OR`) is expressed only *within* one entry. Per-license `allow_exceptions`/`deny_exceptions` override the category decision.
+
+**Read surfaces.**
+- `GET /v1/sboms/{id}/licenses` — per-package rows with `licenses`, derived `category` (the worst across the package), and a policy `violation`+`reason`; violations sorted first. Tenant-scoped via the store ownership check.
+- `GET /v1/licenses` — fleet rollup: distinct-package (`(package,version)`) distribution by license **family** and by **category**, plus `unlicensed` and `violations` counts. Aggregation of raw IDs is in SQL (`unnest` + `array_agg(DISTINCT)`); family/category derivation and evaluation in Go.
+- **UI** `/licenses` (`ui_licenses.go` + `licenses.html`) — a category **donut** (reuses `donutChart`) + a license-family **treemap** (`treemapChart`, a new inline-SVG squarified slice-and-dice, area ∝ package count) + a **policy editor** (deny-category checkboxes with live fleet counts, exception fields). All inline SVG — the CSP forbids client-side chart libs, same as the vuln charts.
+
+**Deferred (additive):** license change-over-time *events* (e.g. "a new GPL dependency appeared in v1.21") in the existing `devradar_finding_event`-style alerting model. The inventory is per-digest today; wiring digest-to-digest license deltas into the event/causality machinery is a clean later upgrade.
 
 ---
 

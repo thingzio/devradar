@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -192,6 +193,17 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 		if err := s.blobs.Put(ctx, objectPath, raw); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to store SBOM")
 			return
+		}
+		// Capture the per-package license inventory from the frozen SBOM. This is
+		// additive to ingest: extraction and storage are best-effort and must never
+		// fail the submission (a weak/absent license block is not a reason to reject
+		// an otherwise-valid SBOM). Errors are recorded on the failure surface, not
+		// returned. Licenses are immutable per digest, so this runs once, on insert.
+		if pkgs := sbom.ExtractPackages(raw); len(pkgs) > 0 {
+			if err := s.store.UpsertSBOMPackages(ctx, effID, pkgs); err != nil {
+				slog.Error("store sbom packages", "sbom_id", effID, "error", err)
+				s.store.RecordScanFailure(ctx, effID, "", "license-extract", err)
+			}
 		}
 	}
 

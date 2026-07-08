@@ -22,9 +22,11 @@ import (
 type fakeStore struct {
 	sboms      []*postgres.SBOM
 	applied    int
-	appliedIDs []string // SBOM ids that reached ApplyScan
-	failures   []string // "stage" per recorded failure
-	failedIDs  []string // SBOM ids that recorded a failure
+	appliedIDs []string        // SBOM ids that reached ApplyScan
+	failures   []string        // "stage" per recorded failure
+	failedIDs  []string        // SBOM ids that recorded a failure
+	hasPkgs    map[string]bool // SBOM ids already carrying a license inventory
+	backfilled []string        // SBOM ids that reached UpsertSBOMPackages
 }
 
 func (f *fakeStore) ListActiveSBOMs(context.Context) ([]*postgres.SBOM, error) { return f.sboms, nil }
@@ -39,6 +41,13 @@ func (f *fakeStore) RecordScanFailure(_ context.Context, sbomID, _, stage string
 }
 func (f *fakeStore) DistinctActiveCVEs(context.Context) ([]string, error)       { return nil, nil }
 func (f *fakeStore) UpsertCVEEnrichment(context.Context, []enrich.Record) error { return nil }
+func (f *fakeStore) HasSBOMPackages(_ context.Context, sbomID string) (bool, error) {
+	return f.hasPkgs[sbomID], nil
+}
+func (f *fakeStore) UpsertSBOMPackages(_ context.Context, sbomID string, _ []data.PackageLicense) error {
+	f.backfilled = append(f.backfilled, sbomID)
+	return nil
+}
 
 type fakeFetcher struct {
 	data []byte
@@ -72,6 +81,49 @@ func TestRunner_ScansAndApplies(t *testing.T) {
 	}
 	if len(store.failures) != 0 {
 		t.Errorf("unexpected failures: %v", store.failures)
+	}
+}
+
+// A minimal CycloneDX SBOM carrying one licensed component, for backfill tests.
+const cdxWithLicense = `{"bomFormat":"CycloneDX","components":[
+  {"type":"library","name":"openssl","version":"3.0","licenses":[{"license":{"id":"Apache-2.0"}}]}]}`
+
+func TestRunner_BackfillsLicensesWhenAbsent(t *testing.T) {
+	store := &fakeStore{
+		sboms:   []*postgres.SBOM{{ID: "s1", TenantID: "t1", Format: "cyclonedx", PackageCount: 50, ObjectPath: "x"}},
+		hasPkgs: map[string]bool{}, // nothing captured yet → backfill should run
+	}
+	sc := &fakeScanner{name: "grype", out: grypeDoc}
+	r := NewRunner(store, fakeFetcher{data: []byte(cdxWithLicense)},
+		sbom.NewPassthroughCanonicalizer(), []scanner.Scanner{sc},
+		converter.DefaultRegistry(), nil, DefaultOptions())
+
+	if err := r.Execute(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(store.backfilled) != 1 || store.backfilled[0] != "s1" {
+		t.Errorf("expected s1 to be backfilled, got %v", store.backfilled)
+	}
+	if len(store.failures) != 0 {
+		t.Errorf("backfill should not record failures, got %v", store.failures)
+	}
+}
+
+func TestRunner_SkipsBackfillWhenPresent(t *testing.T) {
+	store := &fakeStore{
+		sboms:   []*postgres.SBOM{{ID: "s1", TenantID: "t1", Format: "cyclonedx", PackageCount: 50, ObjectPath: "x"}},
+		hasPkgs: map[string]bool{"s1": true}, // already captured at ingest
+	}
+	sc := &fakeScanner{name: "grype", out: grypeDoc}
+	r := NewRunner(store, fakeFetcher{data: []byte(cdxWithLicense)},
+		sbom.NewPassthroughCanonicalizer(), []scanner.Scanner{sc},
+		converter.DefaultRegistry(), nil, DefaultOptions())
+
+	if err := r.Execute(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(store.backfilled) != 0 {
+		t.Errorf("backfill should be skipped when inventory exists, got %v", store.backfilled)
 	}
 }
 
@@ -258,7 +310,11 @@ func (s *enrichStore) ApplyScan(context.Context, *postgres.SBOM, string, postgre
 	return nil
 }
 func (s *enrichStore) RecordScanFailure(context.Context, string, string, string, error) {}
-func (s *enrichStore) DistinctActiveCVEs(context.Context) ([]string, error)             { return s.cves, nil }
+func (s *enrichStore) HasSBOMPackages(context.Context, string) (bool, error)            { return true, nil }
+func (s *enrichStore) UpsertSBOMPackages(context.Context, string, []data.PackageLicense) error {
+	return nil
+}
+func (s *enrichStore) DistinctActiveCVEs(context.Context) ([]string, error) { return s.cves, nil }
 func (s *enrichStore) UpsertCVEEnrichment(_ context.Context, recs []enrich.Record) error {
 	s.upserted += len(recs)
 	return nil

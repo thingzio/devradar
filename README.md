@@ -30,6 +30,8 @@ DevRadar is a container vulnerability *tracking* service built around a single i
 **Paragraph:**
 DevRadar is the vulnerability layer of the Thingz open source intelligence platform. Where DevPulse tracks whether a project is healthy and DevTrace evaluates whether a contributor is trustworthy, DevRadar answers the third question: are the container images you depend on accumulating unpatched vulnerabilities over time? Instead of pulling and scanning images itself, DevRadar consumes SBOMs that tenants submit through an authenticated API. Each SBOM is pinned to an image digest, content-addressed, and stored once. A daily job rescans every active SBOM with Grype and Trivy, normalizes the results into a scanner-agnostic schema, and appends a change event whenever a finding is added, fixed, re-rated, or resolved. Because the SBOM is a frozen inventory, the only variable across daily scans is the vulnerability database — which makes every recorded change unambiguous. The architecture is pure compute (no image pulls, no registries, no VM fleet), which means DevRadar can track images from **private registries it could never access** — the SBOM crosses the trust boundary, not credentials.
 
+**Licenses, too.** The same SBOM already names a license for every package, so DevRadar also captures an **open-source license inventory** at submission — with no extra scan. It classifies each package into an obligation category (permissive / weak- & strong-copyleft / proprietary / unknown), visualizes the fleet's license landscape (a category donut + a license-family treemap), and lets you set an opt-in **compliance policy** that flags packages carrying a denied license. See `GET /v1/licenses`, `GET /v1/sboms/{id}/licenses`, and the `/licenses` UI page.
+
 ---
 
 ## Who
@@ -397,9 +399,17 @@ curl -s http://localhost:8080/v1/sboms/<sbom_id>          -H "Authorization: Bea
 curl -s http://localhost:8080/v1/sboms/<sbom_id>/findings -H "Authorization: Bearer $DR_TOKEN"
 curl -s http://localhost:8080/v1/sboms/<sbom_id>/events   -H "Authorization: Bearer $DR_TOKEN"
 
+# license inventory — captured at submission, no scan needed
+curl -s http://localhost:8080/v1/licenses                  -H "Authorization: Bearer $DR_TOKEN"  # fleet rollup
+curl -s http://localhost:8080/v1/sboms/<sbom_id>/licenses  -H "Authorization: Bearer $DR_TOKEN"  # per package, classified + policy verdict
+
 # stop tracking an image (archive — drops from scans + images; history kept)
 curl -s -X DELETE http://localhost:8080/v1/sboms/<sbom_id> -H "Authorization: Bearer $DR_TOKEN"
 ```
+
+Note the license endpoints work **before** `make scan` — they read the ingest-time
+inventory, not scan results. Set a compliance policy in the `/licenses` UI to flag
+packages carrying a denied license category.
 
 **Pagination.** List endpoints (`/v1/images`, `/v1/images/sboms`,
 `/v1/images/timeline`, `/v1/sboms/{id}/events`) return at most `?limit` rows

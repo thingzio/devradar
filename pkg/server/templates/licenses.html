@@ -1,0 +1,65 @@
+{{template "head" .}}
+{{template "nav" .}}
+<main class="page-content">
+  <h1 class="page-title">Licenses</h1>
+  <p class="sub">Open-source license inventory across your fleet, captured from each SBOM at submission.</p>
+
+  {{if .HasData}}
+  <section class="stats stats-3">
+    <div class="stat"><span class="stat-n">{{.PackageCount}}</span><span class="stat-l">Packages</span></div>
+    <div class="stat"><span class="stat-n">{{.Unlicensed}}</span><span class="stat-l" title="Packages with no resolvable license">Unlicensed</span></div>
+    <div class="stat"><span class="stat-n {{if .Violations}}danger-n{{end}}">{{.Violations}}</span><span class="stat-l">Policy violations</span></div>
+  </section>
+
+  <div class="chart-row">
+    <div class="card chart-col">
+      <div class="card-head"><h2>By category</h2></div>
+      <p class="muted" style="margin-top:0">Distinct packages grouped by license obligation. A package counts once per category it carries.</p>
+      {{.CategoryChart}}
+    </div>
+    <div class="card chart-col">
+      <div class="card-head"><h2>By license family</h2></div>
+      <p class="muted" style="margin-top:0">Package share by license family — area is proportional to package count.</p>
+      {{.FamilyChart}}
+      {{if .FamilyLegend}}
+      <div class="tree-legend">
+        {{range .FamilyLegend}}
+        <span class="tree-legend-item"><span class="swatch" style="background:{{.Color}}"></span>{{.Label}} <span class="muted">({{.Count}})</span></span>
+        {{end}}
+      </div>
+      {{end}}
+    </div>
+  </div>
+  {{else}}
+  <div class="card">
+    <p class="muted" style="margin:0">No license data yet. Submit an SBOM (Syft CycloneDX with all layers is recommended) to populate this view — see <a href="/tokens">API tokens</a>.</p>
+  </div>
+  {{end}}
+
+  <div class="card">
+    <div class="card-head"><h2>Compliance policy</h2>{{if .PolicyActive}}<span class="pill">active</span>{{end}}</div>
+    <p class="muted">Deny license categories to flag non-compliant packages. Policy is opt-in — with nothing denied, this view is descriptive only. Evaluation is live: changing the policy re-flags packages instantly.</p>
+    <form method="post" action="/settings/license-policy">
+      <fieldset class="license-cats">
+        {{range .Categories}}
+        <label class="license-cat">
+          <input type="checkbox" name="denied" value="{{.Key}}" {{if .Denied}}checked{{end}}>
+          <span class="swatch" style="background:{{.Color}}"></span>
+          <span class="license-cat-label">{{.Label}}</span>
+          <span class="muted">{{.Count}} pkgs</span>
+        </label>
+        {{end}}
+      </fieldset>
+      <div class="license-except">
+        <label>Allow exceptions <span class="muted">(license IDs permitted despite a denied category)</span>
+          <input type="text" name="allow_exceptions" value="{{.AllowExcepts}}" placeholder="e.g. LGPL-2.1, MPL-2.0">
+        </label>
+        <label>Deny exceptions <span class="muted">(license IDs always flagged)</span>
+          <input type="text" name="deny_exceptions" value="{{.DenyExcepts}}" placeholder="e.g. BUSL-1.1">
+        </label>
+      </div>
+      <button class="btn" type="submit">Save policy</button>
+    </form>
+  </div>
+</main>
+{{template "foot" .}}

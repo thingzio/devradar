@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html/template"
 	"math"
+	"sort"
 	"strings"
 )
 
@@ -20,7 +21,20 @@ var svgSev = map[string]string{
 type slice struct {
 	Label string
 	Value int
-	Sev   string // severity key → color
+	Sev   string // severity key → color (via svgSev)
+	Color string // explicit fill; wins over Sev when set (e.g. license palette)
+}
+
+// sliceFill resolves a slice's fill: an explicit Color wins, then the severity
+// map, then the accent fallback.
+func sliceFill(s slice) string {
+	if s.Color != "" {
+		return s.Color
+	}
+	if f := svgSev[s.Sev]; f != "" {
+		return f
+	}
+	return "#4a9eff"
 }
 
 // donutChart renders a donut (ring) chart with a centered total and a legend to
@@ -58,10 +72,7 @@ func donutChart(slices []slice, centerLabel string, size int) template.HTML {
 		}
 		frac := float64(s.Value) / float64(total)
 		dash := frac * circ
-		fill := svgSev[s.Sev]
-		if fill == "" {
-			fill = "#4a9eff"
-		}
+		fill := sliceFill(s)
 		fmt.Fprintf(&b, `<circle cx="%.1f" cy="%.1f" r="%.1f" fill="none" stroke="%s" stroke-width="%d" `+
 			`stroke-dasharray="%.2f %.2f" stroke-dashoffset="%.2f" transform="rotate(-90 %.1f %.1f)">`+
 			`<title>%s: %d (%.0f%%)</title></circle>`,
@@ -79,10 +90,7 @@ func donutChart(slices []slice, centerLabel string, size int) template.HTML {
 	ly := (size - len(slices)*22) / 2
 	for i, s := range slices {
 		y := ly + i*22
-		fill := svgSev[s.Sev]
-		if fill == "" {
-			fill = "#4a9eff"
-		}
+		fill := sliceFill(s)
 		frac := 0.0
 		if total > 0 {
 			frac = float64(s.Value) / float64(total) * 100
@@ -301,4 +309,140 @@ func trunc(s string, n int) string {
 		return s
 	}
 	return s[:n-1] + "…"
+}
+
+// ── License visualization ───────────────────────────────────────────────────
+
+// svgCategory maps a license category to a fill. Copyleft strength reads as a
+// warm→cool gradient (proprietary/strong = alarm, permissive = calm), matching
+// how the severity palette signals risk.
+var svgCategory = map[string]string{
+	"proprietary":     "#8250df", // purple — most restrictive/non-OSS
+	"strong-copyleft": "#cf222e", // red
+	"weak-copyleft":   "#bc4c00", // amber
+	"permissive":      "#1a7f37", // green — lowest obligation
+	"unknown":         "#8b949e", // grey
+}
+
+// categoryFill resolves a category color, defaulting to the unknown grey.
+func categoryFill(cat string) string {
+	if f := svgCategory[cat]; f != "" {
+		return f
+	}
+	return svgCategory["unknown"]
+}
+
+// licensePalette is a stable, colorblind-considerate set for license *families*
+// (MIT, GPL, …) where there's no inherent ordering. Assigned by index so a given
+// legend position is consistent within one render.
+var licensePalette = []string{
+	"#0969da", "#cf222e", "#bf8700", "#1a7f37", "#8250df",
+	"#1b7c83", "#bc4c00", "#a475f9", "#953800", "#57606a",
+}
+
+// familyColor picks a deterministic palette color for a family label by hashing
+// its position-independent name, so "GPL" is the same hue across pages.
+func familyColor(name string) string {
+	if name == "others" || name == "unknown" {
+		return "#8b949e"
+	}
+	var h uint32 = 2166136261
+	for i := 0; i < len(name); i++ {
+		h ^= uint32(name[i])
+		h *= 16777619
+	}
+	return licensePalette[int(h)%len(licensePalette)]
+}
+
+// treeCell is one rectangle in a treemap: a label, its weight (area ∝ weight),
+// and a fill color.
+type treeCell struct {
+	Label string
+	Value int
+	Color string
+}
+
+// treemapChart renders a squarified treemap as inline SVG — packages (or license
+// families) sized by count. It approximates the squarified algorithm with a
+// slice-and-dice that alternates split direction to keep cells from becoming
+// slivers, which is enough for a legible at-a-glance "what dominates" view (the
+// disco package treemap). Cells are drawn largest-first; tiny cells drop their
+// label but keep a <title> tooltip.
+func treemapChart(cells []treeCell, width, height int) template.HTML {
+	total := 0
+	for _, c := range cells {
+		total += c.Value
+	}
+	if total == 0 || len(cells) == 0 {
+		return template.HTML(`<p class="muted">No package license data yet.</p>`)
+	}
+	// Largest first for a stable, readable layout.
+	sorted := append([]treeCell(nil), cells...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Value > sorted[j].Value })
+
+	var b strings.Builder
+	fmt.Fprintf(&b, `<svg class="chart treemap" viewBox="0 0 %d %d" width="100%%" height="%d" role="img">`,
+		width, height, height)
+	layoutTreemap(&b, sorted, total, 0, 0, float64(width), float64(height))
+	b.WriteString(`</svg>`)
+	return template.HTML(b.String())
+}
+
+// layoutTreemap slice-and-dices cells into the rect (x,y,w,h), splitting along
+// the longer axis at each step so cells stay close to square.
+func layoutTreemap(b *strings.Builder, cells []treeCell, total int, x, y, w, h float64) {
+	if len(cells) == 0 || total == 0 {
+		return
+	}
+	if len(cells) == 1 {
+		drawTreeCell(b, cells[0], x, y, w, h)
+		return
+	}
+	// Split cells into two groups of roughly equal weight.
+	half := total / 2
+	acc, split := 0, 0
+	for i, c := range cells {
+		if acc+c.Value > half && i > 0 {
+			break
+		}
+		acc += c.Value
+		split = i + 1
+	}
+	if split >= len(cells) {
+		split = len(cells) - 1
+	}
+	left, right := cells[:split], cells[split:]
+	leftW := 0
+	for _, c := range left {
+		leftW += c.Value
+	}
+	frac := float64(leftW) / float64(total)
+	if w >= h { // split vertically
+		lw := w * frac
+		layoutTreemap(b, left, leftW, x, y, lw, h)
+		layoutTreemap(b, right, total-leftW, x+lw, y, w-lw, h)
+	} else { // split horizontally
+		lh := h * frac
+		layoutTreemap(b, left, leftW, x, y, w, lh)
+		layoutTreemap(b, right, total-leftW, x, y+lh, w, h-lh)
+	}
+}
+
+// drawTreeCell emits one treemap rectangle with a border, a tooltip, and (if it
+// is large enough) a label.
+func drawTreeCell(b *strings.Builder, c treeCell, x, y, w, h float64) {
+	fill := c.Color
+	if fill == "" {
+		fill = "#4a9eff"
+	}
+	fmt.Fprintf(b, `<g><rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" fill="%s" stroke="var(--surface)" stroke-width="1.5">`+
+		`<title>%s: %d</title></rect>`,
+		x, y, w, h, fill, template.HTMLEscapeString(c.Label), c.Value)
+	// Only label cells with room for readable text.
+	if w > 48 && h > 20 {
+		maxChars := int(w / 8)
+		fmt.Fprintf(b, `<text x="%.1f" y="%.1f" class="tree-lbl" fill="#fff">%s</text>`,
+			x+5, y+15, template.HTMLEscapeString(trunc(c.Label, maxChars)))
+	}
+	b.WriteString(`</g>`)
 }

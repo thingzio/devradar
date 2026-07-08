@@ -40,6 +40,11 @@ type Store interface {
 	RecordScanFailure(ctx context.Context, sbomID, scanner, stage string, cause error)
 	DistinctActiveCVEs(ctx context.Context) ([]string, error)
 	UpsertCVEEnrichment(ctx context.Context, recs []enrich.Record) error
+	// License-inventory backfill: HasSBOMPackages gates re-extraction so SBOMs
+	// ingested before license capture existed are populated once, on their next
+	// scan, without re-extracting the whole fleet nightly.
+	HasSBOMPackages(ctx context.Context, sbomID string) (bool, error)
+	UpsertSBOMPackages(ctx context.Context, sbomID string, pkgs []data.PackageLicense) error
 }
 
 // Enricher fetches CVE risk context (EPSS + KEV). Injectable so the scan loop is
@@ -244,6 +249,14 @@ func (r *Runner) scanOne(ctx context.Context, sb *postgres.SBOM, ready []readySc
 		return
 	}
 
+	// Backfill the license inventory for SBOMs ingested before license capture
+	// existed. Runs off the ORIGINAL bytes (ExtractPackages reads both formats
+	// natively — no canonicalization needed) and only when nothing is stored yet,
+	// so it's a one-time write per SBOM that converges after the first post-deploy
+	// run. Best-effort and fully isolated: a failure here is a recorded
+	// license-extract failure that never touches the vulnerability scan below.
+	r.backfillLicenses(ctx, sb, raw)
+
 	// Canonicalize to CycloneDX so every scanner sees a format it reads reliably.
 	cdx, err := r.canon.Canonicalize(ctx, raw, sbom.Format(sb.Format))
 	if err != nil {
@@ -260,6 +273,32 @@ func (r *Runner) scanOne(ctx context.Context, sb *postgres.SBOM, ready []readySc
 	for _, sc := range ready {
 		r.scanWith(ctx, sb, sc, local)
 	}
+}
+
+// backfillLicenses captures the per-package license inventory for an SBOM that
+// predates license capture. It is a one-time, idempotent write: HasSBOMPackages
+// gates it so the extraction runs only until the inventory exists, and
+// UpsertSBOMPackages is ON CONFLICT DO NOTHING besides. Best-effort — every
+// failure path (existence check, extraction yielding nothing, upsert) is a
+// recorded license-extract failure or a silent skip, never affecting the scan.
+func (r *Runner) backfillLicenses(ctx context.Context, sb *postgres.SBOM, raw []byte) {
+	has, err := r.store.HasSBOMPackages(ctx, sb.ID)
+	if err != nil {
+		r.recordFailure(ctx, sb.ID, "", "license-extract", err)
+		return
+	}
+	if has {
+		return // already captured (at ingest, or a prior run)
+	}
+	pkgs := sbom.ExtractPackages(raw)
+	if len(pkgs) == 0 {
+		return // nothing to store (no components, or unparseable license data)
+	}
+	if err := r.store.UpsertSBOMPackages(ctx, sb.ID, pkgs); err != nil {
+		r.recordFailure(ctx, sb.ID, "", "license-extract", err)
+		return
+	}
+	slog.Info("license inventory backfilled", "sbom_id", sb.ID, "packages", len(pkgs))
 }
 
 func (r *Runner) scanWith(ctx context.Context, sb *postgres.SBOM, sc readyScanner, sbomPath string) {
