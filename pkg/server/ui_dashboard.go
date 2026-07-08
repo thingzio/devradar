@@ -57,6 +57,7 @@ type dashboardView struct {
 	KEVCount   int
 	FailureCT  int
 	HasData    bool
+	ScanStatus string // scan heartbeat, e.g. "Last scan 12 min ago · scans run every 15 min"
 }
 
 // handleDashboard renders the Images tab: fleet headline stats + a sortable,
@@ -111,6 +112,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		FailureCT:   fs.Failures,
 		HasData:     fs.Total > 0,
 		FixablePct:  pct(fs.Fixable, fs.Total),
+		ScanStatus:  scanStatus(fs.LastScanAt),
 	}
 	for _, im := range images {
 		row := imageRow{

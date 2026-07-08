@@ -53,9 +53,9 @@ variable "email_from" {
 }
 
 variable "scan_schedule" {
-  description = "Cron schedule (UTC) for the daily scan job"
+  description = "Cron schedule (UTC) for the scan job. Runs frequently; each SBOM is scanned at most as often as DEVRADAR_SCAN_MAX_AGE allows (default 12h), so a frequent schedule bounds submission-to-result latency without over-scanning."
   type        = string
-  default     = "0 2 * * *"
+  default     = "*/15 * * * *"
 }
 
 # --- Shared infrastructure (owned by thingzio/infra; referenced, not created) ---

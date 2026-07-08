@@ -109,3 +109,12 @@ func DebugEnabled() bool {
 func EnrichEnabled() bool {
 	return GetEnv("DEVRADAR_ENRICH", "true") != "false"
 }
+
+// ScanMaxAge is the staleness window for scan-job work selection: an SBOM is
+// scanned only if never scanned or last scanned longer ago than this. Paired
+// with a frequent scheduler, it bounds per-SBOM scan frequency (default 12h ⇒
+// at most ~twice a day). Set DEVRADAR_SCAN_MAX_AGE=0 to scan every active SBOM
+// every run. Tunable via DEVRADAR_SCAN_MAX_AGE (a Go duration, e.g. "12h").
+func ScanMaxAge() time.Duration {
+	return GetEnvAsDuration("DEVRADAR_SCAN_MAX_AGE", 12*time.Hour)
+}

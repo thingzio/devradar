@@ -170,6 +170,7 @@ a:hover { text-decoration: underline; }
 /* ── Page content ──────────────────────────────────────────────────────────── */
 .page-content { width: 100%; max-width: 76rem; margin: 0 auto; padding: 30px; }
 .page-content.narrow { max-width: 42rem; }
+.page-content.guide { max-width: 60rem; }
 .page-title { font-size: 1.5rem; letter-spacing: -0.01em; margin-bottom: 0.25rem; }
 .sub { color: var(--muted); margin-bottom: 1.5rem; }
 h1 .accent { color: var(--accent); }
@@ -259,7 +260,19 @@ code {
   border-left: 3px solid var(--warn); padding: 0.5rem 0.8rem; margin: 0.6rem 0;
   background: color-mix(in srgb, var(--warn) 8%, transparent); border-radius: 0 6px 6px 0; font-size: 0.9rem;
 }
+.opt-list { margin: 0.4rem 0 0.6rem; padding-left: 1.2rem; }
+.opt-list li { margin: 0.3rem 0; font-size: 0.9rem; }
 .empty-cta { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; margin-top: 0.8rem; }
+
+/* Scan heartbeat line (freshness + cadence) */
+.scan-status {
+  color: var(--muted); font-size: 0.85rem; margin: 0.75rem 0 0;
+  display: flex; align-items: center; gap: 0.4rem;
+}
+.scan-status::before {
+  content: ""; width: 7px; height: 7px; border-radius: 999px;
+  background: var(--ok); flex: none;
+}
 
 /* ── Stat cards ────────────────────────────────────────────────────────────── */
 .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-top: 1.5rem; }

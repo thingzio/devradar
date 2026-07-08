@@ -29,6 +29,7 @@ type overviewView struct {
 	FixablePct int
 	FailureCT  int
 	HasData    bool
+	ScanStatus string        // e.g. "Last scan 12 min ago" (scan heartbeat)
 	SevChart   template.HTML // inline SVG: fleet severity composition (donut)
 	RemedChart template.HTML // inline SVG: fixable-now vs open, per severity
 	// Top-risk images teaser.
@@ -58,7 +59,8 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		Title: "Overview", SignedIn: true, Tab: "overview", Email: tn.Email, Version: s.opts.Version,
 		ImageCount: fs.Images, TotalCount: fs.Total, CriticalCT: fs.Critical, HighCT: fs.High,
 		KEVCount: fs.KEV, FixablePct: pct(fs.Fixable, fs.Total), FailureCT: fs.Failures,
-		HasData: fs.Total > 0,
+		HasData:    fs.Total > 0,
+		ScanStatus: scanStatus(fs.LastScanAt),
 	}
 	v.SevChart = donutChart([]slice{
 		{Label: "Critical", Value: fs.Critical, Sev: "critical"},

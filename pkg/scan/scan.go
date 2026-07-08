@@ -36,6 +36,9 @@ type Fetcher interface {
 // Store is the subset of the postgres store the scan loop needs.
 type Store interface {
 	ListActiveSBOMs(ctx context.Context) ([]*postgres.SBOM, error)
+	// ListScannableSBOMs returns active SBOMs due for a scan given a staleness
+	// window (never-scanned or last-scanned older than maxAge). maxAge 0 = all.
+	ListScannableSBOMs(ctx context.Context, maxAge time.Duration) ([]*postgres.SBOM, error)
 	ApplyScan(ctx context.Context, sb *postgres.SBOM, scanner string, ver postgres.Versions, vulns []data.Vulnerability) error
 	RecordScanFailure(ctx context.Context, sbomID, scanner, stage string, cause error)
 	DistinctActiveCVEs(ctx context.Context) ([]string, error)
@@ -57,14 +60,22 @@ type Enricher interface {
 type Options struct {
 	DBMaxAge    time.Duration // refresh a scanner DB older than this at job start
 	ScanTimeout time.Duration // per-SBOM-per-scanner wall-clock budget; 0 = no limit
+	// ScanMaxAge is the staleness window for work selection: an SBOM is scanned
+	// only if it has never been scanned or its last scan is older than this. It
+	// lets the scheduler run frequently (low submission-to-result latency) while
+	// each SBOM is scanned at most a bounded number of times per day. 0 disables
+	// the filter (every active SBOM every run — the legacy daily-full-pass).
+	ScanMaxAge time.Duration
 }
 
 // DefaultOptions returns sensible defaults. ScanTimeout bounds a single
 // SBOM×scanner invocation so one hung/pathological scan converts to a recorded
 // failure and the batch advances, rather than starving every later SBOM until
-// the whole job's Cloud Run timeout expires.
+// the whole job's Cloud Run timeout expires. ScanMaxAge (12h) pairs with a
+// frequent scheduler (every ~15 min): new SBOMs are picked up on the next run,
+// but a given SBOM is rescanned at most ~twice a day.
 func DefaultOptions() Options {
-	return Options{DBMaxAge: 24 * time.Hour, ScanTimeout: 10 * time.Minute}
+	return Options{DBMaxAge: 24 * time.Hour, ScanTimeout: 10 * time.Minute, ScanMaxAge: 12 * time.Hour}
 }
 
 // runFailureSentinel is the sbom_id recorded for whole-run (not per-SBOM)
@@ -172,11 +183,12 @@ func (r *Runner) Execute(ctx context.Context) error {
 		return fmt.Errorf("no scanners available after db refresh (%d attempted)", len(r.scanners))
 	}
 
-	sboms, err := r.store.ListActiveSBOMs(ctx)
+	sboms, err := r.store.ListScannableSBOMs(ctx, r.opts.ScanMaxAge)
 	if err != nil {
-		return fmt.Errorf("list active sboms: %w", err)
+		return fmt.Errorf("list scannable sboms: %w", err)
 	}
-	slog.Info("scan run starting", "sbom_count", len(sboms), "scanners", len(ready))
+	slog.Info("scan run starting", "sbom_count", len(sboms), "scanners", len(ready),
+		"scan_max_age", r.opts.ScanMaxAge)
 
 	scanned := 0
 	for _, sb := range sboms {

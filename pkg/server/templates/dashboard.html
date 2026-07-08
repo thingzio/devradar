@@ -16,6 +16,7 @@
     {{if or .Query .Tag}}<a class="btn secondary" href="/dashboard">Clear</a>{{end}}
   </form>
 
+  {{if .ScanStatus}}<p class="scan-status">{{.ScanStatus}}</p>{{end}}
   {{if .HasData}}
   <section class="stats stats-5">
     <div class="stat"><span class="stat-n">{{.ImageCount}}</span><span class="stat-l">Images</span></div>

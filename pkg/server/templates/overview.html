@@ -10,6 +10,7 @@
   </form>
 
   {{if .HasData}}
+  {{if .ScanStatus}}<p class="scan-status">{{.ScanStatus}}</p>{{end}}
   <section class="stats stats-5">
     <div class="stat"><span class="stat-n">{{.ImageCount}}</span><span class="stat-l">Images</span></div>
     <div class="stat"><span class="stat-n">{{.TotalCount}}</span><span class="stat-l">Findings</span></div>

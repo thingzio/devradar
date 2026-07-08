@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/thingzio/devradar/pkg/config"
 	"github.com/thingzio/devradar/pkg/logging"
 	"github.com/thingzio/devradar/pkg/scan"
 )
@@ -31,7 +32,9 @@ func run() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := scan.Run(ctx, scan.DefaultOptions()); err != nil {
+	opts := scan.DefaultOptions()
+	opts.ScanMaxAge = config.ScanMaxAge()
+	if err := scan.Run(ctx, opts); err != nil {
 		slog.Error("scan job failed", "error", err)
 		return 1
 	}

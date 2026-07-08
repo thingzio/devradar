@@ -27,9 +27,14 @@ type fakeStore struct {
 	failedIDs  []string        // SBOM ids that recorded a failure
 	hasPkgs    map[string]bool // SBOM ids already carrying a license inventory
 	backfilled []string        // SBOM ids that reached UpsertSBOMPackages
+	scanMaxAge time.Duration   // staleness window passed to ListScannableSBOMs
 }
 
 func (f *fakeStore) ListActiveSBOMs(context.Context) ([]*postgres.SBOM, error) { return f.sboms, nil }
+func (f *fakeStore) ListScannableSBOMs(_ context.Context, maxAge time.Duration) ([]*postgres.SBOM, error) {
+	f.scanMaxAge = maxAge
+	return f.sboms, nil
+}
 func (f *fakeStore) ApplyScan(_ context.Context, sb *postgres.SBOM, _ string, _ postgres.Versions, _ []data.Vulnerability) error {
 	f.applied++
 	f.appliedIDs = append(f.appliedIDs, sb.ID)
@@ -306,6 +311,9 @@ type enrichStore struct {
 }
 
 func (s *enrichStore) ListActiveSBOMs(context.Context) ([]*postgres.SBOM, error) { return nil, nil }
+func (s *enrichStore) ListScannableSBOMs(context.Context, time.Duration) ([]*postgres.SBOM, error) {
+	return nil, nil
+}
 func (s *enrichStore) ApplyScan(context.Context, *postgres.SBOM, string, postgres.Versions, []data.Vulnerability) error {
 	return nil
 }

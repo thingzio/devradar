@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strconv"
 	"time"
@@ -211,6 +212,10 @@ type FleetStats struct {
 	FixLow      int `json:"fix_low"`
 	KEV         int `json:"kev"` // distinct known-exploited CVEs across the fleet
 	Failures    int `json:"failures"`
+	// LastScanAt is the most recent scan across the tenant's active SBOMs (nil if
+	// nothing has been scanned yet). Surfaces the daily/periodic scan heartbeat so
+	// a freshly-submitted SBOM shows "scan pending" rather than looking broken.
+	LastScanAt *time.Time `json:"last_scan_at,omitempty"`
 }
 
 // FleetStats returns tenant-wide finding totals across all active images,
@@ -218,6 +223,7 @@ type FleetStats struct {
 // "patch now" signal in the fleet.
 func (s *Store) FleetStats(ctx context.Context, tenantID string) (FleetStats, error) {
 	var fs FleetStats
+	var lastScan sql.NullTime
 	err := s.db.QueryRowContext(ctx, `
 		SELECT
 			(SELECT COUNT(DISTINCT repository) FROM devradar_sbom
@@ -235,16 +241,22 @@ func (s *Store) FleetStats(ctx context.Context, tenantID string) (FleetStats, er
 			COUNT(DISTINCT f.exposure) FILTER (WHERE e.kev),
 			(SELECT COUNT(*) FROM devradar_scan_failure sf
 			   JOIN devradar_sbom s2 ON s2.id = sf.sbom_id
-			  WHERE s2.tenant_id = $1)
+			  WHERE s2.tenant_id = $1),
+			(SELECT MAX(sr.scanned_at) FROM devradar_scan_run sr
+			   JOIN devradar_sbom s3 ON s3.id = sr.sbom_id
+			  WHERE s3.tenant_id = $1 AND s3.status = 'active')
 		FROM devradar_sbom sb
 		LEFT JOIN devradar_finding f ON f.sbom_id = sb.id
 			AND NOT `+vexSuppressedByDigestCVE+`
 		LEFT JOIN devradar_cve_enrichment e ON e.cve = f.exposure
 		WHERE sb.tenant_id = $1 AND sb.status = 'active'`,
 		tenantID).Scan(&fs.Images, &fs.Total, &fs.Critical, &fs.High, &fs.Medium, &fs.Low, &fs.Fixable,
-		&fs.FixCritical, &fs.FixHigh, &fs.FixMedium, &fs.FixLow, &fs.KEV, &fs.Failures)
+		&fs.FixCritical, &fs.FixHigh, &fs.FixMedium, &fs.FixLow, &fs.KEV, &fs.Failures, &lastScan)
 	if err != nil {
 		return FleetStats{}, fmt.Errorf("fleet stats: %w", err)
+	}
+	if lastScan.Valid {
+		fs.LastScanAt = &lastScan.Time
 	}
 	return fs, nil
 }

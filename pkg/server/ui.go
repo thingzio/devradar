@@ -249,6 +249,41 @@ func tenantMinSeverity(tn *tenant.Tenant) string {
 	return tn.MinSeverity
 }
 
+// scanStatus renders the scan heartbeat shown in the UI header: a relative
+// "last scan" time plus the cadence, so a freshly-submitted SBOM reads as "scan
+// pending, results within ~15 min" rather than looking broken. nil (nothing
+// scanned yet) yields the pending message.
+func scanStatus(last *time.Time) string {
+	const cadence = "scans run every 15 min"
+	if last == nil {
+		return "No scan yet — " + cadence
+	}
+	return "Last scan " + humanizeSince(time.Since(*last)) + " · " + cadence
+}
+
+// humanizeSince renders a duration as a coarse "N <unit> ago" string. Coarse by
+// design — the scan cadence is minutes, so second-level precision is noise.
+func humanizeSince(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%d min ago", int(d.Minutes())) // "min" reads fine singular/plural
+	case d < 24*time.Hour:
+		return plural(int(d.Hours()), "hour") + " ago"
+	default:
+		return plural(int(d.Hours()/24), "day") + " ago"
+	}
+}
+
+func plural(n int, unit string) string {
+	s := fmt.Sprintf("%d %s", n, unit)
+	if n != 1 {
+		s += "s"
+	}
+	return s
+}
+
 // looksLikeEmail is a minimal sanity check — real validation is that the link is
 // only deliverable to a controllable mailbox.
 func looksLikeEmail(s string) bool {

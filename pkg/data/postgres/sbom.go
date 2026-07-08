@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/lib/pq"
 )
@@ -59,17 +60,45 @@ func (s *Store) UpsertSBOM(ctx context.Context, sb *SBOM) (id string, inserted b
 
 // ListActiveSBOMs returns all active SBOMs across all tenants — the scan job's
 // work list. It is intentionally cross-tenant (the scan job is a platform-wide
-// batch); tenant scoping applies only to the read API.
+// batch); tenant scoping applies only to the read API. Equivalent to
+// ListScannableSBOMs with a zero window (no staleness filter).
 func (s *Store) ListActiveSBOMs(ctx context.Context) ([]*SBOM, error) {
+	return s.ListScannableSBOMs(ctx, 0)
+}
+
+// ListScannableSBOMs returns the active SBOMs due for a scan: those never
+// scanned yet (no devradar_scan_run row — a freshly submitted SBOM, prioritized
+// so a new submission is picked up on the very next run) OR whose most recent
+// scan is older than maxAge. A maxAge of 0 disables the staleness filter and
+// returns every active SBOM (the daily-full-pass behavior).
+//
+// This lets the scheduler fire frequently (low submission-to-result latency)
+// while each SBOM is still scanned at most a bounded number of times per day:
+// cron frequency controls latency, maxAge controls per-SBOM load, independently.
+// Cross-tenant by design, like ListActiveSBOMs.
+func (s *Store) ListScannableSBOMs(ctx context.Context, maxAge time.Duration) ([]*SBOM, error) {
+	// The staleness predicate is applied as an interval bound on the SBOM's latest
+	// scan_run. NOT EXISTS covers the never-scanned case (new submissions) so they
+	// are always due. Ordering by submitted_at keeps the oldest work first.
+	where := `WHERE sb.status = 'active'`
+	args := []any{}
+	if maxAge > 0 {
+		where += `
+		  AND NOT EXISTS (
+		      SELECT 1 FROM devradar_scan_run sr
+		      WHERE sr.sbom_id = sb.id
+		        AND sr.scanned_at > now() - $1::interval)`
+		args = append(args, fmt.Sprintf("%d seconds", int64(maxAge.Seconds())))
+	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, tenant_id, image_ref, digest, format, spec_version,
-		       COALESCE(tool,''), COALESCE(tool_version,''), package_count,
-		       object_path, verification_status, status, submitted_at
-		FROM devradar_sbom
-		WHERE status = 'active'
-		ORDER BY submitted_at`)
+		SELECT sb.id, sb.tenant_id, sb.image_ref, sb.digest, sb.format, sb.spec_version,
+		       COALESCE(sb.tool,''), COALESCE(sb.tool_version,''), sb.package_count,
+		       sb.object_path, sb.verification_status, sb.status, sb.submitted_at
+		FROM devradar_sbom sb
+		`+where+`
+		ORDER BY sb.submitted_at`, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list active sboms: %w", err)
+		return nil, fmt.Errorf("list scannable sboms: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
