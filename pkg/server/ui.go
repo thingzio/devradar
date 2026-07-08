@@ -81,6 +81,7 @@ func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
 	mux.Handle("GET /cves/{cve}", authed(http.HandlerFunc(s.handleCVEDetail)))
 	mux.Handle("GET /licenses", authed(http.HandlerFunc(s.handleLicensesPage)))
 	mux.Handle("POST /settings/license-policy", authed(http.HandlerFunc(s.handleSetLicensePolicy)))
+	mux.Handle("GET /submit", authed(http.HandlerFunc(s.handleSubmitGuide)))
 	mux.Handle("POST /vex/upload", authed(http.HandlerFunc(s.handleUploadVEX)))
 	mux.Handle("GET /tokens", authed(http.HandlerFunc(s.handleTokensPage)))
 	mux.Handle("POST /tokens", authed(http.HandlerFunc(s.handleCreateToken)))

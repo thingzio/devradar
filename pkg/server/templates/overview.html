@@ -57,7 +57,13 @@
   </div>
   {{else}}
   <div class="card">
-    <p class="muted" style="margin:0">No images tracked yet. Submit an SBOM to get started — see <a href="/tokens">API tokens</a>.</p>
+    <div class="card-head"><h2>Welcome to DevRadar 👋</h2></div>
+    <p style="margin:0 0 0.4rem">You're not tracking any images yet. DevRadar watches how an image's vulnerabilities and licenses change over time by rescanning its <strong>SBOM</strong> daily — so the first step is to submit one.</p>
+    <p class="muted" style="margin:0">It takes four copy-paste steps: create a token, generate the SBOM by digest, and POST it.</p>
+    <div class="empty-cta">
+      <a href="/submit" class="btn">Submit your first SBOM →</a>
+      <a href="/tokens" class="btn secondary">Create an API token</a>
+    </div>
   </div>
   {{end}}
 </main>

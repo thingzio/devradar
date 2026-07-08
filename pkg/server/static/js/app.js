@@ -28,4 +28,26 @@
       if (e.key === "Escape") close();
     });
   });
+
+  // Copy-to-clipboard for code blocks on the submit guide. Each .copyable wraps
+  // a <pre> and a <button class="copy-btn">; clicking copies the <pre> text.
+  document.addEventListener("DOMContentLoaded", function () {
+    var btns = document.querySelectorAll(".copy-btn");
+    btns.forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var wrap = btn.closest(".copyable");
+        var pre = wrap && wrap.querySelector("pre");
+        if (!pre || !navigator.clipboard) return;
+        navigator.clipboard.writeText(pre.innerText).then(function () {
+          var prev = btn.textContent;
+          btn.textContent = "Copied";
+          btn.classList.add("copied");
+          setTimeout(function () {
+            btn.textContent = prev;
+            btn.classList.remove("copied");
+          }, 1500);
+        });
+      });
+    });
+  });
 })();
