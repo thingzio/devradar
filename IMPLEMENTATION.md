@@ -942,6 +942,47 @@ VEX answers the question DevRadar's findings *provoke* — "it's present, but do
 
 ---
 
+## Public Data (opt-in, anonymous read — SHELVED, design captured for future)
+
+**Status: not built.** Deliberately shelved pending a full implications review (privacy, abuse, de-anonymization). This section records the options and the recommendation so the eventual design starts from a considered baseline rather than a blank page. Nothing here is implemented.
+
+**Goal.** Let a tenant *opt in* to making a specific image's metadata (findings, license data, change history) **public**, so anonymous users can browse the full scope of the system **read-only** — no sign-in, and structurally no ability to submit SBOMs, upload VEX, mint tokens, or change anything.
+
+### The core tension
+
+DevRadar's isolation is application-level (`WHERE tenant_id = $1`) and an SBOM's identity is `sha256(tenant_id + bytes)` — **per-tenant by design**, so two tenants submitting the same public image get distinct rows and never share isolation. Public data breaks that framing: "the nginx image" becomes a *cross-tenant* concept. The central question is therefore **not** "add a `public` flag" but **"what is the public unit of aggregation?"** — and the answer follows from the two multi-submitter scenarios.
+
+### Aggregation key: the image digest
+
+The recommended public key is the **image manifest digest** (`sha256:…`) — globally unique, content-addressed, already the pin, with `(registry, repository, tag)` demoted to *provenance/aliases*. This resolves both scenarios cleanly:
+
+- **Same registry+repo, multiple tenants** (e.g. three tenants each track `docker.io/library/nginx`). Publicly this is **one image** keyed by digest. Findings for a fixed digest are *deterministic* (same SBOM + same scanner DB → same findings), so multiple tenants' scans of the same digest **should agree** — and where they diverge, that disagreement is itself the cataloger-divergence signal (different SBOM generators catalog differently). Merge on digest; keep "N tenants contributed" as optional metadata.
+- **Same digest, different registries** (e.g. `docker.io/library/nginx@sha256:abc` vs `mirror.corp/nginx@sha256:abc`). Same bytes, same digest, same vulnerabilities — a mirror or re-tag. The digest proves they are the **same artifact**; collapse to one public entry and list registries as *aliases*. "This artifact is served from N registries" becomes a feature, not a conflict.
+
+`devradar_sbom.digest` already exists, so the aggregation key needs no new modeling — only a visibility flag and a public read path.
+
+### Shape (when built)
+
+| Layer | Sketch |
+|---|---|
+| **Opt-in** | Per-image (or per-digest) visibility, e.g. `devradar_sbom.visibility` (`private`\|`public`, default `private`). Publishing is outward-facing → gated behind an explicit confirmation (it exposes CVE data tied to an image you run). |
+| **Anonymous read** | A separate **unauthenticated** `/public/...` UI + `/v1/public/...` API querying `WHERE visibility='public'`, aggregating by digest. No session, no tenant context. |
+| **Hard read-only** | Enforced by **not wiring** write routes into the public mux — a structural guarantee, not a bypassable role check. |
+| **Isolation-safe** | Public queries expose digest + merged findings/licenses + registry aliases; tenant identity is **never** surfaced. |
+
+### Open decisions (resolve before building)
+
+These carry the privacy/abuse risk and genuinely shape schema + posture:
+
+1. **Granularity** — publish per-**repository** (friendlier; auto-publishes future digests) vs per-**digest** (safer; explicit per version). Trade-off is UX convenience vs accidental exposure of a future build.
+2. **VEX in the public view** — raw scanner findings only (**recommended default**; a tenant's VEX "not affected because…" is sensitive business context and stays private) vs also publishing tenant VEX as public assertions.
+3. **De-anonymization** — even without names, tenant-count and rare private-registry paths (`mirror.acme-secret-project.io/…`) leak. Likely **hide the registry path** behind a tenant-chosen alias, and think hard before ever showing "N tenants track this."
+4. **Browse scope** — deep-linkable per-image public pages only (**recommended v1**) vs a global "explore everything public" dashboard (much larger surface: its own landing, search, and rate limiting/abuse controls).
+
+**Recommendation (baseline for the future plan):** digest as the aggregation key; per-digest opt-in; raw findings only (VEX stays private); registry path hidden behind a tenant-chosen alias; deep-link per-image pages first, no global browse in v1. Treat as its own design pass — it touches the isolation model enough to warrant one.
+
+---
+
 ## Deployment
 
 All GCP, in the shared `thingzio` project (`us-west1`). No VMs, no Cloud Tasks, no registry credentials.
