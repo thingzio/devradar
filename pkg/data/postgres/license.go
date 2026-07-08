@@ -109,6 +109,44 @@ func (s *Store) ListSBOMPackages(ctx context.Context, tenantID, sbomID string, p
 	return out, nil
 }
 
+// PackagesByRepo returns the deduped license inventory across all of a
+// repository's active SBOMs, classified + policy-evaluated in Go, violations
+// first. The distinct-package identity is (package, version) with licenses
+// merged across the repo's digests, so a dependency common to several versions
+// appears once. Tenant-scoped via the join to devradar_sbom.
+func (s *Store) PackagesByRepo(ctx context.Context, tenantID, repository string, policy data.LicensePolicy) ([]PackageLicenseRow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT p.package, p.version,
+		       COALESCE(array_agg(DISTINCT lic) FILTER (WHERE lic IS NOT NULL), '{}')
+		FROM devradar_sbom_package p
+		JOIN devradar_sbom sb ON sb.id = p.sbom_id
+		LEFT JOIN LATERAL unnest(p.licenses) AS lic ON true
+		WHERE sb.tenant_id = $1 AND sb.repository = $2 AND sb.status = 'active'
+		GROUP BY p.package, p.version
+		ORDER BY p.package, p.version`, tenantID, repository)
+	if err != nil {
+		return nil, fmt.Errorf("repo packages: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []PackageLicenseRow
+	for rows.Next() {
+		var r PackageLicenseRow
+		if err := rows.Scan(&r.Package, &r.Version, pq.Array(&r.Licenses)); err != nil {
+			return nil, fmt.Errorf("scan repo package: %w", err)
+		}
+		pkg := data.PackageLicense{Package: r.Package, Version: r.Version, Licenses: r.Licenses}
+		r.Category = string(worstCategory(r.Licenses))
+		r.Violation, r.Reason = policy.Evaluate(pkg)
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sortViolationsFirst(out)
+	return out, nil
+}
+
 // LicenseCount is one distribution bucket: a license family or category and the
 // number of distinct packages it covers across the tenant's active fleet.
 type LicenseCount struct {

@@ -27,9 +27,9 @@ export DR_BASE_URL={{.BaseURL}}</pre>
         <pre># macOS (Homebrew)
 brew install syft crane
 
-# Linux (install scripts)
+# Linux — syft has an install script; crane installs via Go (or a release tarball)
 curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
-curl -sSfL https://raw.githubusercontent.com/google/go-containerregistry/main/cmd/crane/install.sh | sh</pre>
+go install github.com/google/go-containerregistry/cmd/crane@latest</pre>
       </div>
     </div>
   </div>

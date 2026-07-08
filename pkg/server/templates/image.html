@@ -28,6 +28,9 @@
           {{$cur := .MinSeverity}}
           {{range (list "critical" "high" "medium" "low" "negligible")}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}
         </select>
+        <label class="muted chk" title="Also show findings with no severity rating (unknown)">
+          <input type="checkbox" name="unrated" value="1" {{if .IncludeUnrated}}checked{{end}} onchange="this.form.submit()"> unrated
+        </label>
       </form>
     </div>
     <p class="muted" style="margin-top:0">How this image's vulnerabilities changed over time, across all its digests. History builds as daily scans run.</p>
@@ -61,12 +64,33 @@
       </tbody>
     </table>
     {{if .NextCursor}}
-    <p class="loadmore"><a href="/images?repo={{.Repository}}&min_severity={{.MinSeverity}}{{if .EvSort}}&ev_sort={{.EvSort}}&ev_dir={{.EvDir}}{{end}}&cursor={{.NextCursor}}">Load more →</a></p>
+    <p class="loadmore"><a href="/images?repo={{.Repository}}&min_severity={{.MinSeverity}}{{if .IncludeUnrated}}&unrated=1{{end}}{{if .EvSort}}&ev_sort={{.EvSort}}&ev_dir={{.EvDir}}{{end}}&cursor={{.NextCursor}}">Load more →</a></p>
     {{end}}
     {{else}}
-    <p class="muted">No changes at or above the current severity threshold yet.</p>
+    <p class="muted">No changes at or above the <strong>{{.MinSeverity}}</strong> threshold{{if not .IncludeUnrated}} (unrated findings hidden — tick <em>unrated</em> to include them){{end}}.</p>
     {{end}}
   </div>
+
+  {{if .HasFailures}}
+  <div class="card">
+    <div class="card-head"><h2>&#9888; Scan issues</h2></div>
+    <p class="muted" style="margin-top:0">A scanner errored or returned nothing for one of this image's SBOMs. This is why the image shows a "scan issue" flag — the finding counts may be from fewer scanners than configured.</p>
+    <table>
+      <thead><tr><th>When</th><th>Scanner</th><th>Stage</th><th>Detail</th></tr></thead>
+      <tbody>
+        {{range .Failures}}
+        <tr>
+          <td class="nowrap">{{.When}}</td>
+          <td>{{if .Scanner}}{{.Scanner}}{{else}}<span class="muted">—</span>{{end}}</td>
+          <td><code>{{.Stage}}</code></td>
+          <td class="muted">{{.Error}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+    <p class="muted" style="margin-bottom:0; font-size:0.85rem">Common causes: the reference wasn't a container image (a Helm chart or OCI artifact), an SBOM a scanner couldn't parse, or a scanner with no advisories for the image's distro (e.g. Trivy on an EOL release). See the <a href="/submit">submission guide</a>.</p>
+  </div>
+  {{end}}
 
   <div class="card">
     <div class="card-head"><h2>Versions &amp; SBOMs</h2></div>
@@ -100,5 +124,29 @@
     <p class="loadmore"><a href="/images?repo={{.Repository}}&min_severity={{.MinSeverity}}{{if .SBOMSort}}&sbom_sort={{.SBOMSort}}&sbom_dir={{.SBOMDir}}{{end}}&sbom_cursor={{.SBOMNextCursor}}">Load more →</a></p>
     {{end}}
   </div>
+
+  {{if .HasPackages}}
+  <div class="card">
+    <div class="card-head">
+      <h2>Packages &amp; licenses</h2>
+      {{if .LicenseViolations}}<span class="pill" style="background:color-mix(in srgb, var(--danger) 15%, transparent); color:var(--danger)">{{.LicenseViolations}} policy violation{{if ne .LicenseViolations 1}}s{{end}}</span>{{end}}
+    </div>
+    <p class="muted" style="margin-top:0">Every package catalogued in this image's SBOMs, with its license and obligation category. Set a <a href="/licenses">compliance policy</a> to flag denied licenses — violations are listed first.</p>
+    <table>
+      <thead><tr><th>Package</th><th>Version</th><th>License(s)</th><th>Category</th><th>Policy</th></tr></thead>
+      <tbody>
+        {{range .Packages}}
+        <tr{{if .Violation}} class="row-violation"{{end}}>
+          <td>{{.Package}}</td>
+          <td class="muted">{{if .Version}}{{.Version}}{{else}}—{{end}}</td>
+          <td>{{if .Licenses}}{{.Licenses}}{{else}}<span class="muted">none declared</span>{{end}}</td>
+          <td><span class="lic-cat lic-{{.Category}}">{{.Category}}</span></td>
+          <td>{{if .Violation}}<span class="sev-badge sev-b-critical" title="{{.Reason}}">denied</span>{{else}}<span class="muted">ok</span>{{end}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
 </main>
 {{template "foot" .}}

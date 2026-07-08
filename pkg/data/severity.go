@@ -47,8 +47,21 @@ func MeetsThreshold(sev, min string) bool {
 }
 
 // AllowedSeverities returns the severity strings at or above min, always
-// including unknown. Suitable for a SQL `severity = ANY($1)` filter.
+// including unknown. Suitable for a SQL `severity = ANY($1)` filter. This is the
+// default read-API behavior — an unrated exposure is never hidden.
 func AllowedSeverities(min string) []string {
+	return allowedSeverities(min, true)
+}
+
+// AllowedSeveritiesStrict is like AllowedSeverities but does NOT force-include
+// unknown: only ranked severities at or above min are returned. Use where a
+// severity filter should mean exactly what it says — e.g. the UI change log,
+// where always surfacing unrated rows makes the filter look inert.
+func AllowedSeveritiesStrict(min string) []string {
+	return allowedSeverities(min, false)
+}
+
+func allowedSeverities(min string, includeUnknown bool) []string {
 	minRank, ok := severityRank[min]
 	if !ok {
 		minRank = severityRank[DefaultMinSeverity]
@@ -59,6 +72,8 @@ func AllowedSeverities(min string) []string {
 			out = append(out, sev)
 		}
 	}
-	out = append(out, SeverityUnknown) // always surfaced
+	if includeUnknown {
+		out = append(out, SeverityUnknown) // always surfaced
+	}
 	return out
 }

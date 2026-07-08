@@ -561,3 +561,32 @@ func (s *Store) FailuresBySBOM(ctx context.Context, tenantID, sbomID string, lim
 	}
 	return out, rows.Err()
 }
+
+// FailuresByRepo returns recent scan failures across all of a repository's
+// active SBOMs (newest first) — so the image page can explain a "scan issue"
+// flag rather than just showing it. Tenant-scoped via the join to devradar_sbom.
+func (s *Store) FailuresByRepo(ctx context.Context, tenantID, repository string, limit int) ([]Failure, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT sf.scanner, sf.stage, sf.error, sf.occurred_at
+		FROM devradar_scan_failure sf
+		JOIN devradar_sbom sb ON sb.id = sf.sbom_id
+		WHERE sb.tenant_id = $1 AND sb.repository = $2 AND sb.status = 'active'
+		ORDER BY sf.occurred_at DESC
+		LIMIT $3`, tenantID, repository, limit)
+	if err != nil {
+		return nil, fmt.Errorf("repo failures: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []Failure
+	for rows.Next() {
+		var f Failure
+		var scanner sql.NullString
+		if err := rows.Scan(&scanner, &f.Stage, &f.Error, &f.OccurredAt); err != nil {
+			return nil, fmt.Errorf("scan repo failure: %w", err)
+		}
+		f.Scanner = scanner.String
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}

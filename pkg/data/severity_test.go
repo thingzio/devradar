@@ -55,3 +55,26 @@ func TestValidMinSeverity(t *testing.T) {
 		}
 	}
 }
+
+func TestAllowedSeverities_StrictVsUnknown(t *testing.T) {
+	def := AllowedSeverities("high")
+	strict := AllowedSeveritiesStrict("high")
+	if !slices.Contains(def, SeverityUnknown) {
+		t.Errorf("AllowedSeverities(high) should include unknown: %v", def)
+	}
+	if slices.Contains(strict, SeverityUnknown) {
+		t.Errorf("AllowedSeveritiesStrict(high) must NOT include unknown: %v", strict)
+	}
+	// Both exclude below-threshold ranked severities.
+	for _, below := range []string{SeverityMedium, SeverityLow, SeverityNegligible} {
+		if slices.Contains(def, below) || slices.Contains(strict, below) {
+			t.Errorf("high threshold must exclude %q", below)
+		}
+	}
+	// Both include at-or-above ranked severities.
+	for _, at := range []string{SeverityHigh, SeverityCritical} {
+		if !slices.Contains(strict, at) {
+			t.Errorf("high threshold must include %q: %v", at, strict)
+		}
+	}
+}

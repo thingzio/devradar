@@ -388,7 +388,7 @@ var repoTimelineSortCols = map[string]sortCol{
 // RepoTimeline returns the change history for a repository across ALL its
 // digests (CUJ-3), sortable (default "occurred" = newest first), keyset-
 // paginated on the chosen column + event id.
-func (s *Store) RepoTimeline(ctx context.Context, tenantID, repository, minSeverity, sortKey, sortDir, cursor string, limit int) (items []TimelineEvent, next string, err error) {
+func (s *Store) RepoTimeline(ctx context.Context, tenantID, repository, minSeverity string, includeUnknown bool, sortKey, sortDir, cursor string, limit int) (items []TimelineEvent, next string, err error) {
 	var known bool
 	if err := s.db.QueryRowContext(ctx,
 		`SELECT EXISTS(SELECT 1 FROM devradar_sbom WHERE tenant_id = $1 AND repository = $2)`,
@@ -403,7 +403,13 @@ func (s *Store) RepoTimeline(ctx context.Context, tenantID, repository, minSever
 	sort := resolveSort(sortKey, sortDir, repoTimelineSortCols, "occurred")
 	cur, hasCur := decodeSortCursor(cursor)
 
-	args := []any{tenantID, repository, pq.Array(data.AllowedSeverities(minSeverity))}
+	// includeUnknown false ⇒ the severity filter is exact (no forced unrated
+	// rows), so the UI change log's dropdown does what it says.
+	allowed := data.AllowedSeverities(minSeverity)
+	if !includeUnknown {
+		allowed = data.AllowedSeveritiesStrict(minSeverity)
+	}
+	args := []any{tenantID, repository, pq.Array(allowed)}
 	keyset := ""
 	if hasCur {
 		keyset = " AND " + sort.seek("e.id::text", 4, 5)

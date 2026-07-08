@@ -90,9 +90,10 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Preferred: group by repository across every version/digest.
+	// Preferred: group by repository across every version/digest. The API keeps
+	// the documented contract: unknown-severity events are always surfaced.
 	if repo := r.URL.Query().Get("repo"); repo != "" {
-		events, next, err := s.store.RepoTimeline(r.Context(), tn.ID, repo, min,
+		events, next, err := s.store.RepoTimeline(r.Context(), tn.ID, repo, min, true,
 			r.URL.Query().Get("sort"), r.URL.Query().Get("dir"), r.URL.Query().Get("cursor"), pageLimit(r))
 		if err != nil {
 			writeReadErr(w, err, "failed to load timeline")

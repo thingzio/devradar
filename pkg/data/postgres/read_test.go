@@ -1115,14 +1115,14 @@ func TestRepoViews(t *testing.T) {
 
 	// Keyset pagination on the repo timeline: page size 2 → 2 rows + a cursor,
 	// then the remaining 1 with no further cursor. No overlap, no gap.
-	p1, next, err := st.RepoTimeline(ctx, tenantID, repo, "negligible", "", "", "", 2)
+	p1, next, err := st.RepoTimeline(ctx, tenantID, repo, "negligible", true, "", "", "", 2)
 	if err != nil {
 		t.Fatalf("RepoTimeline p1: %v", err)
 	}
 	if len(p1) != 2 || next == "" {
 		t.Fatalf("page1: len=%d next=%q, want 2 + cursor", len(p1), next)
 	}
-	p2, next2, err := st.RepoTimeline(ctx, tenantID, repo, "negligible", "", "", next, 2)
+	p2, next2, err := st.RepoTimeline(ctx, tenantID, repo, "negligible", true, "", "", next, 2)
 	if err != nil {
 		t.Fatalf("RepoTimeline p2: %v", err)
 	}

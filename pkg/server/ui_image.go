@@ -56,8 +56,30 @@ type imageDetailView struct {
 	SBOMDir        string        // active SBOM-list direction
 	EvSort         string        // active change-log sort key
 	EvDir          string        // active change-log direction
+	IncludeUnrated bool          // change log: show unrated (unknown) rows too
 	SevChart       template.HTML // inline SVG: severity composition over scans
 	HasEvents      bool
+
+	// Scan issues: why a scanner errored or returned nothing, so "scan issue" on
+	// the dashboard is explainable rather than mysterious.
+	Failures    []failureRow
+	HasFailures bool
+
+	// License inventory for this image's SBOMs (per-package, policy-evaluated).
+	Packages          []packageRow
+	LicenseViolations int
+	HasPackages       bool
+}
+
+// packageRow is one catalogued package with its license classification + policy
+// verdict, for the per-image license table. (failureRow is shared with ui_sbom.go.)
+type packageRow struct {
+	Package   string
+	Version   string
+	Licenses  string // joined for display
+	Category  string
+	Violation bool
+	Reason    string
 }
 
 // handleImageDetail renders one image (CUJ-2 + CUJ-3): its versions/SBOMs list
@@ -92,8 +114,11 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 
 	// Cross-digest change log, severity-filtered, sortable, paginated (its own
 	// param prefix so it doesn't collide with the SBOMs table on this page).
+	// The change-log filter is EXACT by default (unrated rows don't leak in, which
+	// made the dropdown look inert); ?unrated=1 opts them back in.
+	includeUnrated := r.URL.Query().Get("unrated") == "1"
 	evSort, evDir := r.URL.Query().Get("ev_sort"), r.URL.Query().Get("ev_dir")
-	events, next, err := s.store.RepoTimeline(r.Context(), tn.ID, repo, min,
+	events, next, err := s.store.RepoTimeline(r.Context(), tn.ID, repo, min, includeUnrated,
 		evSort, evDir, r.URL.Query().Get("cursor"), 50)
 	if err != nil {
 		http.Error(w, "failed to load change log", http.StatusInternalServerError)
@@ -121,6 +146,16 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Scan issues for this image, so the dashboard's "scan issue" flag is
+	// explainable here. Best-effort — a failure to load failures shouldn't 500 the
+	// page.
+	failures, _ := s.store.FailuresByRepo(r.Context(), tn.ID, repo, 50)
+
+	// License inventory for this image, classified + evaluated against the tenant
+	// policy. Best-effort (licenses are additive).
+	policy, _ := s.store.GetLicensePolicy(r.Context(), tn.ID)
+	pkgs, _ := s.store.PackagesByRepo(r.Context(), tn.ID, repo, policy)
+
 	v := imageDetailView{
 		Title:          lastPath(repo),
 		SignedIn:       true,
@@ -139,8 +174,34 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 		SBOMDir:        sbomDir,
 		EvSort:         evSort,
 		EvDir:          evDir,
+		IncludeUnrated: includeUnrated,
 		SevChart:       stackedTimeSeries(points, 720),
 		HasEvents:      len(events) > 0,
+		HasFailures:    len(failures) > 0,
+		HasPackages:    len(pkgs) > 0,
+	}
+
+	for _, f := range failures {
+		v.Failures = append(v.Failures, failureRow{
+			When:    f.OccurredAt.Format("2006-01-02 15:04"),
+			Scanner: f.Scanner,
+			Stage:   f.Stage,
+			Error:   f.Error,
+		})
+	}
+
+	for _, p := range pkgs {
+		if p.Violation {
+			v.LicenseViolations++
+		}
+		v.Packages = append(v.Packages, packageRow{
+			Package:   p.Package,
+			Version:   p.Version,
+			Licenses:  strings.Join(p.Licenses, ", "),
+			Category:  p.Category,
+			Violation: p.Violation,
+			Reason:    p.Reason,
+		})
 	}
 
 	for _, sb := range sboms {
