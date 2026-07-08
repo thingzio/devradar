@@ -45,12 +45,19 @@ curl -sSfL https://raw.githubusercontent.com/google/go-containerregistry/main/cm
 IMAGE=alpine:3.19
 DIGEST=$(crane digest "$IMAGE")
 
-# CycloneDX, all layers (recommended — grype and trivy both read it cleanly)
-syft -q --scope all-layers -o cyclonedx-json=sbom.cdx.json \
-  "registry:${IMAGE%%:*}@$DIGEST"</pre>
+# CycloneDX, all layers (recommended — grype and trivy both read it cleanly).
+# No -q here: if the reference isn't a container image, you want to SEE the error.
+syft --scope all-layers -o cyclonedx-json=sbom.cdx.json \
+  "registry:${IMAGE%%:*}@$DIGEST"
+
+# sanity check: the SBOM should be non-empty and list components
+test -s sbom.cdx.json && echo "OK: $(wc -c < sbom.cdx.json) bytes" || echo "FAILED: empty SBOM"</pre>
       </div>
       <div class="guide-note">
-        <strong>Gotcha:</strong> generate <em>digest-only</em> (<code>image@sha256:…</code>, no <code>:tag</code>). Given the combined <code>tag@digest</code> form, syft records the tag and drops the digest — and DevRadar rejects an SBOM with no digest. If your tool can't embed a digest, pass it explicitly with <code>image_ref</code> in step 4.
+        <strong>Must be a container image.</strong> syft catalogs container images — not Helm charts, OCI artifacts, or other non-image references. If you see <code>unsupported layer media type</code> / <code>not an OCI model artifact</code>, the reference points at something that isn't an image (a Helm chart's config media type is <code>helm.config.v1+json</code>); use the actual application image instead.
+      </div>
+      <div class="guide-note">
+        <strong>Generate digest-only</strong> (<code>image@sha256:…</code>, no <code>:tag</code>). Given the combined <code>tag@digest</code> form, syft records the tag and drops the digest — and DevRadar rejects an SBOM with no digest. If your tool can't embed a digest, pass it explicitly with <code>image_ref</code> in step 4.
       </div>
     </div>
   </div>
@@ -62,7 +69,10 @@ syft -q --scope all-layers -o cyclonedx-json=sbom.cdx.json \
       <p>Base64-encode the SBOM and wrap it in a small JSON body. Writing the body to a file avoids the shell's argument-length limit (real SBOMs are multiple MB); the API accepts up to 20&nbsp;MiB decoded. Native <code>base64</code> — no extra tooling — works on macOS and Linux:</p>
       <div class="copyable">
         <button class="copy-btn" type="button">Copy</button>
-        <pre># base64-encode the SBOM (strip newlines) and build the request body
+        <pre># guard: refuse to submit an empty/missing SBOM (catches a failed generate step)
+test -s sbom.cdx.json || { echo "sbom.cdx.json is empty — re-run step 3"; exit 1; }
+
+# base64-encode the SBOM (strip newlines) and build the request body
 B64=$(base64 < sbom.cdx.json | tr -d '\n')
 printf '{"sbom":"%s"}' "$B64" > body.json
 
