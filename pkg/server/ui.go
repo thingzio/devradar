@@ -3,6 +3,7 @@ package server
 import (
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"html/template"
 	"log/slog"
@@ -68,7 +69,8 @@ func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
 	mux.Handle("GET /static/", http.FileServerFS(staticFS))
 	mux.HandleFunc("GET /", s.handleLanding)
 	mux.HandleFunc("POST /auth/login", s.handleRequestLink)
-	mux.HandleFunc("GET /auth/verify", s.handleVerify)
+	mux.HandleFunc("GET /auth/verify", s.handleVerifyConfirm)
+	mux.HandleFunc("POST /auth/verify", s.handleVerify)
 	mux.HandleFunc("POST /auth/logout", s.handleLogout)
 
 	authed := middleware.RequireAuth(db, loginPath)
@@ -144,13 +146,34 @@ func (s *Server) handleRequestLink(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, loginPath+"?sent=1", http.StatusSeeOther)
 }
 
-// handleVerify consumes a magic-link token, mints a session, and lands the user
-// on the tokens page.
+// handleVerifyConfirm renders the sign-in confirmation page for a magic link
+// (GET /auth/verify?token=...). It only PEEKS the token — it does NOT consume it
+// — so an email-security scanner that pre-fetches the link cannot burn the
+// single-use token before the human clicks. Consumption happens on the POST from
+// the page's button (handleVerify). An invalid/expired token skips straight to
+// the landing page with the right message.
+func (s *Server) handleVerifyConfirm(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	if _, err := tenant.PeekLoginToken(r.Context(), s.store.DB(), token); err != nil {
+		http.Redirect(w, r, loginPath+"?error="+loginErrorCode(err), http.StatusFound)
+		return
+	}
+	render(w, "verify.html", map[string]any{
+		"Title":   "Confirm sign-in",
+		"Token":   token,
+		"Version": s.opts.Version,
+	})
+}
+
+// handleVerify consumes a magic-link token (POST from the confirm page), mints a
+// session, and lands the user on the overview. Bots/scanners issue GETs, not
+// POSTs, so reaching here means a human clicked the confirm button.
 func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	tn, err := tenant.ConsumeLoginToken(ctx, s.store.DB(), r.URL.Query().Get("token"))
+	tn, err := tenant.ConsumeLoginToken(ctx, s.store.DB(), r.FormValue("token"))
 	if err != nil {
-		http.Redirect(w, r, loginPath+"?error=link", http.StatusFound)
+		slog.Info("magic link consume failed", "reason", loginErrorCode(err))
+		http.Redirect(w, r, loginPath+"?error="+loginErrorCode(err), http.StatusFound)
 		return
 	}
 	if tn.Status == tenant.StatusSuspended {
@@ -164,6 +187,20 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	middleware.SetSessionCookie(w, sess, int(sessionTTL.Seconds()))
 	http.Redirect(w, r, "/overview", http.StatusFound)
+}
+
+// loginErrorCode maps a login-token error to the query code the landing page
+// renders. "expired" (timed out) and "used" (unknown/already consumed) are
+// distinguished so the user gets accurate guidance.
+func loginErrorCode(err error) string {
+	switch {
+	case errors.Is(err, tenant.ErrLoginTokenExpired):
+		return "expired"
+	case errors.Is(err, tenant.ErrLoginTokenInvalid):
+		return "used"
+	default:
+		return "server"
+	}
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {

@@ -16,6 +16,8 @@
     <div class="card hero-signin">
       {{if .Error}}<div class="msg err">
         {{if eq .Error "email"}}Please enter a valid email address.
+        {{else if eq .Error "expired"}}That sign-in link has expired — request a new one below.
+        {{else if eq .Error "used"}}That sign-in link was already used or is no longer valid — request a new one below.
         {{else if eq .Error "link"}}That sign-in link is invalid or expired — request a new one.
         {{else if eq .Error "suspended"}}This account is suspended.
         {{else}}Something went wrong. Please try again.{{end}}

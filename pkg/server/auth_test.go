@@ -198,9 +198,10 @@ func TestSetMinSeverity_ValidAndInvalid(t *testing.T) {
 	}
 }
 
-// TestMagicLink_ConsumeAndSession exercises the magic-link HTTP verify handler:
-// a fresh token mints a session cookie and redirects to /overview; reusing the
-// same token fails (single-use).
+// TestMagicLink_ConsumeAndSession exercises the two-step magic-link verify: GET
+// /auth/verify renders a confirm page WITHOUT consuming the token (defeats
+// email-scanner prefetch), and POST /auth/verify consumes it, mints a session,
+// and redirects to /overview; reusing the token fails (single-use).
 func TestMagicLink_ConsumeAndSession(t *testing.T) {
 	srv, st := testServer(t)
 	h := srv.Handler()
@@ -211,24 +212,39 @@ func TestMagicLink_ConsumeAndSession(t *testing.T) {
 		t.Fatalf("create login token: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/auth/verify?token="+raw, nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusFound {
-		t.Fatalf("verify: status = %d, want 302", rec.Code)
+	// GET renders the confirm page and MUST NOT consume the token (email scanners
+	// issue GETs). 200, no session cookie.
+	getReq := httptest.NewRequest(http.MethodGet, "/auth/verify?token="+raw, nil)
+	getRec := httptest.NewRecorder()
+	h.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("verify GET: status = %d, want 200 (confirm page)", getRec.Code)
 	}
-	if loc := rec.Header().Get("Location"); loc != "/overview" {
-		t.Errorf("verify redirect = %q, want /overview", loc)
-	}
-	if len(rec.Result().Cookies()) == 0 {
-		t.Error("verify should set a session cookie")
+	if len(getRec.Result().Cookies()) != 0 {
+		t.Error("verify GET must not set a session cookie (no consume)")
 	}
 
-	// Reuse the same token → single-use, must fail to /?error=link.
-	req2 := httptest.NewRequest(http.MethodGet, "/auth/verify?token="+raw, nil)
-	rec2 := httptest.NewRecorder()
-	h.ServeHTTP(rec2, req2)
-	if loc := rec2.Header().Get("Location"); !strings.Contains(loc, "error=link") {
-		t.Errorf("reused token redirect = %q, want ?error=link", loc)
+	// POST consumes the still-valid token and mints a session.
+	postReq := httptest.NewRequest(http.MethodPost, "/auth/verify", strings.NewReader("token="+raw))
+	postReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	postRec := httptest.NewRecorder()
+	h.ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusFound {
+		t.Fatalf("verify POST: status = %d, want 302", postRec.Code)
+	}
+	if loc := postRec.Header().Get("Location"); loc != "/overview" {
+		t.Errorf("verify POST redirect = %q, want /overview", loc)
+	}
+	if len(postRec.Result().Cookies()) == 0 {
+		t.Error("verify POST should set a session cookie")
+	}
+
+	// Reuse the same token → single-use, must fail to /?error=used.
+	reuseReq := httptest.NewRequest(http.MethodPost, "/auth/verify", strings.NewReader("token="+raw))
+	reuseReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	reuseRec := httptest.NewRecorder()
+	h.ServeHTTP(reuseRec, reuseReq)
+	if loc := reuseRec.Header().Get("Location"); !strings.Contains(loc, "error=used") {
+		t.Errorf("reused token redirect = %q, want ?error=used", loc)
 	}
 }

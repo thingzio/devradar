@@ -63,13 +63,71 @@ func TestLoginToken_Expired(t *testing.T) {
 	ctx := context.Background()
 	db := st.DB()
 
-	// Negative TTL → already expired; consume must reject.
+	// Negative TTL → already expired; consume must reject with the EXPIRED error
+	// (distinct from invalid/used, so the UI can say "request a new one").
 	raw, err := tenant.CreateLoginToken(ctx, db, randEmail(), -1*time.Minute)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
+	if _, err := tenant.ConsumeLoginToken(ctx, db, raw); !errors.Is(err, tenant.ErrLoginTokenExpired) {
+		t.Errorf("expired consume: err = %v, want ErrLoginTokenExpired", err)
+	}
+}
+
+// TestPeekLoginToken_DoesNotConsume is the anti-prefetch guarantee: peeking a
+// valid token (what GET /auth/verify does) must NOT consume it, so a subsequent
+// consume (the human's POST) still succeeds. This is the fix for email-security
+// scanners burning single-use links before the user clicks.
+func TestPeekLoginToken_DoesNotConsume(t *testing.T) {
+	st := testDB(t)
+	ctx := context.Background()
+	db := st.DB()
+	email := "peek-" + tenant.NormalizeEmail(randEmail())
+
+	raw, err := tenant.CreateLoginToken(ctx, db, email, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// Peek twice (as a scanner + then the page render might) — still valid.
+	for i := range 2 {
+		got, err := tenant.PeekLoginToken(ctx, db, raw)
+		if err != nil {
+			t.Fatalf("peek %d: %v", i, err)
+		}
+		if got != email {
+			t.Errorf("peek email = %q, want %q", got, email)
+		}
+	}
+
+	// The human's POST still consumes successfully after the peeks.
+	tn, err := tenant.ConsumeLoginToken(ctx, db, raw)
+	if err != nil {
+		t.Fatalf("consume after peek: %v", err)
+	}
+	if tn.Email != email {
+		t.Errorf("email = %q, want %q", tn.Email, email)
+	}
+	// And now it's gone (single-use holds).
 	if _, err := tenant.ConsumeLoginToken(ctx, db, raw); !errors.Is(err, tenant.ErrLoginTokenInvalid) {
-		t.Errorf("expired consume: err = %v, want ErrLoginTokenInvalid", err)
+		t.Errorf("second consume: err = %v, want ErrLoginTokenInvalid", err)
+	}
+}
+
+func TestPeekLoginToken_ExpiredAndUnknown(t *testing.T) {
+	st := testDB(t)
+	ctx := context.Background()
+	db := st.DB()
+
+	raw, err := tenant.CreateLoginToken(ctx, db, randEmail(), -1*time.Minute)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := tenant.PeekLoginToken(ctx, db, raw); !errors.Is(err, tenant.ErrLoginTokenExpired) {
+		t.Errorf("peek expired: err = %v, want ErrLoginTokenExpired", err)
+	}
+	if _, err := tenant.PeekLoginToken(ctx, db, "no-such-token"); !errors.Is(err, tenant.ErrLoginTokenInvalid) {
+		t.Errorf("peek unknown: err = %v, want ErrLoginTokenInvalid", err)
 	}
 }
 
