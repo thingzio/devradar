@@ -57,7 +57,7 @@ type PackageLicense struct {
 
 // licenseTaxonomyVersion identifies the classification map below. Bumped whenever
 // the map changes so a classification can be tied to a known taxonomy revision.
-const licenseTaxonomyVersion = "1"
+const licenseTaxonomyVersion = "2"
 
 // LicenseTaxonomyVersion returns the current taxonomy revision.
 func LicenseTaxonomyVersion() string { return licenseTaxonomyVersion }
@@ -90,30 +90,74 @@ var exactLicenseCategory = map[string]LicenseCategory{
 	"boost-1.0":    CategoryPermissive,
 	"bsl-1.0":      CategoryPermissive,
 	"cc0-1.0":      CategoryPermissive,
+	"cc0":          CategoryPermissive,
 	"cc-by-4.0":    CategoryPermissive,
 	"cc-by-3.0":    CategoryPermissive,
 
-	// weak copyleft (file/library scope)
-	"lgpl-2.0":     CategoryWeakCopyleft,
-	"lgpl-2.1":     CategoryWeakCopyleft,
-	"lgpl-3.0":     CategoryWeakCopyleft,
-	"mpl-1.1":      CategoryWeakCopyleft,
-	"mpl-2.0":      CategoryWeakCopyleft,
-	"epl-1.0":      CategoryWeakCopyleft,
-	"epl-2.0":      CategoryWeakCopyleft,
-	"cddl-1.0":     CategoryWeakCopyleft,
-	"cddl-1.1":     CategoryWeakCopyleft,
-	"cpl-1.0":      CategoryWeakCopyleft,
-	"ms-pl":        CategoryWeakCopyleft,
-	"artistic-2.0": CategoryWeakCopyleft,
+	// permissive — additional licenses observed in container SBOMs (Debian/OS
+	// base-image copyright shorthands and less-common SPDX IDs). Whole families
+	// (expat/*, public-domain/*, permissive/*, fsf/*) are covered by prefix rules
+	// in Classify; these are the one-off IDs.
+	"beerware":           CategoryPermissive, // "buy me a beer" — permissive
+	"kazlib":             CategoryPermissive, // BSD-style
+	"gap":                CategoryPermissive,
+	"unicode":            CategoryPermissive,
+	"unicode-dfs-2016":   CategoryPermissive,
+	"latex2e":            CategoryPermissive,
+	"freesoftware":       CategoryPermissive,
+	"pcre":               CategoryPermissive, // BSD-style
+	"bzip":               CategoryPermissive, // bzip2 license — BSD-style
+	"tcl-like":           CategoryPermissive,
+	"tinyscheme":         CategoryPermissive, // BSD-style
+	"autoconf":           CategoryPermissive, // all-permissive with exception
+	"isc+ibm":            CategoryPermissive,
+	"isc-original":       CategoryPermissive,
+	"curl":               CategoryPermissive, // MIT-style
+	"hpnd":               CategoryPermissive, // Historical Permission Notice
+	"hpnd-sell-variant":  CategoryPermissive,
+	"openldap":           CategoryPermissive,
+	"oldap-2.8":          CategoryPermissive,
+	"openldap-2.8":       CategoryPermissive,
+	"ftl":                CategoryPermissive, // FreeType License
+	"ntp":                CategoryPermissive,
+	"opengroup-mit":      CategoryPermissive,
+	"carnegie":           CategoryPermissive, // CMU/BSD-style
+	"bitstream-vera":     CategoryPermissive,
+	"sunpro":             CategoryPermissive,
+	"dec":                CategoryPermissive,
+	"rsa-md":             CategoryPermissive, // RSA message-digest notice
+	"pd":                 CategoryPermissive, // public-domain shorthand
+	"pd-debian":          CategoryPermissive,
+	"sdbm-public-domain": CategoryPermissive,
 
-	// strong copyleft (project scope)
-	"gpl-1.0":   CategoryStrongCopyleft,
-	"gpl-2.0":   CategoryStrongCopyleft,
-	"gpl-3.0":   CategoryStrongCopyleft,
-	"agpl-1.0":  CategoryStrongCopyleft,
-	"agpl-3.0":  CategoryStrongCopyleft,
-	"sleepycat": CategoryStrongCopyleft,
+	// weak copyleft (file/library scope)
+	"lgpl-2.0":      CategoryWeakCopyleft,
+	"lgpl-2.1":      CategoryWeakCopyleft,
+	"lgpl-3.0":      CategoryWeakCopyleft,
+	"mpl-1.1":       CategoryWeakCopyleft,
+	"mpl-2.0":       CategoryWeakCopyleft,
+	"epl-1.0":       CategoryWeakCopyleft,
+	"epl-2.0":       CategoryWeakCopyleft,
+	"cddl-1.0":      CategoryWeakCopyleft,
+	"cddl-1.1":      CategoryWeakCopyleft,
+	"cpl-1.0":       CategoryWeakCopyleft,
+	"ms-pl":         CategoryWeakCopyleft,
+	"artistic-2.0":  CategoryWeakCopyleft,
+	"artistic":      CategoryWeakCopyleft, // Artistic v1 — treated as weak copyleft
+	"artistic-1.0":  CategoryWeakCopyleft,
+	"artistic-dist": CategoryWeakCopyleft,
+
+	// strong copyleft (project scope). GNU Free Documentation License (gfdl/*, and
+	// the fdl- alias) is documentation copyleft — classified weak-copyleft via the
+	// prefix rules in Classify, not here.
+	"gpl-1.0":             CategoryStrongCopyleft,
+	"gpl-2.0":             CategoryStrongCopyleft,
+	"gpl-3.0":             CategoryStrongCopyleft,
+	"agpl-1.0":            CategoryStrongCopyleft,
+	"agpl-3.0":            CategoryStrongCopyleft,
+	"sleepycat":           CategoryStrongCopyleft,
+	"dont-change-the-gpl": CategoryStrongCopyleft, // Debian shorthand for a GPL notice
+	"smail-gpl":           CategoryStrongCopyleft,
 
 	// proprietary / non-OSS
 	"proprietary":  CategoryProprietary,
@@ -121,6 +165,7 @@ var exactLicenseCategory = map[string]LicenseCategory{
 	"ms-eula":      CategoryProprietary,
 	"cc-by-nc-4.0": CategoryProprietary,
 	"cc-by-nd-4.0": CategoryProprietary,
+	"noderivs":     CategoryProprietary, // no-derivatives — fails typical OSS policy
 }
 
 // normalizeLicenseID lowercases, trims, and strips SPDX modifier suffixes so
@@ -144,25 +189,56 @@ func Classify(id string) LicenseCategory {
 	if n == "" || n == "noassertion" || n == "none" || strings.HasPrefix(n, "licenseref") {
 		return CategoryUnknown
 	}
+	// A digest leaked into the license field (SBOM-generator bug, not a license).
+	// Unknown, like the cases above — but see IsMalformedLicense, which callers
+	// use to report these separately from genuinely unrecognized licenses.
+	if isDigestValue(n) {
+		return CategoryUnknown
+	}
 	if c, ok := exactLicenseCategory[n]; ok {
 		return c
 	}
-	// Family prefixes for versions not enumerated above. Order matters: agpl and
-	// lgpl must be tested before the bare "gpl" prefix.
+	// Family prefixes for variants not enumerated above. Order matters: agpl and
+	// lgpl must be tested before the bare "gpl" prefix; gfdl/fdl (documentation
+	// copyleft) before nothing GPL-ish since they don't start with "gpl".
 	switch {
 	case strings.HasPrefix(n, "agpl"):
 		return CategoryStrongCopyleft
 	case strings.HasPrefix(n, "lgpl"):
 		return CategoryWeakCopyleft
+	case strings.HasPrefix(n, "gfdl"), strings.HasPrefix(n, "fdl"):
+		return CategoryWeakCopyleft // GNU Free Documentation License (docs copyleft)
 	case strings.HasPrefix(n, "gpl"):
 		return CategoryStrongCopyleft
 	case strings.HasPrefix(n, "mpl"), strings.HasPrefix(n, "epl"), strings.HasPrefix(n, "cddl"):
 		return CategoryWeakCopyleft
 	case strings.HasPrefix(n, "bsd"), strings.HasPrefix(n, "apache"),
-		strings.HasPrefix(n, "mit"), strings.HasPrefix(n, "cc-by-") && !strings.Contains(n, "-nc") && !strings.Contains(n, "-nd"):
+		strings.HasPrefix(n, "mit"),
+		strings.HasPrefix(n, "expat"), // Expat IS the MIT license
+		strings.HasPrefix(n, "public-domain"), n == "public.domain",
+		strings.HasPrefix(n, "permissive"), // permissive, permissive-fsf, permissive-nowarranty, …
+		strings.HasPrefix(n, "fsful"), strings.HasPrefix(n, "fsfap"), strings.HasPrefix(n, "fsf-"),
+		strings.HasPrefix(n, "hpnd"),
+		strings.HasPrefix(n, "cc-by-") && !strings.Contains(n, "-nc") && !strings.Contains(n, "-nd"):
 		return CategoryPermissive
 	}
 	return CategoryUnknown
+}
+
+// isDigestValue reports whether a normalized license value is actually a content
+// digest (sha256:…/sha512:…) that a buggy SBOM generator wrote into the license
+// field. These are not licenses.
+func isDigestValue(n string) bool {
+	return strings.HasPrefix(n, "sha256:") || strings.HasPrefix(n, "sha512:") ||
+		strings.HasPrefix(n, "sha1:") || strings.HasPrefix(n, "md5:")
+}
+
+// IsMalformedLicense reports whether a raw license value is structurally not a
+// license (a leaked content digest). Callers can surface these separately from
+// merely unrecognized licenses — both classify as CategoryUnknown, but the cause
+// (and the fix: report the SBOM-generator bug) differs.
+func IsMalformedLicense(id string) bool {
+	return isDigestValue(normalizeLicenseID(id))
 }
 
 // LicenseFamily returns a short, display-friendly grouping key for a license ID

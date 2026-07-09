@@ -27,10 +27,56 @@ func TestClassify(t *testing.T) {
 		"":                          CategoryUnknown,
 		"LicenseRef-scancode-xyz":   CategoryUnknown,
 		"totally-made-up-license-9": CategoryUnknown,
+
+		// Taxonomy v2 additions (licenses observed in real container SBOMs).
+		"Expat":               CategoryPermissive, // synonym for MIT
+		"expat":               CategoryPermissive, // case-insensitive
+		"public-domain":       CategoryPermissive, // family prefix
+		"public-domain-md5":   CategoryPermissive, // family prefix variant
+		"PD":                  CategoryPermissive, // Debian shorthand
+		"CC0":                 CategoryPermissive, // no-version alias
+		"Beerware":            CategoryPermissive,
+		"Unicode":             CategoryPermissive,
+		"permissive":          CategoryPermissive, // family prefix
+		"permissive-fsf":      CategoryPermissive, // family prefix variant
+		"FSFAP":               CategoryPermissive, // fsf prefix
+		"FSFULLR":             CategoryPermissive, // fsful prefix
+		"HPND":                CategoryPermissive,
+		"GFDL-1.3-only":       CategoryWeakCopyleft, // documentation copyleft (gfdl prefix)
+		"GFDL-NIV-1.3":        CategoryWeakCopyleft,
+		"FDL-1.2+":            CategoryWeakCopyleft, // fdl alias
+		"Artistic":            CategoryWeakCopyleft, // Artistic v1
+		"noderivs":            CategoryProprietary,  // no-derivatives
+		"SMAIL-GPL":           CategoryStrongCopyleft,
+		"DONT-CHANGE-THE-GPL": CategoryStrongCopyleft,
+		// A digest leaked into the license field is unknown (not a license).
+		"sha256:da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3": CategoryUnknown,
 	}
 	for in, want := range cases {
 		if got := Classify(in); got != want {
 			t.Errorf("Classify(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestIsMalformedLicense distinguishes a leaked content digest (an SBOM-generator
+// bug) from a merely unrecognized license — both are CategoryUnknown, but only
+// the digest is "malformed".
+func TestIsMalformedLicense(t *testing.T) {
+	malformed := []string{
+		"sha256:da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+		"SHA512:abcdef",
+		"md5:0123456789abcdef",
+	}
+	for _, id := range malformed {
+		if !IsMalformedLicense(id) {
+			t.Errorf("IsMalformedLicense(%q) = false, want true", id)
+		}
+	}
+	notMalformed := []string{"MIT", "NOASSERTION", "totally-unknown-thing", ""}
+	for _, id := range notMalformed {
+		if IsMalformedLicense(id) {
+			t.Errorf("IsMalformedLicense(%q) = true, want false", id)
 		}
 	}
 }
