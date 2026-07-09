@@ -22,6 +22,10 @@ const (
 	defaultModel     = "claude-haiku-4-5"
 	anthropicVersion = "2023-06-01"
 	maxResponseBytes = 1 << 16 // 64KB — responses here are short summaries
+	// keyPlaceholder is the value Terraform seeds into the anthropic-api-key
+	// secret before a real key is set out-of-band. Treated as "not configured"
+	// so New() returns nil rather than a client that 401s on every call.
+	keyPlaceholder = "placeholder-set-real-value-out-of-band"
 )
 
 // Client wraps the Anthropic Messages API. Nil-safe: a nil *Client's methods
@@ -41,7 +45,7 @@ func New() *Client {
 	if key == "" {
 		key = os.Getenv("ANTHROPIC_API_KEY")
 	}
-	if key == "" {
+	if key == "" || key == keyPlaceholder {
 		return nil
 	}
 

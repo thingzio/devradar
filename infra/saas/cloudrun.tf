@@ -91,6 +91,19 @@ resource "google_cloud_run_v2_service" "serve" {
         value = var.admin_users
       }
 
+      # Anthropic API key — optional. Powers the admin /metrics AI health summary
+      # (and later narratives). Placeholder until set out-of-band; the claude
+      # client treats the placeholder as unset and simply omits the summary.
+      env {
+        name = "ANTHROPIC_API_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.anthropic_api_key.secret_id
+            version = "latest"
+          }
+        }
+      }
+
       resources {
         limits = {
           cpu    = "1000m"

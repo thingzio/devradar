@@ -42,7 +42,8 @@ resource "google_secret_manager_secret_version" "send_api_key_placeholder" {
   }
 }
 
-# Anthropic API key — optional (OpenVEX stubbing / future narratives). Out-of-band.
+# Anthropic API key — optional (admin /metrics AI health summary; OpenVEX
+# stubbing / future narratives). Value set out-of-band.
 resource "google_secret_manager_secret" "anthropic_api_key" {
   secret_id = "${var.prefix}-anthropic-api-key"
   project   = var.project_id
@@ -50,6 +51,20 @@ resource "google_secret_manager_secret" "anthropic_api_key" {
     auto {}
   }
   depends_on = [google_project_service.default]
+}
+
+# Placeholder version so serve (which references `latest`) can deploy before a
+# real key is set. Replace out-of-band (`gcloud secrets versions add`);
+# ignore_changes keeps that real value from being reverted on re-apply. The
+# claude client treats the placeholder as unset (New() → nil), so the AI health
+# summary simply stays absent until a real key is added.
+resource "google_secret_manager_secret_version" "anthropic_api_key_placeholder" {
+  secret      = google_secret_manager_secret.anthropic_api_key.id
+  secret_data = "placeholder-set-real-value-out-of-band"
+
+  lifecycle {
+    ignore_changes = [secret_data]
+  }
 }
 
 # GitHub OAuth App client secret — UI sign-in via GitHub. The client *ID* is a

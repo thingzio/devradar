@@ -11,7 +11,8 @@ locals {
     "roles/cloudsql.client",
     "roles/cloudsql.instanceUser",
     "roles/logging.logWriter",
-    "roles/monitoring.metricWriter",
+    "roles/monitoring.metricWriter", # write app metrics
+    "roles/monitoring.viewer",       # read time series for the admin /metrics page
   ]
 }
 

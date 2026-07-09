@@ -17,6 +17,17 @@ func TestNew_NilWithoutKey(t *testing.T) {
 	}
 }
 
+// TestNew_NilForPlaceholder verifies the Terraform bootstrap placeholder is
+// treated as "not configured" so New() returns nil instead of a client that
+// would 401 on every call.
+func TestNew_NilForPlaceholder(t *testing.T) {
+	t.Setenv("DEVRADAR_ANTHROPIC_API_KEY", "")
+	t.Setenv("ANTHROPIC_API_KEY", keyPlaceholder)
+	if c := New(); c != nil {
+		t.Fatalf("New() = %v, want nil for the seeded placeholder", c)
+	}
+}
+
 // TestNilClient_Safe verifies a nil client's methods are safe and no-op.
 func TestNilClient_Safe(t *testing.T) {
 	var c *Client
