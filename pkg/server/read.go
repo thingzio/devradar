@@ -43,7 +43,7 @@ func (s *Server) handleListImages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	images, next, err := s.store.ListRepoImages(r.Context(), tn.ID, min, r.URL.Query().Get("q"),
-		r.URL.Query().Get("tag"), r.URL.Query().Get("sort"), r.URL.Query().Get("dir"), r.URL.Query().Get("cursor"), pageLimit(r))
+		r.URL.Query().Get("label"), r.URL.Query().Get("sort"), r.URL.Query().Get("dir"), r.URL.Query().Get("cursor"), pageLimit(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list images")
 		return

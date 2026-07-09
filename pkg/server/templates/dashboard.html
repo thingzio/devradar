@@ -6,14 +6,14 @@
 
   <form class="searchbar" method="get" action="/dashboard">
     <input type="search" name="q" value="{{.Query}}" placeholder="Filter images by name…" autocomplete="off">
-    {{if .Tags}}
-    <select name="tag" onchange="this.form.submit()" title="Filter by tag">
-      <option value="">all tags</option>
-      {{$t := .Tag}}{{range .Tags}}<option value="{{.}}" {{if eq . $t}}selected{{end}}>{{.}}</option>{{end}}
+    {{if .Labels}}
+    <select name="label" onchange="this.form.submit()" title="Filter by label">
+      <option value="">all labels</option>
+      {{$l := .Label}}{{range .Labels}}<option value="{{.}}" {{if eq . $l}}selected{{end}}>{{.}}</option>{{end}}
     </select>
     {{end}}
     <button class="btn" type="submit">Search</button>
-    {{if or .Query .Tag}}<a class="btn secondary" href="/dashboard">Clear</a>{{end}}
+    {{if or .Query .Label}}<a class="btn secondary" href="/dashboard">Clear</a>{{end}}
   </form>
 
   {{if .ScanStatus}}<p class="scan-status">{{.ScanStatus}}</p>{{end}}
@@ -39,7 +39,7 @@
       </form>
     </div>
 
-    {{$qs := printf "min_severity=%s" .MinSeverity}}{{if .Query}}{{$qs = printf "%s&q=%s" $qs .Query}}{{end}}{{if .Tag}}{{$qs = printf "%s&tag=%s" $qs .Tag}}{{end}}
+    {{$qs := printf "min_severity=%s" .MinSeverity}}{{if .Query}}{{$qs = printf "%s&q=%s" $qs .Query}}{{end}}{{if .Label}}{{$qs = printf "%s&label=%s" $qs .Label}}{{end}}
     <table class="images">
       <thead>
         <tr>
@@ -78,7 +78,7 @@
       </tbody>
     </table>
     {{if .NextCursor}}
-    <p class="loadmore"><a href="/dashboard?min_severity={{.MinSeverity}}{{if .Query}}&q={{.Query}}{{end}}{{if .Tag}}&tag={{.Tag}}{{end}}{{if .Sort}}&sort={{.Sort}}&dir={{.Dir}}{{end}}&cursor={{.NextCursor}}">Load more →</a></p>
+    <p class="loadmore"><a href="/dashboard?min_severity={{.MinSeverity}}{{if .Query}}&q={{.Query}}{{end}}{{if .Label}}&label={{.Label}}{{end}}{{if .Sort}}&sort={{.Sort}}&dir={{.Dir}}{{end}}&cursor={{.NextCursor}}">Load more →</a></p>
     {{end}}
   </div>
 </main>

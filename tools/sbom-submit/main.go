@@ -19,7 +19,7 @@
 //
 //	DR_TOKEN     API token (required — the tool errors out if unset).
 //	DR_BASE_URL  Target service. Defaults to https://devradar.thingz.io.
-//	DR_TAGS      Optional comma-separated grouping tags (e.g. "team-x,prod").
+//	DR_LABELS    Optional comma-separated grouping labels (e.g. "team-x,prod").
 //
 // Image mode shells out to `syft` and `crane` (consistent with the scan job's
 // "shell out to pinned binaries, don't import" model — keeps their heavy
@@ -81,15 +81,15 @@ func main() {
 		version = tagOf(arg) // preserve the human tag (e.g. v1.20.2) the digest replaced
 	}
 
-	// Optional grouping tags, comma-separated (e.g. DR_TAGS="team-x,prod").
-	var tags []string
-	for t := range strings.SplitSeq(os.Getenv("DR_TAGS"), ",") {
-		if t = strings.TrimSpace(t); t != "" {
-			tags = append(tags, t)
+	// Optional grouping labels, comma-separated (e.g. DR_LABELS="team-x,prod").
+	var labels []string
+	for l := range strings.SplitSeq(os.Getenv("DR_LABELS"), ",") {
+		if l = strings.TrimSpace(l); l != "" {
+			labels = append(labels, l)
 		}
 	}
 
-	if err := submit(base, token, sbomBytes, imageRef, version, tags); err != nil {
+	if err := submit(base, token, sbomBytes, imageRef, version, labels); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -138,7 +138,7 @@ func tagOf(image string) string {
 	return ""
 }
 
-func submit(base, token string, sbom []byte, imageRef, version string, tags []string) error {
+func submit(base, token string, sbom []byte, imageRef, version string, labels []string) error {
 	payload := map[string]any{"sbom": base64.StdEncoding.EncodeToString(sbom)}
 	if imageRef != "" {
 		payload["image_ref"] = imageRef
@@ -146,8 +146,8 @@ func submit(base, token string, sbom []byte, imageRef, version string, tags []st
 	if version != "" {
 		payload["version"] = version
 	}
-	if len(tags) > 0 {
-		payload["tags"] = tags
+	if len(labels) > 0 {
+		payload["labels"] = labels
 	}
 	body, _ := json.Marshal(payload)
 

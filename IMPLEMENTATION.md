@@ -393,9 +393,10 @@ The SBOM is self-contained — the spike ([SBOM Ingestion Spike](#sbom-ingestion
 |---|---|---|
 | `sbom` | **yes** | Base64-encoded SBOM bytes (CycloneDX or SPDX; gzip allowed within the size cap). |
 | `image_ref` | no | Override the image reference. The SBOM's digest is always trusted; this only *labels* it — Syft SPDX reports just `nginx`, Trivy embeds the full registry path, and a tenant may want their canonical name (`registry.internal/team/api:1.4.2`). |
+| `version` | no | The image tag (e.g. `v1.20.2`), shown per-SBOM in the UI. Parsed from `image_ref`'s tag if omitted. |
 | `format_hint` | no | `cyclonedx`\|`spdx`. Auto-detection is reliable; this is only a fast-fail assist. |
 | `generated_at` | no | Override the SBOM's timestamp, for the rare generator that omits it. |
-| `labels` | no | Free-form tenant tags (`env=prod`) for the tenant's own filtering. |
+| `labels` | no | Free-form grouping labels (e.g. `team-x`, `prod`) for the tenant's own fleet filtering on the dashboard. Distinct from `version` (the image tag). |
 
 Read endpoints (session or token auth):
 

@@ -959,9 +959,9 @@ func TestListRepoImages_RiskOrderAndPaging(t *testing.T) {
 	}
 }
 
-// TestSBOMTags verifies tags are stored at upsert (union on re-submit), listed
-// per tenant, and filter the image list.
-func TestSBOMTags(t *testing.T) {
+// TestSBOMLabels verifies grouping labels are stored at upsert (union on
+// re-submit), listed per tenant, and filter the image list.
+func TestSBOMLabels(t *testing.T) {
 	st, err := postgres.NewFromEnv(context.Background())
 	if err != nil {
 		t.Skipf("skipping (no database): %v", err)
@@ -975,14 +975,14 @@ func TestSBOMTags(t *testing.T) {
 	var tenantID string
 	if err := st.DB().QueryRowContext(ctx,
 		`INSERT INTO devradar_tenant (email) VALUES ($1) RETURNING id`,
-		"tag-"+suffix+"@example.com").Scan(&tenantID); err != nil {
+		"label-"+suffix+"@example.com").Scan(&tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
-	// Two images: prodImg tagged "prod", edgeImg tagged "edge".
-	mk := func(repo string, tags []string) {
+	// Two images: prodImg labeled "prod", edgeImg labeled "edge".
+	mk := func(repo string, labels []string) {
 		if _, _, err := st.UpsertSBOM(ctx, &postgres.SBOM{
 			ID: repo + suffix, TenantID: tenantID, ImageRef: repo, Repository: repo,
-			Digest: "sha256:" + repo + suffix, Format: "cyclonedx", ObjectPath: "gs://x", Tags: tags,
+			Digest: "sha256:" + repo + suffix, Format: "cyclonedx", ObjectPath: "gs://x", Labels: labels,
 		}); err != nil {
 			t.Fatalf("upsert %s: %v", repo, err)
 		}
@@ -990,21 +990,21 @@ func TestSBOMTags(t *testing.T) {
 	mk("reg/prod-"+suffix, []string{"prod"})
 	mk("reg/edge-"+suffix, []string{"edge"})
 
-	// Re-submit prod image with an extra tag → union, no dup.
+	// Re-submit prod image with an extra label → union, no dup.
 	mk("reg/prod-"+suffix, []string{"prod", "team-x"})
 
-	tags, err := st.TenantTags(ctx, tenantID)
+	labels, err := st.TenantLabels(ctx, tenantID)
 	if err != nil {
-		t.Fatalf("tenant tags: %v", err)
+		t.Fatalf("tenant labels: %v", err)
 	}
 	// Expect edge, prod, team-x (sorted, deduped).
 	want := map[string]bool{"edge": true, "prod": true, "team-x": true}
-	if len(tags) != 3 {
-		t.Fatalf("tenant tags = %v, want 3 distinct", tags)
+	if len(labels) != 3 {
+		t.Fatalf("tenant labels = %v, want 3 distinct", labels)
 	}
-	for _, tg := range tags {
-		if !want[tg] {
-			t.Errorf("unexpected tag %q", tg)
+	for _, l := range labels {
+		if !want[l] {
+			t.Errorf("unexpected label %q", l)
 		}
 	}
 
@@ -1014,17 +1014,17 @@ func TestSBOMTags(t *testing.T) {
 		t.Fatalf("filter edge: %v", err)
 	}
 	if len(edge) != 1 || edge[0].Repository != "reg/edge-"+suffix {
-		t.Errorf("tag=edge filter = %v, want just the edge image", edge)
+		t.Errorf("label=edge filter = %v, want just the edge image", edge)
 	}
 	// Filter by "team-x" (added on re-submit) → only the prod image.
 	tx, _, _ := st.ListRepoImages(ctx, tenantID, "negligible", "", "team-x", "", "", "", 50)
 	if len(tx) != 1 || tx[0].Repository != "reg/prod-"+suffix {
-		t.Errorf("tag=team-x filter = %v, want just the prod image", tx)
+		t.Errorf("label=team-x filter = %v, want just the prod image", tx)
 	}
 	// No filter → both images.
 	all, _, _ := st.ListRepoImages(ctx, tenantID, "negligible", "", "", "", "", "", 50)
 	if len(all) != 2 {
-		t.Errorf("no tag filter = %d images, want 2", len(all))
+		t.Errorf("no label filter = %d images, want 2", len(all))
 	}
 }
 

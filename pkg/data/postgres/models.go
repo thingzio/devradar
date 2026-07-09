@@ -8,7 +8,7 @@ type SBOM struct {
 	TenantID           string
 	ImageRef           string
 	Repository         string // grouping key: registry/path, no tag/digest
-	Version            string // the tag, e.g. "v1.20.2"; empty on digest-only submits
+	Version            string // the image tag, e.g. "v1.20.2"; empty on digest-only submits
 	Digest             string
 	Format             string
 	SpecVersion        string
@@ -18,7 +18,7 @@ type SBOM struct {
 	ObjectPath         string
 	VerificationStatus string
 	Status             string
-	Tags               []string // tenant grouping tags, set at submission
+	Labels             []string // tenant grouping labels, set at submission
 	GeneratedAt        time.Time
 	SubmittedAt        time.Time
 }

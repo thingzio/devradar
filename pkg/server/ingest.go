@@ -50,8 +50,8 @@ func maybeGunzip(b []byte, limit int) ([]byte, error) {
 type submitRequest struct {
 	SBOM        string   `json:"sbom"`                   // base64-encoded bytes (required)
 	ImageRef    string   `json:"image_ref,omitempty"`    // override the image reference
-	Version     string   `json:"version,omitempty"`      // human tag (e.g. "v1.20.2"); else parsed from image_ref
-	Tags        []string `json:"tags,omitempty"`         // tenant grouping tags (e.g. "team-x","prod")
+	Version     string   `json:"version,omitempty"`      // image tag (e.g. "v1.20.2"); else parsed from image_ref
+	Labels      []string `json:"labels,omitempty"`       // tenant grouping labels (e.g. "team-x","prod")
 	GeneratedAt string   `json:"generated_at,omitempty"` // RFC3339 override
 }
 
@@ -179,7 +179,7 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 		ToolVersion:  subj.ToolVersion,
 		PackageCount: subj.PackageCount,
 		ObjectPath:   objectPath,
-		Tags:         normalizeTags(req.Tags),
+		Labels:       normalizeLabels(req.Labels),
 		GeneratedAt:  generatedAt,
 	})
 	if err != nil {
@@ -213,23 +213,24 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// normalizeTags cleans tenant-supplied tags: trim, lowercase, drop empties,
-// dedupe, and bound count/length so an abusive submission can't bloat the row.
-func normalizeTags(in []string) []string {
-	const maxTags, maxLen = 20, 64
+// normalizeLabels cleans tenant-supplied grouping labels: trim, lowercase, drop
+// empties, dedupe, and bound count/length so an abusive submission can't bloat
+// the row.
+func normalizeLabels(in []string) []string {
+	const maxLabels, maxLen = 20, 64
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(in))
-	for _, t := range in {
-		t = strings.ToLower(strings.TrimSpace(t))
-		if t == "" || len(t) > maxLen {
+	for _, l := range in {
+		l = strings.ToLower(strings.TrimSpace(l))
+		if l == "" || len(l) > maxLen {
 			continue
 		}
-		if _, dup := seen[t]; dup {
+		if _, dup := seen[l]; dup {
 			continue
 		}
-		seen[t] = struct{}{}
-		out = append(out, t)
-		if len(out) >= maxTags {
+		seen[l] = struct{}{}
+		out = append(out, l)
+		if len(out) >= maxLabels {
 			break
 		}
 	}

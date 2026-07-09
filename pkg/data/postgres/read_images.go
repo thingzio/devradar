@@ -18,7 +18,7 @@ type RepoImage struct {
 	Repository  string         `json:"repository"`
 	SBOMCount   int            `json:"sbom_count"`
 	DigestCount int            `json:"digest_count"`
-	Versions    []string       `json:"versions,omitempty"` // distinct tags seen (may be empty)
+	Versions    []string       `json:"versions,omitempty"` // distinct image tags/versions seen (may be empty)
 	LatestAt    time.Time      `json:"latest_at"`          // newest submission for the repo
 	Counts      SeverityCounts `json:"counts"`             // rollup across the repo's findings
 	Fixable     int            `json:"fixable"`            // findings with a fix available (any severity)
@@ -43,13 +43,13 @@ var repoImageSortCols = map[string]sortCol{
 // page order. Keyset on (<sort-col>, repository). Every active SBOM contributes;
 // counts are the union of findings across the repo's SBOMs, trimmed to
 // minSeverity. Risk uses raw (untrimmed) counts, so ranking is threshold-stable.
-func (s *Store) ListRepoImages(ctx context.Context, tenantID, minSeverity, nameFilter, tagFilter, sortKey, sortDir, cursor string, limit int) (items []RepoImage, next string, err error) {
+func (s *Store) ListRepoImages(ctx context.Context, tenantID, minSeverity, nameFilter, labelFilter, sortKey, sortDir, cursor string, limit int) (items []RepoImage, next string, err error) {
 	eff, fetch := clampLimit(limit)
 	sort := resolveSort(sortKey, sortDir, repoImageSortCols, "risk")
 	cur, hasCur := decodeSortCursor(cursor)
 
-	// $1 tenant, $2 name filter, $3 tag filter (empty = no filter); keyset follows.
-	args := []any{tenantID, nameFilter, tagFilter}
+	// $1 tenant, $2 name filter, $3 label filter (empty = no filter); keyset follows.
+	args := []any{tenantID, nameFilter, labelFilter}
 	keyset := ""
 	if hasCur {
 		keyset = "WHERE " + sort.seek("repository", 4, 5)
@@ -84,7 +84,7 @@ func (s *Store) ListRepoImages(ctx context.Context, tenantID, minSeverity, nameF
 				AND NOT `+vexSuppressedByDigestCVE+`
 			WHERE sb.tenant_id = $1 AND sb.status = 'active'
 			  AND ($2 = '' OR sb.repository ILIKE '%%' || $2 || '%%')
-			  AND ($3 = '' OR $3 = ANY(sb.tags))
+			  AND ($3 = '' OR $3 = ANY(sb.labels))
 			GROUP BY sb.tenant_id, sb.repository
 		)
 		SELECT repository, sbom_count, digest_count, versions, latest_at,
@@ -170,25 +170,25 @@ func (s *Store) RepoSeverityTimeline(ctx context.Context, tenantID, repository s
 	return out, rows.Err()
 }
 
-// TenantTags returns the distinct tags across a tenant's active SBOMs, sorted —
-// the option set for the image tag filter.
-func (s *Store) TenantTags(ctx context.Context, tenantID string) ([]string, error) {
+// TenantLabels returns the distinct grouping labels across a tenant's active
+// SBOMs, sorted — the option set for the dashboard label filter.
+func (s *Store) TenantLabels(ctx context.Context, tenantID string) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT DISTINCT unnest(tags) AS tag
+		SELECT DISTINCT unnest(labels) AS label
 		FROM devradar_sbom
 		WHERE tenant_id = $1 AND status = 'active'
-		ORDER BY tag`, tenantID)
+		ORDER BY label`, tenantID)
 	if err != nil {
-		return nil, fmt.Errorf("tenant tags: %w", err)
+		return nil, fmt.Errorf("tenant labels: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []string
 	for rows.Next() {
-		var t string
-		if err := rows.Scan(&t); err != nil {
-			return nil, fmt.Errorf("scan tag: %w", err)
+		var l string
+		if err := rows.Scan(&l); err != nil {
+			return nil, fmt.Errorf("scan label: %w", err)
 		}
-		out = append(out, t)
+		out = append(out, l)
 	}
 	return out, rows.Err()
 }

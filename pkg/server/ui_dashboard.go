@@ -41,8 +41,8 @@ type dashboardView struct {
 	Version     string
 	MinSeverity string
 	Query       string   // active image name search
-	Tag         string   // active tag filter
-	Tags        []string // all tenant tags (filter options)
+	Label       string   // active label filter
+	Labels      []string // all tenant labels (filter options)
 	Sort        string
 	Dir         string
 	NextCursor  string
@@ -81,14 +81,14 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	// global order). Optional ?q filters by repository substring.
 	q := r.URL.Query()
 	query := q.Get("q")
-	tag := q.Get("tag")
-	images, next, err := s.store.ListRepoImages(r.Context(), tn.ID, min, query, tag,
+	label := q.Get("label")
+	images, next, err := s.store.ListRepoImages(r.Context(), tn.ID, min, query, label,
 		q.Get("sort"), q.Get("dir"), q.Get("cursor"), 50)
 	if err != nil {
 		http.Error(w, "failed to load dashboard", http.StatusInternalServerError)
 		return
 	}
-	tags, _ := s.store.TenantTags(r.Context(), tn.ID)
+	labels, _ := s.store.TenantLabels(r.Context(), tn.ID)
 
 	v := dashboardView{
 		Title:       "Images",
@@ -98,8 +98,8 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		Version:     s.opts.Version,
 		MinSeverity: min,
 		Query:       query,
-		Tag:         tag,
-		Tags:        tags,
+		Label:       label,
+		Labels:      labels,
 		Sort:        q.Get("sort"),
 		Dir:         q.Get("dir"),
 		NextCursor:  next,

@@ -23,34 +23,34 @@ func (s *Store) UpsertSBOM(ctx context.Context, sb *SBOM) (id string, inserted b
 	if !sb.GeneratedAt.IsZero() {
 		generatedAt = sb.GeneratedAt.UTC()
 	}
-	tags := sb.Tags
-	if tags == nil {
-		tags = []string{} // pq.Array(nil) sends SQL NULL; the column is NOT NULL
+	labels := sb.Labels
+	if labels == nil {
+		labels = []string{} // pq.Array(nil) sends SQL NULL; the column is NOT NULL
 	}
 	// The SBOM bytes are immutable and content-addressed, so on conflict we never
 	// touch content-derived columns (digest/format/package_count/tool/…). But the
-	// version (tag) is a caller-supplied *label*: a re-submit that now carries a
-	// tag should fill it in. COALESCE keeps an existing version when a later
-	// digest-only submit omits it, so the label is never wiped. `xmax = 0` is
-	// true only for a freshly inserted row (false for the DO UPDATE path), which
-	// is how we report `inserted` accurately without a second query.
-	// Tags union on conflict so a re-submit adds tags without dropping prior ones.
+	// version (image tag) is a caller-supplied label: a re-submit that now carries
+	// a tag should fill it in. COALESCE keeps an existing version when a later
+	// digest-only submit omits it, so it is never wiped. `xmax = 0` is true only
+	// for a freshly inserted row (false for the DO UPDATE path), which is how we
+	// report `inserted` accurately without a second query.
+	// Labels union on conflict so a re-submit adds labels without dropping prior ones.
 	err = s.db.QueryRowContext(ctx, `
 		INSERT INTO devradar_sbom
 			(id, tenant_id, image_ref, repository, version, digest, format, spec_version,
 			 tool, tool_version, package_count, object_path, verification_status, status,
-			 tags, generated_at)
+			 labels, generated_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 		ON CONFLICT (tenant_id, digest, format) DO UPDATE
 		SET version = COALESCE(EXCLUDED.version, devradar_sbom.version),
-		    tags = (SELECT COALESCE(array_agg(DISTINCT t), '{}')
-		            FROM unnest(devradar_sbom.tags || EXCLUDED.tags) t)
+		    labels = (SELECT COALESCE(array_agg(DISTINCT l), '{}')
+		            FROM unnest(devradar_sbom.labels || EXCLUDED.labels) l)
 		RETURNING id, (xmax = 0)`,
 		sb.ID, sb.TenantID, sb.ImageRef, sb.Repository, nullStr(sb.Version),
 		sb.Digest, sb.Format, sb.SpecVersion,
 		nullStr(sb.Tool), nullStr(sb.ToolVersion), sb.PackageCount, sb.ObjectPath,
 		defaultStr(sb.VerificationStatus, "unverified"), defaultStr(sb.Status, "active"),
-		pq.Array(tags), generatedAt,
+		pq.Array(labels), generatedAt,
 	).Scan(&id, &inserted)
 	if err != nil {
 		return "", false, fmt.Errorf("upsert sbom: %w", err)
