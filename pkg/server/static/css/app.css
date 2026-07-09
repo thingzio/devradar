@@ -263,6 +263,13 @@ code {
 .opt-list { margin: 0.4rem 0 0.6rem; padding-left: 1.2rem; }
 .opt-list li { margin: 0.3rem 0; font-size: 0.9rem; }
 
+/* Submit guide: recommended (CLI) card + manual-section divider */
+.card.recommended { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.card.recommended .card-head h2 { color: var(--accent); }
+.guide-h3 { font-size: 0.95rem; margin: 1rem 0 0.4rem; }
+.guide-h3:first-of-type { margin-top: 0.5rem; }
+.section-divider { margin: 2rem 0 0.25rem; padding-top: 1.5rem; border-top: 1px solid var(--border); }
+
 /* API reference page */
 .api-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 .endpoint { padding: 0.6rem 0; border-top: 1px solid var(--border); }

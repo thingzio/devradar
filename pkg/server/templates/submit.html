@@ -2,7 +2,42 @@
 {{template "nav" .}}
 <main class="page-content guide">
   <h1 class="page-title">Submit an SBOM</h1>
-  <p class="sub">DevRadar tracks an image by rescanning its SBOM daily — it never pulls the image. Generate the SBOM in your pipeline (or locally) and POST it here. Four steps, copy-paste ready.</p>
+  <p class="sub">DevRadar tracks an image by rescanning its SBOM — it never pulls the image. The easiest way to submit is the <strong>devradarctl</strong> CLI, which handles digest resolution, all-layers SBOM generation, and upload in one command. Prefer to do it by hand? The <a href="#manual">manual steps</a> are below.</p>
+
+  <div class="card recommended">
+    <div class="card-head"><h2>Recommended: the devradarctl CLI</h2><span class="pill">easiest</span></div>
+    <p style="margin-top:0"><a href="https://github.com/thingzio/devradarctl" rel="noopener noreferrer" target="_blank">devradarctl</a> resolves the image's manifest digest, generates an all-layers CycloneDX SBOM, and submits it — one step, no base64 or curl plumbing.</p>
+
+    <h3 class="guide-h3">1. Install</h3>
+    <div class="copyable">
+      <button class="copy-btn" type="button">Copy</button>
+      <pre>go install github.com/thingzio/devradarctl@latest</pre>
+    </div>
+    <p class="muted">Or grab a prebuilt binary from the <a href="https://github.com/thingzio/devradarctl/releases" rel="noopener noreferrer" target="_blank">releases page</a>. Submitting from an image needs <a href="https://github.com/anchore/syft" rel="noopener noreferrer" target="_blank">syft</a> on <code>PATH</code>; digest resolution is built in (no crane needed) and uses your ambient Docker credentials.</p>
+
+    <h3 class="guide-h3">2. Submit an image</h3>
+    <p style="margin-top:0">Mint a token on the <a href="/tokens">Tokens &amp; settings</a> page, then:</p>
+    <div class="copyable">
+      <button class="copy-btn" type="button">Copy</button>
+      <pre>export DEVRADAR_TOKEN=dr_xxxxxxxxxxxxxxxxxxxxxxxx
+export DEVRADAR_BASE_URL={{.BaseURL}}
+
+# resolve digest + generate all-layers SBOM + submit, in one step
+devradarctl submit --image alpine:3.20 --label team-x --label prod</pre>
+    </div>
+    <p class="muted">The token can also be piped via stdin (<code>echo "$DEVRADAR_TOKEN" | devradarctl submit …</code>). <code>--label</code> is repeatable (grouping labels); <code>--tag</code> overrides the recorded image version.</p>
+
+    <h3 class="guide-h3">Already have an SBOM file?</h3>
+    <p style="margin-top:0">Submit it directly — no syft needed. Pass <code>--image-ref</code> so it's pinned to the right digest:</p>
+    <div class="copyable">
+      <button class="copy-btn" type="button">Copy</button>
+      <pre>devradarctl submit --file alpine.cdx.json --image-ref alpine@sha256:…</pre>
+    </div>
+    <p class="muted" style="margin-bottom:0">Full flag/env reference: the <a href="https://github.com/thingzio/devradarctl#configuration" rel="noopener noreferrer" target="_blank">devradarctl README</a>.</p>
+  </div>
+
+  <h2 id="manual" class="section-divider">Manual submission</h2>
+  <p class="sub">Prefer to drive it yourself, or can't install the CLI? Generate the SBOM and POST it directly. Four steps, copy-paste ready.</p>
 
   <div class="guide-step">
     <div class="guide-step-n">1</div>
