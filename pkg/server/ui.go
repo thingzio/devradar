@@ -32,7 +32,16 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 		return sortHeader(label, key, base, qs, "sort", "dir", activeSort, activeDir)
 	},
 	"sorthp": sortHeader, // explicit param-prefix variant (e.g. "sbom_sort"/"sbom_dir")
+	"signed": signed,     // format a delta int as "+N" / "-N" / "0"
 }).ParseFS(templateFS, "templates/*.html"))
+
+// signed renders a delta as a leading-sign string for the admin trend row.
+func signed(n int) string {
+	if n > 0 {
+		return fmt.Sprintf("+%d", n)
+	}
+	return fmt.Sprintf("%d", n)
+}
 
 // sortHeader renders a clickable sortable column header (a full <a>). base is the
 // page path; qs is a query-string prefix carrying the filters to preserve (e.g.

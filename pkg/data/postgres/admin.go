@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -14,8 +15,9 @@ import (
 // spot. Callers must gate them behind middleware.RequireAdmin.
 
 // PlatformCounts is the live snapshot backing the admin dashboard. Every field
-// is computed on demand (no snapshot table); the supporting indexes make this
-// cheap. Point-in-time deltas (DoD/WoW/MoM) are intentionally omitted in v1.
+// is computed on demand; the supporting indexes make this cheap. Point-in-time
+// deltas (DoD/WoW/MoM) are served separately from devradar_platform_stats — see
+// SnapshotPlatformStats / PlatformDeltas.
 type PlatformCounts struct {
 	Tenants          int
 	TenantsActive    int
@@ -356,4 +358,139 @@ func (s *Store) AdminRequestRescan(ctx context.Context, sbomID string) error {
 		return sql.ErrNoRows
 	}
 	return nil
+}
+
+// ── Platform stats snapshots (devradar_platform_stats, migration 014) ─────────
+
+// PlatformSnapshot is one day's recorded platform state.
+type PlatformSnapshot struct {
+	Tenants       int
+	SBOMsActive   int
+	UniqueDigests int
+	OpenFindings  int
+	CriticalOpen  int
+	HighOpen      int
+	VEXStatements int
+}
+
+// SnapshotPlatformStats computes today's platform state and UPSERTs it into
+// devradar_platform_stats keyed by UTC date (last write of the day wins). Called
+// on each dashboard visit and once per scan-job run so point-in-time deltas have
+// data to compare. Returns the snapshot it wrote.
+func (s *Store) SnapshotPlatformStats(ctx context.Context) (*PlatformSnapshot, error) {
+	snap := &PlatformSnapshot{}
+
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM devradar_tenant`).Scan(&snap.Tenants); err != nil {
+		return nil, fmt.Errorf("snapshot tenants: %w", err)
+	}
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT count(*) FILTER (WHERE status = 'active'), count(DISTINCT digest)
+		FROM devradar_sbom`).Scan(&snap.SBOMsActive, &snap.UniqueDigests); err != nil {
+		return nil, fmt.Errorf("snapshot sboms: %w", err)
+	}
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT count(*),
+		       count(*) FILTER (WHERE severity = 'critical'),
+		       count(*) FILTER (WHERE severity = 'high')
+		FROM devradar_finding`).
+		Scan(&snap.OpenFindings, &snap.CriticalOpen, &snap.HighOpen); err != nil {
+		return nil, fmt.Errorf("snapshot findings: %w", err)
+	}
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM devradar_vex_statement`).Scan(&snap.VEXStatements); err != nil {
+		return nil, fmt.Errorf("snapshot vex: %w", err)
+	}
+
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO devradar_platform_stats
+			(snapshot_date, tenants, sboms_active, unique_digests,
+			 open_findings, critical_open, high_open, vex_statements, captured_at)
+		VALUES ((now() AT TIME ZONE 'UTC')::date, $1,$2,$3,$4,$5,$6,$7, now())
+		ON CONFLICT (snapshot_date) DO UPDATE SET
+			tenants = EXCLUDED.tenants,
+			sboms_active = EXCLUDED.sboms_active,
+			unique_digests = EXCLUDED.unique_digests,
+			open_findings = EXCLUDED.open_findings,
+			critical_open = EXCLUDED.critical_open,
+			high_open = EXCLUDED.high_open,
+			vex_statements = EXCLUDED.vex_statements,
+			captured_at = now()`,
+		snap.Tenants, snap.SBOMsActive, snap.UniqueDigests,
+		snap.OpenFindings, snap.CriticalOpen, snap.HighOpen, snap.VEXStatements); err != nil {
+		return nil, fmt.Errorf("upsert platform stats: %w", err)
+	}
+	return snap, nil
+}
+
+// PlatformDelta pairs a current value with its change vs a prior snapshot. Has
+// reports whether a baseline snapshot existed for that horizon (no baseline ⇒
+// the UI shows "—" rather than a misleading zero delta).
+type PlatformDelta struct {
+	Has   bool
+	Delta int
+}
+
+// PlatformDeltas returns, for each requested look-back in days, the difference
+// between the most recent snapshot and the newest snapshot on-or-before that
+// horizon, for each tracked metric. Keys of the returned map are the day counts
+// passed in (e.g. 1, 7, 30). The newest snapshot is taken as "current" so the
+// dashboard reflects the value written on this very visit.
+func (s *Store) PlatformDeltas(ctx context.Context, horizonsDays []int) (map[int]map[string]PlatformDelta, error) {
+	cur, ok, err := s.latestSnapshot(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+	out := map[int]map[string]PlatformDelta{}
+	if !ok {
+		return out, nil // no snapshots yet
+	}
+	for _, d := range horizonsDays {
+		prev, had, err := s.latestSnapshot(ctx, d)
+		if err != nil {
+			return nil, err
+		}
+		if !had {
+			prev = &PlatformSnapshot{} // no baseline: cells report Has=false, Delta unused
+		}
+		m := map[string]PlatformDelta{}
+		for _, f := range []struct {
+			key      string
+			cur, prv int
+		}{
+			{"tenants", cur.Tenants, prev.Tenants},
+			{"sboms_active", cur.SBOMsActive, prev.SBOMsActive},
+			{"unique_digests", cur.UniqueDigests, prev.UniqueDigests},
+			{"open_findings", cur.OpenFindings, prev.OpenFindings},
+			{"critical_open", cur.CriticalOpen, prev.CriticalOpen},
+			{"high_open", cur.HighOpen, prev.HighOpen},
+			{"vex_statements", cur.VEXStatements, prev.VEXStatements},
+		} {
+			m[f.key] = PlatformDelta{Has: had, Delta: f.cur - f.prv}
+		}
+		out[d] = m
+	}
+	return out, nil
+}
+
+// latestSnapshot returns the newest snapshot on-or-before (today - agoDays).
+// agoDays 0 means the newest snapshot overall (the current point).
+func (s *Store) latestSnapshot(ctx context.Context, agoDays int) (*PlatformSnapshot, bool, error) {
+	snap := &PlatformSnapshot{}
+	err := s.db.QueryRowContext(ctx, `
+		SELECT tenants, sboms_active, unique_digests, open_findings,
+		       critical_open, high_open, vex_statements
+		FROM devradar_platform_stats
+		WHERE snapshot_date <= (now() AT TIME ZONE 'UTC')::date - ($1 || ' days')::interval
+		ORDER BY snapshot_date DESC
+		LIMIT 1`, agoDays).
+		Scan(&snap.Tenants, &snap.SBOMsActive, &snap.UniqueDigests, &snap.OpenFindings,
+			&snap.CriticalOpen, &snap.HighOpen, &snap.VEXStatements)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("latest snapshot: %w", err)
+	}
+	return snap, true, nil
 }

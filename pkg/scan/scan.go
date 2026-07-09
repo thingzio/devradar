@@ -204,6 +204,18 @@ func (r *Runner) Execute(ctx context.Context) error {
 	// distinct-CVE target set includes anything this run just discovered. Additive
 	// overlay: a failure here degrades context, never the scan — log and move on.
 	r.refreshEnrichment(ctx)
+
+	// Record a daily platform snapshot for the admin dashboard's trend deltas, so
+	// they accrue even on days with no dashboard visit. Best-effort and optional:
+	// only the concrete postgres store implements it, and a failure never affects
+	// the scan outcome.
+	if snapshotter, ok := r.store.(interface {
+		SnapshotPlatformStats(context.Context) (*postgres.PlatformSnapshot, error)
+	}); ok {
+		if _, err := snapshotter.SnapshotPlatformStats(ctx); err != nil {
+			slog.Warn("platform stats snapshot failed", "error", err)
+		}
+	}
 	return nil
 }
 

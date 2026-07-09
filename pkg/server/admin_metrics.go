@@ -12,14 +12,29 @@ import (
 	"sync"
 	"time"
 
+	"github.com/thingzio/devradar/pkg/claude"
 	"github.com/thingzio/devradar/pkg/config"
 	"github.com/thingzio/devradar/pkg/middleware"
 )
 
 // The admin metrics page queries GCP Cloud Monitoring for the serve service and
-// the scan job, and renders the raw series. v1 has no Claude summary — the AI
-// health analysis the sibling services carry is a documented later addition (see
-// docs/ADMIN_CONSOLE.md); the seam is the RawMetrics render below.
+// the scan job, renders the raw series, and — when an Anthropic API key is
+// configured — prepends a short Claude-generated health analysis. The AI summary
+// is optional: with no key the page still renders the raw series.
+
+const (
+	analysisMaxTokens = 1024
+	analysisTimeout   = 30 * time.Second
+)
+
+// metricsAnalysisPrompt frames Claude as a health advisor for the operator.
+const metricsAnalysisPrompt = `You are a site-reliability advisor for DevRadar, a container-vulnerability
+SaaS on Google Cloud Run. It has two components: a serve service (ingest + read API + UI) and a scan
+job (a scheduled Cloud Run Job that rescans SBOMs with Grype and Trivy). You are given raw Cloud
+Monitoring time series for both. In 3-5 sentences, plain text (no markdown), tell the operator what
+the numbers say about health: call out elevated error rates, latency, saturation, or a scan job that
+is failing or not running. If everything looks nominal, say so plainly. Do not restate every metric —
+surface only what the operator should act on or be reassured by.`
 
 const (
 	monitoringBaseURL  = "https://monitoring.googleapis.com/v3/projects"
@@ -87,14 +102,37 @@ func (s *Server) handleAdminMetrics(w http.ResponseWriter, r *http.Request) {
 		raw = collectGCPMetrics(ctx, cfg, token, days)
 	}
 
+	// Optional Claude health analysis. Nil client (no API key) → skipped silently;
+	// on error we surface a short note but still render the raw series.
+	analysis, analysisErr := analyzeMetrics(r.Context(), raw)
+
 	render(w, "admin_metrics.html", s.adminBase(tn, "metrics", map[string]any{
-		"Title":      "Admin — Metrics",
-		"Disabled":   false,
-		"ProjectID":  cfg.projectID,
-		"Days":       days,
-		"DayOptions": metricDayOptions,
-		"RawMetrics": raw,
+		"Title":       "Admin — Metrics",
+		"Disabled":    false,
+		"ProjectID":   cfg.projectID,
+		"Days":        days,
+		"DayOptions":  metricDayOptions,
+		"RawMetrics":  raw,
+		"Analysis":    analysis,
+		"AnalysisErr": analysisErr,
 	}))
+}
+
+// analyzeMetrics asks Claude (Haiku) for a short health read on the raw series.
+// Returns ("", "") when no API key is configured (feature simply absent), or
+// ("", <note>) on an API error so the page can explain the empty analysis.
+func analyzeMetrics(ctx context.Context, raw string) (analysis, note string) {
+	c := claude.New()
+	if !c.Available() {
+		return "", ""
+	}
+	actx, cancel := context.WithTimeout(ctx, analysisTimeout)
+	defer cancel()
+	out, err := c.Summarize(actx, metricsAnalysisPrompt, raw, analysisMaxTokens)
+	if err != nil {
+		return "", "AI analysis unavailable: " + err.Error()
+	}
+	return out, ""
 }
 
 func gcpMetadataProjectID() string {

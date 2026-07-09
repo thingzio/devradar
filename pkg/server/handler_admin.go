@@ -10,6 +10,7 @@ import (
 
 	"github.com/thingzio/devradar/pkg/config"
 	"github.com/thingzio/devradar/pkg/data"
+	"github.com/thingzio/devradar/pkg/data/postgres"
 	"github.com/thingzio/devradar/pkg/middleware"
 	"github.com/thingzio/devradar/pkg/tenant"
 )
@@ -63,10 +64,66 @@ func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to load dashboard", http.StatusInternalServerError)
 		return
 	}
+
+	// Record today's snapshot (last write of the day wins), then read deltas.
+	// Best-effort: a snapshot/delta failure must not break the dashboard.
+	if _, err := s.store.SnapshotPlatformStats(r.Context()); err != nil {
+		slog.Warn("admin snapshot platform stats", "error", err)
+	}
+	deltas, err := s.store.PlatformDeltas(r.Context(), []int{1, 7, 30})
+	if err != nil {
+		slog.Warn("admin platform deltas", "error", err)
+		deltas = nil
+	}
+
 	render(w, "admin_dashboard.html", s.adminBase(tn, "dashboard", map[string]any{
-		"Title":  "Admin — Dashboard",
-		"Counts": counts,
+		"Title":     "Admin — Dashboard",
+		"Counts":    counts,
+		"TrendRows": trendRows(deltas),
 	}))
+}
+
+// trendCell is one Day/Week/Month delta cell.
+type trendCell struct {
+	Has   bool
+	Delta int
+}
+
+// trendRow is one metric's row across the three horizons.
+type trendRow struct {
+	Label string
+	Cells []trendCell
+}
+
+// trendRows flattens the deltas map into ordered, render-ready rows (nil when no
+// snapshots exist yet, so the template omits the whole section).
+func trendRows(deltas map[int]map[string]postgres.PlatformDelta) []trendRow {
+	if len(deltas) == 0 {
+		return nil
+	}
+	metrics := []struct{ key, label string }{
+		{"tenants", "Tenants"},
+		{"sboms_active", "Active SBOMs"},
+		{"open_findings", "Open findings"},
+		{"critical_open", "Critical open"},
+		{"high_open", "High open"},
+		{"vex_statements", "VEX statements"},
+	}
+	horizons := []int{1, 7, 30}
+	rows := make([]trendRow, 0, len(metrics))
+	for _, m := range metrics {
+		row := trendRow{Label: m.label}
+		for _, h := range horizons {
+			if window, ok := deltas[h]; ok {
+				d := window[m.key]
+				row.Cells = append(row.Cells, trendCell{Has: d.Has, Delta: d.Delta})
+			} else {
+				row.Cells = append(row.Cells, trendCell{})
+			}
+		}
+		rows = append(rows, row)
+	}
+	return rows
 }
 
 // handleAdminScans renders scan-job health.

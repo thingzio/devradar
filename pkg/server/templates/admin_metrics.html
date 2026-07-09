@@ -9,8 +9,7 @@
       serve service and the scan job.</p>
   </div>
   {{else}}
-  <p class="sub">Project <code>{{.ProjectID}}</code> · last {{.Days}} day(s).
-    <span class="muted">AI health summary is a later addition (v1 shows raw series).</span></p>
+  <p class="sub">Project <code>{{.ProjectID}}</code> · last {{.Days}} day(s).</p>
   <div class="card">
     <form class="row" method="get" action="/admin/metrics">
       <label>Window</label>
@@ -19,7 +18,20 @@
       </select>
       <noscript><button class="btn secondary" type="submit">Apply</button></noscript>
     </form>
-    <pre class="mono" style="overflow-x:auto;white-space:pre-wrap;font-size:.85rem">{{.RawMetrics}}</pre>
+
+    {{if .Analysis}}
+    <div class="card-head"><h2>Health analysis</h2></div>
+    <p>{{.Analysis}}</p>
+    {{else if .AnalysisErr}}
+    <p class="muted">{{.AnalysisErr}}</p>
+    {{else}}
+    <p class="muted">Set <code>ANTHROPIC_API_KEY</code> to enable an AI health summary.</p>
+    {{end}}
+
+    <details>
+      <summary class="muted">Raw metrics</summary>
+      <pre class="mono" style="overflow-x:auto;white-space:pre-wrap;font-size:.85rem">{{.RawMetrics}}</pre>
+    </details>
   </div>
   {{end}}
 </main>

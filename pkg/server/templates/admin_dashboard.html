@@ -2,7 +2,7 @@
 {{template "admin-nav" .}}
 <main class="page-content">
   <h1 class="page-title">Platform</h1>
-  <p class="sub">Live snapshot across all tenants. Point-in-time deltas are not shown in v1.</p>
+  <p class="sub">Live snapshot across all tenants, with day/week/month trend from daily snapshots.</p>
 
   {{with .Counts}}
   <section class="stats stats-3">
@@ -25,6 +25,24 @@
       <span class="sev sev-low">{{index .FindingsBySev "low"}} low</span> ·
       <span class="muted">{{index .FindingsBySev "negligible"}} negligible · {{index .FindingsBySev "unknown"}} unknown</span>
     </p>
+  </div>
+  {{end}}
+
+  {{if .TrendRows}}
+  <div class="card">
+    <div class="card-head"><h2>Trend</h2></div>
+    <p class="muted">Change vs the snapshot from 1 / 7 / 30 days ago. “—” means no snapshot that far back yet.</p>
+    <table>
+      <thead><tr><th>Metric</th><th>Day</th><th>Week</th><th>Month</th></tr></thead>
+      <tbody>
+        {{range .TrendRows}}
+        <tr>
+          <td>{{.Label}}</td>
+          {{range .Cells}}{{if .Has}}<td>{{signed .Delta}}</td>{{else}}<td class="muted">—</td>{{end}}{{end}}
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
   </div>
   {{end}}
 </main>

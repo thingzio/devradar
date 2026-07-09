@@ -116,9 +116,11 @@ plan, active↔suspended, set min_severity. **Danger zone**: delete tenant
 ### 5. `GET /admin/metrics` — Infra metrics + AI analysis
 
 Direct port of the sibling pattern. GCP Monitoring for the Cloud Run **service**
-(`devradar-saas-serve`) *and* **job** (`devradar-saas-scan` — execution count,
-duration, failures), plus DB metrics, summarized by Claude (Haiku). `?days=`
-selector; disabled-state when `GCP_PROJECT_ID` is unset.
+(`devradar-saas-serve`) *and* **job** (`devradar-saas-scan` — completed/running
+executions), `?days=` selector, disabled-state when `GCP_PROJECT_ID` is unset.
+A short **Claude health summary** (Haiku, via the nil-safe `pkg/claude`) is
+prepended when an Anthropic key is configured; with no key the page renders the
+raw series and a hint. Raw series live under a `<details>` disclosure.
 
 ## Actions
 
@@ -171,21 +173,16 @@ supporting indexes already exist:
 
 Cold-load latency is well under a second.
 
-**Deltas (DoD/WoW/MoM) are omitted in v1.** They split into two classes:
-
-- *Cumulative-by-`created_at`* metrics (tenants created, SBOMs ever submitted)
-  are live-computable and exact — these can carry a delta if desired.
-- *Point-in-time-state* metrics (SBOMs *active* 7d ago, findings *open* 7d ago)
-  are **not** reconstructable from current state. `devradar_finding` is
-  UPSERT-current-state only; it has no history. Replaying
-  `devradar_finding_event` to reconstruct a past open-set is a partition-spanning
-  aggregate over the product's largest table on every load — not worth it.
-
-DevPulse's `devpulse_platform_stats` snapshot table exists precisely to serve
-honest point-in-time deltas. DevRadar can add an analogous
-`devradar_platform_stats` **later, additively** (snapshot on dashboard visit +
-once per scan-job run). v1 ships live current tiles; deltas are a follow-up when
-the operator actually wants them.
+**Deltas (DoD/WoW/MoM) come from a daily snapshot table.** Point-in-time-state
+metrics (SBOMs *active* 7d ago, findings *open* 7d ago) are **not** reconstructable
+from current state — `devradar_finding` is UPSERT-current-state only, with no
+history. So `devradar_platform_stats` (migration 014) records the actual state
+once per UTC day (UPSERT, last write wins), written on each dashboard visit and
+once per scan-job run. `PlatformDeltas` subtracts the newest snapshot
+on-or-before each horizon (1/7/30d) from the current one; a missing baseline
+renders "—" rather than a misleading zero. Additive and reversible: dropping the
+table only removes the trend row. The live current tiles remain
+snapshot-independent.
 
 ## Implementation outline
 
@@ -205,14 +202,22 @@ the operator actually wants them.
 1. **Allowlist** — env var `DEVRADAR_ADMIN_USERS`, no DB role. (Matches siblings.)
 2. **Force rescan** — included.
 3. **Audit** — log-only (`slog.Warn`), no table. (Matches siblings.)
-4. **Aggregation** — live current tiles in v1; `devradar_platform_stats` snapshot
-   deferred until point-in-time deltas are wanted.
+4. **Aggregation** — live current tiles, plus a daily-snapshot trend row backed
+   by `devradar_platform_stats` (migration 014, shipped).
+5. **AI health summary** — shipped on the metrics page via nil-safe `pkg/claude`
+   (Haiku); optional on an Anthropic key.
+
+## Follow-ups shipped after v1
+
+- **`devradar_platform_stats` + DoD/WoW/MoM deltas** — daily snapshot table;
+  `SnapshotPlatformStats` (dashboard visit + scan-job run) and `PlatformDeltas`
+  drive the dashboard "Trend" row.
+- **AI health summary on Metrics** — `pkg/claude` (nil-safe, Haiku) prepends a
+  short read of the GCP series; degrades to raw-series-only with no API key.
 
 ## Open questions
 
-- **Force-rescan mechanism** — cleanest way to mark one SBOM "due now" without
-  invoking the scan job cross-process (nudge the staleness window vs. a dedicated
-  due-marker column). Settled in the implementation plan.
-- **Metrics page cost** — the sibling metrics handler can block for tens of
-  seconds on GCP + Anthropic calls. Keep synchronous (simple) or add a timeout /
-  cache? Recommend a hard context timeout, matching siblings' behavior, for v1.
+- **Metrics page cost** — the metrics handler can block for tens of seconds on
+  GCP + Anthropic calls; bounded by a hard context timeout (`metricsHandlerTO` +
+  a separate `analysisTimeout` for the Claude call). Revisit caching if it proves
+  slow in practice.
