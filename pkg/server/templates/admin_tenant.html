@@ -1,0 +1,76 @@
+{{template "head" .}}
+{{template "admin-nav" .}}
+<main class="page-content narrow">
+  <p><a href="/admin/tenants" class="muted">← Tenants</a></p>
+  <h1 class="page-title">{{.T.Email}}</h1>
+  {{template "admin-flash" .}}
+
+  {{with .Summary}}
+  <section class="stats stats-3">
+    <div class="stat"><span class="stat-n">{{.SBOMsActive}}</span><span class="stat-l">Active SBOMs · {{.SBOMsArchived}} archived</span></div>
+    <div class="stat"><span class="stat-n">{{.OpenFindings}}</span><span class="stat-l">Open findings</span></div>
+    <div class="stat"><span class="stat-n">{{if .LastScannedAt.IsZero}}—{{else}}{{.LastScannedAt.Format "01-02 15:04"}}{{end}}</span><span class="stat-l">Last scan</span></div>
+  </section>
+  {{end}}
+
+  <div class="card">
+    <div class="card-head"><h2>Account</h2></div>
+    <p class="muted">Created {{.T.CreatedAt.Format "2006-01-02"}} · status
+      {{if eq .T.Status "suspended"}}<span class="pill danger">suspended</span>{{else}}<span class="pill">active</span>{{end}}</p>
+
+    <form class="row" method="post" action="/admin/tenant/{{.T.ID}}/plan">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <label>Plan</label>
+      <select name="plan">{{$cur := .T.Plan}}{{range .Plans}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}</select>
+      <button class="btn secondary" type="submit">Save</button>
+    </form>
+
+    <form class="row" method="post" action="/admin/tenant/{{.T.ID}}/status">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <label>Status</label>
+      <select name="status">{{$cur := .T.Status}}{{range .Statuses}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}</select>
+      <button class="btn secondary" type="submit">Save</button>
+    </form>
+
+    <form class="row" method="post" action="/admin/tenant/{{.T.ID}}/min-severity">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <label>Min severity</label>
+      <select name="min_severity">{{$cur := .T.MinSeverity}}{{range .Severities}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}</select>
+      <button class="btn secondary" type="submit">Save</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>API tokens</h2></div>
+    <table>
+      <thead><tr><th>Name</th><th>Created</th><th>Last used</th><th></th></tr></thead>
+      <tbody>
+        {{range .Tokens}}
+        <tr>
+          <td>{{.Name}}</td>
+          <td class="muted">{{.CreatedAt.Format "2006-01-02"}}</td>
+          <td class="muted">{{if .LastUsed}}{{.LastUsed.Format "2006-01-02"}}{{else}}never{{end}}</td>
+          <td>
+            <form class="inline" method="post" action="/admin/tenant/{{$.T.ID}}/token/{{.ID}}/revoke">
+              <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+              <button class="btn danger" type="submit">Revoke</button>
+            </form>
+          </td>
+        </tr>
+        {{else}}
+        <tr><td colspan="4" class="muted">No tokens.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Danger zone</h2></div>
+    <p class="muted">Deleting a tenant cascades to its sessions, tokens, SBOMs, findings, and events. This cannot be undone.</p>
+    <form class="inline" method="post" action="/admin/tenant/{{.T.ID}}/delete" onsubmit="return confirm('Delete {{.T.Email}} and all its data?');">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <button class="btn danger" type="submit">Delete tenant</button>
+    </form>
+  </div>
+</main>
+{{template "foot" .}}

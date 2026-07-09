@@ -79,15 +79,19 @@ func (s *Store) ListActiveSBOMs(ctx context.Context) ([]*SBOM, error) {
 func (s *Store) ListScannableSBOMs(ctx context.Context, maxAge time.Duration) ([]*SBOM, error) {
 	// The staleness predicate is applied as an interval bound on the SBOM's latest
 	// scan_run. NOT EXISTS covers the never-scanned case (new submissions) so they
-	// are always due. Ordering by submitted_at keeps the oldest work first.
+	// are always due. An operator-set rescan_requested_at makes the SBOM due
+	// regardless of staleness (the admin "force rescan" override; cleared by
+	// ApplyScan so it fires once). Ordering by submitted_at keeps the oldest work
+	// first.
 	where := `WHERE sb.status = 'active'`
 	args := []any{}
 	if maxAge > 0 {
 		where += `
-		  AND NOT EXISTS (
+		  AND (sb.rescan_requested_at IS NOT NULL
+		    OR NOT EXISTS (
 		      SELECT 1 FROM devradar_scan_run sr
 		      WHERE sr.sbom_id = sb.id
-		        AND sr.scanned_at > now() - $1::interval)`
+		        AND sr.scanned_at > now() - $1::interval))`
 		args = append(args, fmt.Sprintf("%d seconds", int64(maxAge.Seconds())))
 	}
 	rows, err := s.db.QueryContext(ctx, `

@@ -1,0 +1,67 @@
+{{template "head" .}}
+{{template "admin-nav" .}}
+<main class="page-content">
+  <h1 class="page-title">Scan health</h1>
+  {{template "admin-flash" .}}
+
+  <section class="stats stats-3">
+    <div class="stat"><span class="stat-n">{{.Backlog.Due}}</span><span class="stat-l">Due for scan · {{if .Backlog.OldestDue.IsZero}}none pending{{else}}oldest {{.Backlog.OldestDue.Format "2006-01-02 15:04"}}{{end}}</span></div>
+    {{range .Freshness}}
+    <div class="stat"><span class="stat-n">{{.Scanner}}</span><span class="stat-l">db {{.DBVersion}} · {{.LastScanned.Format "01-02 15:04"}}</span></div>
+    {{end}}
+  </section>
+
+  <div class="card">
+    <div class="card-head"><h2>Recent scan runs</h2></div>
+    <table>
+      <thead><tr><th>When</th><th>Tenant</th><th>Image</th><th>Scanner</th><th>DB</th><th>Findings</th><th></th></tr></thead>
+      <tbody>
+        {{range .Runs}}
+        <tr>
+          <td>{{.ScannedAt.Format "01-02 15:04"}}</td>
+          <td class="muted">{{.TenantEmail}}</td>
+          <td><code>{{.ImageRef}}</code></td>
+          <td>{{.Scanner}}</td>
+          <td class="muted">{{.DBVersion}}</td>
+          <td>{{.FindingCount}}</td>
+          <td>
+            <form class="inline" method="post" action="/admin/scans/rescan/{{.SBOMID}}">
+              <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+              <button class="btn secondary" type="submit">Rescan</button>
+            </form>
+          </td>
+        </tr>
+        {{else}}
+        <tr><td colspan="7" class="muted">No scan runs yet.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Scan failures</h2></div>
+    <table>
+      <thead><tr><th>When</th><th>Tenant</th><th>Scanner</th><th>Stage</th><th>Error</th><th></th></tr></thead>
+      <tbody>
+        {{range .Failures}}
+        <tr>
+          <td>{{.OccurredAt.Format "01-02 15:04"}}</td>
+          <td class="muted">{{.TenantEmail}}</td>
+          <td>{{if .Scanner}}{{.Scanner}}{{else}}<span class="muted">—</span>{{end}}</td>
+          <td>{{.Stage}}</td>
+          <td><code>{{.Error}}</code></td>
+          <td>
+            <form class="inline" method="post" action="/admin/scans/reset-failure/{{.ID}}">
+              <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+              <button class="btn" type="submit">Clear</button>
+            </form>
+          </td>
+        </tr>
+        {{else}}
+        <tr><td colspan="6" class="muted">No failures. 🎉</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</main>
+{{template "foot" .}}

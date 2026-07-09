@@ -105,6 +105,32 @@ func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
 	mux.Handle("POST /tokens", authed(http.HandlerFunc(s.handleCreateToken)))
 	mux.Handle("POST /tokens/{id}/revoke", authed(http.HandlerFunc(s.handleRevokeToken)))
 	mux.Handle("POST /settings/min-severity", authed(http.HandlerFunc(s.handleSetMinSeverity)))
+
+	s.registerAdmin(mux, db)
+}
+
+// registerAdmin wires the operator console. Every route is gated by RequireAdmin
+// (email allowlist, 404 for non-admins — so the surface stays hidden); mutating
+// POSTs are additionally CSRF-validated. See handler_admin.go.
+func (s *Server) registerAdmin(mux *http.ServeMux, db *sql.DB) {
+	admin := middleware.RequireAdmin(db)
+	csrf := middleware.ValidateCSRF
+
+	mux.Handle("GET /admin", admin(http.HandlerFunc(s.handleAdminDashboard)))
+	mux.Handle("GET /admin/scans", admin(http.HandlerFunc(s.handleAdminScans)))
+	mux.Handle("GET /admin/scans/history", admin(http.HandlerFunc(s.handleAdminScanHistory)))
+	mux.Handle("GET /admin/tenants", admin(http.HandlerFunc(s.handleAdminTenants)))
+	mux.Handle("GET /admin/tenant/{id}", admin(http.HandlerFunc(s.handleAdminTenantDetail)))
+	mux.Handle("GET /admin/metrics", admin(http.HandlerFunc(s.handleAdminMetrics)))
+
+	mux.Handle("POST /admin/tenant/{id}/plan", admin(csrf(http.HandlerFunc(s.handleAdminSetPlan))))
+	mux.Handle("POST /admin/tenant/{id}/status", admin(csrf(http.HandlerFunc(s.handleAdminSetStatus))))
+	mux.Handle("POST /admin/tenant/{id}/min-severity", admin(csrf(http.HandlerFunc(s.handleAdminSetMinSeverity))))
+	mux.Handle("POST /admin/tenant/{id}/delete", admin(csrf(http.HandlerFunc(s.handleAdminDeleteTenant))))
+	mux.Handle("POST /admin/tenant/{id}/token/{tid}/revoke", admin(csrf(http.HandlerFunc(s.handleAdminRevokeToken))))
+	mux.Handle("POST /admin/invite", admin(csrf(http.HandlerFunc(s.handleAdminInvite))))
+	mux.Handle("POST /admin/scans/reset-failure/{id}", admin(csrf(http.HandlerFunc(s.handleAdminResetFailure))))
+	mux.Handle("POST /admin/scans/rescan/{sbomID}", admin(csrf(http.HandlerFunc(s.handleAdminRescan))))
 }
 
 func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {

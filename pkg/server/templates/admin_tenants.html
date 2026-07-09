@@ -1,0 +1,49 @@
+{{template "head" .}}
+{{template "admin-nav" .}}
+<main class="page-content">
+  <h1 class="page-title">Tenants</h1>
+  {{template "admin-flash" .}}
+
+  <div class="card">
+    <form class="row" method="get" action="/admin/tenants">
+      <input type="text" name="q" value="{{.Query}}" placeholder="Search email…">
+      <button class="btn secondary" type="submit">Search</button>
+    </form>
+    <table>
+      <thead><tr><th>Email</th><th>Plan</th><th>Status</th><th>Min severity</th><th>Created</th></tr></thead>
+      <tbody>
+        {{range .Tenants}}
+        <tr>
+          <td><a href="/admin/tenant/{{.ID}}">{{.Email}}</a></td>
+          <td>{{.Plan}}</td>
+          <td>{{if eq .Status "suspended"}}<span class="pill danger">suspended</span>{{else}}<span class="pill">active</span>{{end}}</td>
+          <td class="muted">{{if .MinSeverity}}{{.MinSeverity}}{{else}}(default){{end}}</td>
+          <td class="muted">{{.CreatedAt.Format "2006-01-02"}}</td>
+        </tr>
+        {{else}}
+        <tr><td colspan="5" class="muted">No tenants match.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+    {{if gt .TotalPages 1}}
+    <div class="row" style="justify-content:space-between">
+      <span class="muted">Page {{.Page}} of {{.TotalPages}} · {{.Total}} total</span>
+      <span>
+        {{if .HasPrev}}<a class="btn secondary" href="/admin/tenants?q={{.Query}}&page={{.PrevPage}}">← Prev</a>{{end}}
+        {{if .HasNext}}<a class="btn secondary" href="/admin/tenants?q={{.Query}}&page={{.NextPage}}">Next →</a>{{end}}
+      </span>
+    </div>
+    {{end}}
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Invite tenant</h2></div>
+    <p class="muted">Creates a verified tenant by email (sign-in remains passwordless).</p>
+    <form class="row" method="post" action="/admin/invite">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <input type="email" name="email" placeholder="person@example.com" required>
+      <button class="btn" type="submit">Invite</button>
+    </form>
+  </div>
+</main>
+{{template "foot" .}}

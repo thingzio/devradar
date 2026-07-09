@@ -54,6 +54,15 @@ func (s *Store) ApplyScan(ctx context.Context, sb *SBOM, scanner string, ver Ver
 		return err
 	}
 
+	// Clear any operator-requested rescan marker now that this SBOM has been
+	// scanned, so a "force rescan" fires exactly once. Idempotent across the two
+	// scanners in a run; a no-op when no override was set.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE devradar_sbom SET rescan_requested_at = NULL
+		 WHERE id = $1 AND rescan_requested_at IS NOT NULL`, sb.ID); err != nil {
+		return fmt.Errorf("clear rescan marker: %w", err)
+	}
+
 	// Cause is a property of the run, not of any single finding: one set of
 	// versions is being compared against one prior run, so every delta in this
 	// scan shares the same cause.

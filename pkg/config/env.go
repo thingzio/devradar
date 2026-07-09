@@ -141,6 +141,25 @@ func EnrichEnabled() bool {
 	return GetEnv("DEVRADAR_ENRICH", "true") != "false"
 }
 
+// AdminUsers returns the set of emails authorized for the operator admin console
+// (DEVRADAR_ADMIN_USERS, comma-separated), lower-cased and trimmed for
+// case-insensitive matching against the verified tenant email. Empty ⇒ nobody is
+// an admin and the whole /admin surface returns 404. Adding an admin is a config
+// change + redeploy, not a migration (mirrors DevPulse/DevTrace).
+func AdminUsers() []string {
+	raw := GetEnv("DEVRADAR_ADMIN_USERS", "")
+	if raw == "" {
+		return nil
+	}
+	var out []string
+	for u := range strings.SplitSeq(raw, ",") {
+		if e := strings.ToLower(strings.TrimSpace(u)); e != "" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // ScanMaxAge is the staleness window for scan-job work selection: an SBOM is
 // scanned only if never scanned or last scanned longer ago than this. Paired
 // with a frequent scheduler, it bounds per-SBOM scan frequency (default 12h ⇒

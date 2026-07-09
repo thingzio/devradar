@@ -1,0 +1,31 @@
+{{template "head" .}}
+{{template "admin-nav" .}}
+<main class="page-content">
+  <h1 class="page-title">Platform</h1>
+  <p class="sub">Live snapshot across all tenants. Point-in-time deltas are not shown in v1.</p>
+
+  {{with .Counts}}
+  <section class="stats stats-3">
+    <div class="stat"><span class="stat-n">{{.Tenants}}</span><span class="stat-l">Tenants · {{.TenantsActive}} active / {{.TenantsSuspended}} suspended</span></div>
+    <div class="stat"><span class="stat-n">{{.SBOMsActive}}</span><span class="stat-l">Active SBOMs · {{.SBOMsArchived}} archived / {{.UniqueDigests}} digests</span></div>
+    <div class="stat"><span class="stat-n danger-n">{{.OpenFindings}}</span><span class="stat-l">Open findings</span></div>
+  </section>
+  <section class="stats stats-3">
+    <div class="stat"><span class="stat-n">{{.Events24h}}</span><span class="stat-l">Events 24h · {{index .EventsByCause24h "image"}} image / {{index .EventsByCause24h "db"}} db / {{index .EventsByCause24h "tooling"}} tooling</span></div>
+    <div class="stat"><span class="stat-n danger-n">{{.Failures24h}}</span><span class="stat-l"><a href="/admin/scans">Scan failures 24h →</a></span></div>
+    <div class="stat"><span class="stat-n">{{.VEXStatements}}</span><span class="stat-l">VEX statements</span></div>
+  </section>
+
+  <div class="card">
+    <div class="card-head"><h2>Open findings by severity</h2></div>
+    <p>
+      <span class="sev sev-critical">{{index .FindingsBySev "critical"}} critical</span> ·
+      <span class="sev sev-high">{{index .FindingsBySev "high"}} high</span> ·
+      <span class="sev sev-medium">{{index .FindingsBySev "medium"}} medium</span> ·
+      <span class="sev sev-low">{{index .FindingsBySev "low"}} low</span> ·
+      <span class="muted">{{index .FindingsBySev "negligible"}} negligible · {{index .FindingsBySev "unknown"}} unknown</span>
+    </p>
+  </div>
+  {{end}}
+</main>
+{{template "foot" .}}

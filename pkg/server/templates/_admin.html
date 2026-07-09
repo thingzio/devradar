@@ -1,0 +1,19 @@
+{{define "admin-nav"}}
+<nav class="top-nav">
+  <a href="/overview" class="top-nav-brand">
+    <svg class="nav-logo" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><line x1="12" y1="12" x2="19" y2="5"/></svg>
+    Dev<span class="accent">Radar</span> <span class="muted">admin</span>
+  </a>
+  <div class="tabs">
+    <a href="/admin" class="tab {{if eq .AdminTab "dashboard"}}active{{end}}">Dashboard</a>
+    <a href="/admin/scans" class="tab {{if eq .AdminTab "scans"}}active{{end}}">Scans</a>
+    <a href="/admin/tenants" class="tab {{if eq .AdminTab "tenants"}}active{{end}}">Tenants</a>
+    <a href="/admin/metrics" class="tab {{if eq .AdminTab "metrics"}}active{{end}}">Metrics</a>
+  </div>
+  <div class="user-menu-wrap">
+    <a href="/overview" class="tab">← Exit admin</a>
+  </div>
+</nav>
+{{end}}
+
+{{define "admin-flash"}}{{if .Msg}}<div class="msg {{if eq .Msg "error"}}err{{else}}ok{{end}}">{{.Msg}}</div>{{end}}{{end}}
