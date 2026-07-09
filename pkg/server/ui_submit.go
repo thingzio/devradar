@@ -14,11 +14,12 @@ import (
 func (s *Server) handleSubmitGuide(w http.ResponseWriter, r *http.Request) {
 	tn := middleware.TenantFromContext(r.Context())
 	render(w, "submit.html", map[string]any{
-		"Title":    "Submit an SBOM",
-		"SignedIn": true,
-		"Tab":      "submit",
-		"Email":    tn.Email,
-		"Version":  s.opts.Version,
-		"BaseURL":  config.BaseURL(),
+		"Title":     "Submit an SBOM",
+		"SignedIn":  true,
+		"Tab":       "submit",
+		"Email":     tn.Email,
+		"AvatarURL": tn.AvatarURL,
+		"Version":   s.opts.Version,
+		"BaseURL":   config.BaseURL(),
 	})
 }

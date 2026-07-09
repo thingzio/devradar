@@ -108,6 +108,7 @@ a:hover { text-decoration: underline; }
   display: flex; align-items: center; justify-content: center;
   background: var(--accent); color: #fff; font-weight: 700; font-size: 0.9rem; text-transform: uppercase;
 }
+.user-avatar-img { object-fit: cover; background: var(--surface-alt); }
 .user-menu {
   position: absolute; top: 100%; right: 0; margin-top: 8px; z-index: 1000;
   background: var(--surface); border: 1px solid var(--border); border-radius: 8px;

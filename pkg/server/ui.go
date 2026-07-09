@@ -282,7 +282,7 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tn, err := tenant.ResolveByIdentity(ctx, s.store.DB(), tenant.ProviderGitHub, id.Subject, id.Email)
+	tn, err := tenant.ResolveByIdentity(ctx, s.store.DB(), tenant.ProviderGitHub, id.Subject, id.Email, id.AvatarURL)
 	if err != nil {
 		slog.Error("resolve identity", "error", err)
 		http.Redirect(w, r, loginPath+"?error=server", http.StatusFound)
@@ -322,6 +322,7 @@ func (s *Server) handleTokensPage(w http.ResponseWriter, r *http.Request) {
 		"Title":       "Tokens & settings",
 		"SignedIn":    true,
 		"Email":       tn.Email,
+		"AvatarURL":   tn.AvatarURL,
 		"Tokens":      tokens,
 		"NewToken":    r.URL.Query().Get("new"), // shown once after creation
 		"MinSeverity": tenantMinSeverity(tn),

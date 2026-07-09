@@ -12,12 +12,13 @@ import (
 // licensesView is the whole Licenses page model. Charts are pre-rendered inline
 // SVG (no client JS), matching the rest of the UI.
 type licensesView struct {
-	Title    string
-	SignedIn bool
-	Tab      string
-	Email    string
-	Version  string
-	HasData  bool
+	Title     string
+	SignedIn  bool
+	Tab       string
+	Email     string
+	AvatarURL string
+	Version   string
+	HasData   bool
 	// Headline stats.
 	PackageCount int
 	Unlicensed   int
@@ -66,7 +67,7 @@ func (s *Server) handleLicensesPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v := licensesView{
-		Title: "Licenses", SignedIn: true, Tab: "licenses", Email: tn.Email, Version: s.opts.Version,
+		Title: "Licenses", SignedIn: true, Tab: "licenses", Email: tn.Email, AvatarURL: tn.AvatarURL, Version: s.opts.Version,
 		HasData:      stats.Packages > 0,
 		PackageCount: stats.Packages,
 		Unlicensed:   stats.Unlicensed,

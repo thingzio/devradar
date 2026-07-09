@@ -15,11 +15,12 @@ import (
 var cvePattern = regexp.MustCompile(`(?i)^CVE-\d{4}-\d{4,}$`)
 
 type overviewView struct {
-	Title    string
-	SignedIn bool
-	Tab      string
-	Email    string
-	Version  string
+	Title     string
+	SignedIn  bool
+	Tab       string
+	Email     string
+	AvatarURL string
+	Version   string
 	// Fleet headline stats.
 	ImageCount int
 	TotalCount int
@@ -56,7 +57,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v := overviewView{
-		Title: "Overview", SignedIn: true, Tab: "overview", Email: tn.Email, Version: s.opts.Version,
+		Title: "Overview", SignedIn: true, Tab: "overview", Email: tn.Email, AvatarURL: tn.AvatarURL, Version: s.opts.Version,
 		ImageCount: fs.Images, TotalCount: fs.Total, CriticalCT: fs.Critical, HighCT: fs.High,
 		KEVCount: fs.KEV, FixablePct: pct(fs.Fixable, fs.Total), FailureCT: fs.Failures,
 		HasData:    fs.Total > 0,

@@ -58,6 +58,6 @@ func DestroySession(ctx context.Context, db *sql.DB, rawToken string) error {
 // match tenantColumns' order (scanTenant depends on it).
 func prefixed(a string) string {
 	return a + `.id, ` + a + `.email, ` + a + `.email_verified_at, ` + a + `.plan, ` +
-		a + `.status, ` + a + `.min_severity, ` + a + `.tos_accepted_at, ` +
+		a + `.status, ` + a + `.min_severity, ` + a + `.avatar_url, ` + a + `.tos_accepted_at, ` +
 		a + `.created_at, ` + a + `.updated_at`
 }

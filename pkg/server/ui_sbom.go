@@ -45,6 +45,7 @@ type sbomDetailView struct {
 	SignedIn    bool
 	Tab         string
 	Email       string
+	AvatarURL   string
 	Version     string
 	MinSeverity string
 
@@ -120,6 +121,7 @@ func (s *Server) handleSBOMDetail(w http.ResponseWriter, r *http.Request) {
 		SignedIn:       true,
 		Tab:            "images",
 		Email:          tn.Email,
+		AvatarURL:      tn.AvatarURL,
 		Version:        s.opts.Version,
 		MinSeverity:    min,
 		SBOMID:         detail.SBOMID,

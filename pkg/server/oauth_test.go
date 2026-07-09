@@ -75,8 +75,9 @@ func TestGitHubOAuth_LandingButton(t *testing.T) {
 // TestGitHubOAuth_HappyPath: a verified GitHub identity signs in, creating a
 // tenant and a session cookie, landing on /overview.
 func TestGitHubOAuth_HappyPath(t *testing.T) {
-	srv, _ := oauthServer(t, fakeOAuth{id: &oauth.Identity{
+	srv, st := oauthServer(t, fakeOAuth{id: &oauth.Identity{
 		Provider: tenant.ProviderGitHub, Subject: "12345", Email: "gh@example.com",
+		AvatarURL: "https://avatars.githubusercontent.com/u/12345?v=4",
 	}})
 	h := srv.Handler()
 
@@ -98,6 +99,16 @@ func TestGitHubOAuth_HappyPath(t *testing.T) {
 	}
 	if !gotSession {
 		t.Error("callback should mint a session cookie")
+	}
+
+	// The GitHub avatar is persisted on the tenant for the nav to render.
+	var avatar string
+	if err := st.DB().QueryRowContext(context.Background(),
+		`SELECT avatar_url FROM devradar_tenant WHERE email='gh@example.com'`).Scan(&avatar); err != nil {
+		t.Fatalf("query avatar: %v", err)
+	}
+	if avatar != "https://avatars.githubusercontent.com/u/12345?v=4" {
+		t.Errorf("avatar_url = %q, want the GitHub avatar", avatar)
 	}
 }
 

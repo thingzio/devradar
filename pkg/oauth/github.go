@@ -26,9 +26,10 @@ var ErrNoVerifiedEmail = errors.New("no primary verified email on provider accou
 // Identity is the proven result of an OAuth exchange: a provider-stable subject
 // and a verified email. Both are trusted inputs to tenant.ResolveByIdentity.
 type Identity struct {
-	Provider string // e.g. tenant.ProviderGitHub
-	Subject  string // provider's immutable user id (GitHub: numeric id as text)
-	Email    string // primary, provider-verified email
+	Provider  string // e.g. tenant.ProviderGitHub
+	Subject   string // provider's immutable user id (GitHub: numeric id as text)
+	Email     string // primary, provider-verified email
+	AvatarURL string // optional profile image URL (cosmetic; may be "")
 }
 
 // githubEndpoint is GitHub's OAuth 2.0 endpoint. Inlined (two constants) rather
@@ -83,7 +84,7 @@ func (g *GitHub) Exchange(ctx context.Context, code string) (*Identity, error) {
 	}
 	client := g.cfg.Client(ctx, tok)
 
-	id, err := g.userID(ctx, client)
+	id, avatar, err := g.userProfile(ctx, client)
 	if err != nil {
 		return nil, err
 	}
@@ -91,22 +92,23 @@ func (g *GitHub) Exchange(ctx context.Context, code string) (*Identity, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Identity{Provider: "github", Subject: id, Email: email}, nil
+	return &Identity{Provider: "github", Subject: id, Email: email, AvatarURL: avatar}, nil
 }
 
-// userID fetches the account's immutable numeric id via GET /user. The id (not
-// the renamable login) is the stable subject.
-func (g *GitHub) userID(ctx context.Context, client *http.Client) (string, error) {
+// userProfile fetches the account's immutable numeric id (the stable subject,
+// not the renamable login) and its avatar URL via GET /user.
+func (g *GitHub) userProfile(ctx context.Context, client *http.Client) (id, avatarURL string, err error) {
 	var u struct {
-		ID int64 `json:"id"`
+		ID        int64  `json:"id"`
+		AvatarURL string `json:"avatar_url"`
 	}
 	if err := getJSON(ctx, client, g.apiBase+"/user", &u); err != nil {
-		return "", fmt.Errorf("github get user: %w", err)
+		return "", "", fmt.Errorf("github get user: %w", err)
 	}
 	if u.ID == 0 {
-		return "", errors.New("github user id missing")
+		return "", "", errors.New("github user id missing")
 	}
-	return fmt.Sprintf("%d", u.ID), nil
+	return fmt.Sprintf("%d", u.ID), u.AvatarURL, nil
 }
 
 // primaryVerifiedEmail returns the account's primary, verified email. The

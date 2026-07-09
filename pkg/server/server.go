@@ -189,9 +189,10 @@ func securityHeaders(next http.Handler) http.Handler {
 		// only (one external app.js — no inline script). Styles allow 'unsafe-inline'
 		// for the small number of inline style= attributes; charts are inline SVG
 		// markup (not affected by CSP). No plugins, no framing, no <base> hijack.
+		// img-src also allows GitHub's avatar CDN so OAuth profile pictures render.
 		h.Set("Content-Security-Policy",
 			"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "+
-				"img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+				"img-src 'self' data: https://avatars.githubusercontent.com; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
 		if middleware.SessionCookieName() == "__Host-session" {
 			h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
 		}

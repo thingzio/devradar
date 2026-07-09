@@ -102,7 +102,7 @@ func ConsumeLoginToken(ctx context.Context, db *sql.DB, rawToken string) (*Tenan
 	// Route through the same identity spine as OAuth: a consumed magic link is a
 	// verified-email proof, modeled as a ('magiclink', email) identity so the
 	// identity table is a complete record of every sign-in method.
-	return ResolveByIdentity(ctx, db, ProviderMagicLink, email, email)
+	return ResolveByIdentity(ctx, db, ProviderMagicLink, email, email, "")
 }
 
 // PurgeExpiredLoginTokens deletes expired tokens (best-effort housekeeping).

@@ -15,13 +15,19 @@ import (
 // are open so DevRadar can be evaluated before sign-up. The nav adapts to
 // whether the viewer happens to be signed in.
 func (s *Server) handleAPIDocs(w http.ResponseWriter, r *http.Request) {
-	render(w, "api.html", map[string]any{
+	tn := s.currentTenant(r)
+	data := map[string]any{
 		"Title":    "API",
 		"Tab":      "api",
-		"SignedIn": s.signedIn(r),
+		"SignedIn": tn != nil,
 		"BaseURL":  config.BaseURL(),
 		"Version":  s.opts.Version,
-	})
+	}
+	if tn != nil {
+		data["Email"] = tn.Email
+		data["AvatarURL"] = tn.AvatarURL
+	}
+	render(w, "api.html", data)
 }
 
 // handleOpenAPISpec serves the embedded OpenAPI document at a clean top-level
@@ -44,11 +50,17 @@ func (s *Server) handleOpenAPISpec(w http.ResponseWriter, r *http.Request) {
 
 // signedIn reports whether the request carries a valid session — used by public
 // pages to render the signed-in nav for logged-in visitors without gating access.
-func (s *Server) signedIn(r *http.Request) bool {
+// currentTenant returns the signed-in tenant for a request, or nil if the
+// session is missing/invalid. Used by public pages (e.g. API docs) whose nav
+// adapts to the viewer.
+func (s *Server) currentTenant(r *http.Request) *tenant.Tenant {
 	c, err := r.Cookie(middleware.SessionCookieName())
 	if err != nil {
-		return false
+		return nil
 	}
-	_, err = tenant.ValidateSession(r.Context(), s.store.DB(), c.Value)
-	return err == nil
+	tn, err := tenant.ValidateSession(r.Context(), s.store.DB(), c.Value)
+	if err != nil {
+		return nil
+	}
+	return tn
 }

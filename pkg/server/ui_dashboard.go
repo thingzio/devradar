@@ -38,6 +38,7 @@ type dashboardView struct {
 	SignedIn    bool
 	Tab         string
 	Email       string
+	AvatarURL   string
 	Version     string
 	MinSeverity string
 	Query       string   // active image name search
@@ -95,6 +96,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		SignedIn:    true,
 		Tab:         "images",
 		Email:       tn.Email,
+		AvatarURL:   tn.AvatarURL,
 		Version:     s.opts.Version,
 		MinSeverity: min,
 		Query:       query,

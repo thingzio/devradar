@@ -32,7 +32,7 @@ func githubMux(emails string) *http.ServeMux {
 	})
 	mux.HandleFunc("/user", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":424242,"login":"octocat"}`))
+		_, _ = w.Write([]byte(`{"id":424242,"login":"octocat","avatar_url":"https://avatars.githubusercontent.com/u/424242?v=4"}`))
 	})
 	mux.HandleFunc("/user/emails", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -62,6 +62,9 @@ func TestExchange_PrimaryVerifiedEmail(t *testing.T) {
 	}
 	if id.Email != "mark@chmarny.com" {
 		t.Errorf("email = %q, want mark@chmarny.com", id.Email)
+	}
+	if id.AvatarURL != "https://avatars.githubusercontent.com/u/424242?v=4" {
+		t.Errorf("avatar = %q, want the /user avatar_url", id.AvatarURL)
 	}
 }
 

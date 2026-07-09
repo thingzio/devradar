@@ -28,6 +28,7 @@ type Tenant struct {
 	Plan            string
 	Status          string
 	MinSeverity     string // minimum severity of interest for the read API/alerts
+	AvatarURL       string // optional OAuth profile avatar (GitHub); "" for email-only
 	TOSAcceptedAt   *time.Time
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
@@ -41,14 +42,16 @@ type scanner interface {
 func scanTenant(s scanner) (*Tenant, error) {
 	var t Tenant
 	var verified, tos sql.NullTime
+	var avatar sql.NullString
 	err := s.Scan(&t.ID, &t.Email, &verified, &t.Plan, &t.Status, &t.MinSeverity,
-		&tos, &t.CreatedAt, &t.UpdatedAt)
+		&avatar, &tos, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	if verified.Valid {
 		t.EmailVerifiedAt = &verified.Time
 	}
+	t.AvatarURL = avatar.String
 	if tos.Valid {
 		t.TOSAcceptedAt = &tos.Time
 	}
@@ -56,7 +59,7 @@ func scanTenant(s scanner) (*Tenant, error) {
 }
 
 const tenantColumns = `id, email, email_verified_at, plan, status, min_severity,
-	tos_accepted_at, created_at, updated_at`
+	avatar_url, tos_accepted_at, created_at, updated_at`
 
 // UpsertTenantByEmail creates the tenant for email if absent (else returns the
 // existing one) and marks the email verified — called when a magic-link is

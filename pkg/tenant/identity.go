@@ -28,29 +28,43 @@ const (
 // address); callers never pass an unverified address. There is no account-linking
 // UI: if a provider reports a verified email that differs from an existing
 // tenant's, step 2 creates a distinct tenant — the email is the join key.
-func ResolveByIdentity(ctx context.Context, db *sql.DB, provider, subject, email string) (*Tenant, error) {
+//
+// avatarURL is an optional cosmetic profile image from the provider; pass "" for
+// providers that have none (magic-link). When non-empty it is refreshed on the
+// tenant on every sign-in, since the provider avatar can change.
+func ResolveByIdentity(ctx context.Context, db *sql.DB, provider, subject, email, avatarURL string) (*Tenant, error) {
 	email = NormalizeEmail(email)
 
 	// Fast path: identity already linked.
-	if t, err := getTenantByIdentity(ctx, db, provider, subject); err == nil {
-		return t, nil
-	} else if !errors.Is(err, ErrNotFound) {
+	t, err := getTenantByIdentity(ctx, db, provider, subject)
+	if err != nil && !errors.Is(err, ErrNotFound) {
 		return nil, err
+	}
+	if errors.Is(err, ErrNotFound) {
+		// First sign-in with this identity: resolve/create the tenant by email, then
+		// link. UpsertTenantByEmail is idempotent, and the identity insert is guarded
+		// by ON CONFLICT so a concurrent first sign-in cannot create a duplicate link.
+		t, err = UpsertTenantByEmail(ctx, db, email)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO devradar_identity (tenant_id, provider, subject, email)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (provider, subject) DO NOTHING`,
+			t.ID, provider, subject, email); err != nil {
+			return nil, fmt.Errorf("link identity: %w", err)
+		}
 	}
 
-	// First sign-in with this identity: resolve/create the tenant by email, then
-	// link. UpsertTenantByEmail is idempotent, and the identity insert is guarded
-	// by ON CONFLICT so a concurrent first sign-in cannot create a duplicate link.
-	t, err := UpsertTenantByEmail(ctx, db, email)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := db.ExecContext(ctx, `
-		INSERT INTO devradar_identity (tenant_id, provider, subject, email)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (provider, subject) DO NOTHING`,
-		t.ID, provider, subject, email); err != nil {
-		return nil, fmt.Errorf("link identity: %w", err)
+	// Refresh the avatar if the provider supplied one and it changed.
+	if avatarURL != "" && avatarURL != t.AvatarURL {
+		if _, err := db.ExecContext(ctx,
+			`UPDATE devradar_tenant SET avatar_url = $2, updated_at = now() WHERE id = $1`,
+			t.ID, avatarURL); err != nil {
+			return nil, fmt.Errorf("update avatar: %w", err)
+		}
+		t.AvatarURL = avatarURL
 	}
 	return t, nil
 }
