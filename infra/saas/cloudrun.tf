@@ -84,6 +84,13 @@ resource "google_cloud_run_v2_service" "serve" {
         }
       }
 
+      # Operator admin console allowlist. Emails only, not a secret — an empty
+      # value keeps /admin returning 404 for everyone.
+      env {
+        name  = "DEVRADAR_ADMIN_USERS"
+        value = var.admin_users
+      }
+
       resources {
         limits = {
           cpu    = "1000m"

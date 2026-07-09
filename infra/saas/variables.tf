@@ -71,6 +71,12 @@ variable "github_oauth_client_secret" {
   sensitive   = true
 }
 
+variable "admin_users" {
+  description = "Comma-separated verified emails allowed into the /admin operator console (DEVRADAR_ADMIN_USERS). Case-insensitive. Not a secret — it's an allowlist of operator emails, injected as a plain env var. Empty leaves the console fully hidden (every /admin route returns 404)."
+  type        = string
+  default     = ""
+}
+
 # --- Shared infrastructure (owned by thingzio/infra; referenced, not created) ---
 
 variable "vpc_id" {
