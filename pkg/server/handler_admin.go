@@ -150,11 +150,21 @@ func (s *Server) handleAdminScans(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to load scans", http.StatusInternalServerError)
 		return
 	}
-	failures, err := s.store.AdminRecentFailures(ctx, r.URL.Query().Get("scanner"), adminFailuresMax)
+	rows, err := s.store.AdminRecentFailures(ctx, r.URL.Query().Get("scanner"), adminFailuresMax)
 	if err != nil {
 		slog.Error("admin failures", "error", err)
 		http.Error(w, "failed to load scans", http.StatusInternalServerError)
 		return
+	}
+	// Split real errors from the informational zero-findings tripwire so the page
+	// can present them differently (red failures vs a calmer warnings section).
+	var failures, warnings []postgres.AdminFailure
+	for _, f := range rows {
+		if f.IsWarning() {
+			warnings = append(warnings, f)
+		} else {
+			failures = append(failures, f)
+		}
 	}
 
 	render(w, "admin_scans.html", s.adminBase(tn, "scans", map[string]any{
@@ -164,6 +174,7 @@ func (s *Server) handleAdminScans(w http.ResponseWriter, r *http.Request) {
 		"Freshness": freshness,
 		"Backlog":   backlog,
 		"Failures":  failures,
+		"Warnings":  warnings,
 		"Msg":       r.URL.Query().Get("msg"),
 	}))
 }

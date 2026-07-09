@@ -29,9 +29,17 @@ type PlatformCounts struct {
 	FindingsBySev    map[string]int // severity -> open finding count
 	Events24h        int
 	EventsByCause24h map[string]int // cause -> event count (last 24h)
-	Failures24h      int
+	Failures24h      int            // real failures (excludes zero-findings warnings)
+	Warnings24h      int            // zero-findings tripwires — informational, not errors
 	VEXStatements    int
 }
+
+// WarningStage is the scan_failure.stage recorded for the zero-findings tripwire.
+// It is a heuristic warning (a scanner returned nothing on a non-trivial SBOM,
+// usually cross-tool cataloger divergence — e.g. Trivy finds 0 where Grype finds
+// some), not a real scan error. Classified at read time so the console can show
+// it apart from genuine failures without a schema change.
+const WarningStage = "zero-findings"
 
 // AdminPlatformCounts computes the dashboard snapshot across all tenants.
 func (s *Store) AdminPlatformCounts(ctx context.Context) (*PlatformCounts, error) {
@@ -77,8 +85,11 @@ func (s *Store) AdminPlatformCounts(ctx context.Context) (*PlatformCounts, error
 
 	// Scan failures in the last 24h.
 	if err := s.db.QueryRowContext(ctx, `
-		SELECT count(*) FROM devradar_scan_failure
-		WHERE occurred_at > now() - interval '24 hours'`).Scan(&pc.Failures24h); err != nil {
+		SELECT count(*) FILTER (WHERE stage <> $1),
+		       count(*) FILTER (WHERE stage = $1)
+		FROM devradar_scan_failure
+		WHERE occurred_at > now() - interval '24 hours'`, WarningStage).
+		Scan(&pc.Failures24h, &pc.Warnings24h); err != nil {
 		return nil, fmt.Errorf("count failures: %w", err)
 	}
 
@@ -222,6 +233,10 @@ type AdminFailure struct {
 	Error       string
 	OccurredAt  time.Time
 }
+
+// IsWarning reports whether this row is the informational zero-findings tripwire
+// rather than a genuine scan error (see WarningStage).
+func (f AdminFailure) IsWarning() bool { return f.Stage == WarningStage }
 
 // AdminRecentFailures returns recent scan failures across all tenants, newest
 // first. A non-empty scanner filters to that scanner.

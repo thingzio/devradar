@@ -12,7 +12,7 @@
   </section>
   <section class="stats stats-3">
     <div class="stat"><span class="stat-n">{{.Events24h}}</span><span class="stat-l">Events 24h · {{index .EventsByCause24h "image"}} image / {{index .EventsByCause24h "db"}} db / {{index .EventsByCause24h "tooling"}} tooling</span></div>
-    <div class="stat"><span class="stat-n danger-n">{{.Failures24h}}</span><span class="stat-l"><a href="/admin/scans">Scan failures 24h →</a></span></div>
+    <div class="stat"><span class="stat-n danger-n">{{.Failures24h}}</span><span class="stat-l"><a href="/admin/scans">Scan failures 24h →</a> · {{.Warnings24h}} warnings</span></div>
     <div class="stat"><span class="stat-n">{{.VEXStatements}}</span><span class="stat-l">VEX statements</span></div>
   </section>
 
