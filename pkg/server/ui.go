@@ -73,6 +73,12 @@ func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("POST /auth/verify", s.handleVerify)
 	mux.HandleFunc("POST /auth/logout", s.handleLogout)
 
+	// Public API docs: a human-readable reference and the machine-readable spec.
+	// The endpoints they document require a token, but the docs themselves are
+	// open so DevRadar can be evaluated before signing up.
+	mux.HandleFunc("GET /api", s.handleAPIDocs)
+	mux.HandleFunc("GET /openapi.yaml", s.handleOpenAPISpec)
+
 	authed := middleware.RequireAuth(db, loginPath)
 	mux.Handle("GET /overview", authed(http.HandlerFunc(s.handleOverview)))
 	mux.Handle("GET /search", authed(http.HandlerFunc(s.handleSearch)))

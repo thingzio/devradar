@@ -1,0 +1,133 @@
+{{template "head" .}}
+{{template "nav" .}}
+<main class="page-content guide">
+  <div class="api-head">
+    <div>
+      <h1 class="page-title">REST API</h1>
+      <p class="sub">Everything in the UI is also a tenant-scoped REST API. Submit SBOMs and read findings, change history, and license data from any pipeline.</p>
+    </div>
+    <a class="btn secondary" href="/openapi.yaml" download>Download OpenAPI spec</a>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Authentication</h2></div>
+    <p style="margin-top:0">Every <code>/v1</code> endpoint requires an API token minted in <a href="/tokens">Tokens &amp; settings</a>. Send it as a bearer token:</p>
+    <div class="copyable">
+      <button class="copy-btn" type="button">Copy</button>
+      <pre>curl -sS "{{.BaseURL}}/v1/images" \
+  -H "Authorization: Bearer dr_xxxxxxxxxxxxxxxxxxxxxxxx"</pre>
+    </div>
+    <p class="muted" style="margin-bottom:0">New to DevRadar? Start with the <a href="/submit">submission guide</a> — it walks through generating and posting an SBOM.</p>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Conventions</h2></div>
+    <ul class="opt-list">
+      <li><strong>Base URL</strong> — <code>{{.BaseURL}}</code></li>
+      <li><strong>Responses</strong> — JSON objects. Errors are <code>{"error":"…"}</code> with a 4xx/5xx status.</li>
+      <li><strong>Pagination</strong> — list endpoints return at most <code>?limit</code> rows (default 100, max 1000) and a <code>next_cursor</code> when more exist; pass it back as <code>?cursor=</code>. Cursors are opaque and keyset-based (stable under concurrent writes).</li>
+      <li><strong>Severity filter</strong> — read endpoints accept <code>?min_severity=</code> (<code>critical</code>|<code>high</code>|<code>medium</code>|<code>low</code>|<code>negligible</code>; default is your account setting). <code>unknown</code> is always included. Each endpoint resolves it independently.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>SBOMs</h2></div>
+
+    <div class="endpoint">
+      <p class="ep-line"><span class="ep-m ep-post">POST</span><code class="ep-path">/v1/sboms</code> — submit an SBOM</p>
+      <p class="muted">Body fields (JSON): <code>sbom</code> (required, base64 bytes), <code>image_ref</code>, <code>version</code> (image tag), <code>labels</code> (grouping), <code>generated_at</code>. Idempotent per digest; returns <code>202</code> with <code>existing:true</code> if already stored. See the <a href="/submit">guide</a> for a full example.</p>
+    </div>
+
+    <div class="endpoint">
+      <p class="ep-line"><span class="ep-m ep-get">GET</span><code class="ep-path">/v1/sboms/{id}</code> — SBOM metadata</p>
+      <p class="muted">Metadata + severity breakdown. Params: <code>min_severity</code>.</p>
+    </div>
+
+    <div class="endpoint">
+      <p class="ep-line"><span class="ep-m ep-del">DELETE</span><code class="ep-path">/v1/sboms/{id}</code> — archive</p>
+      <p class="muted">Stops tracking (drops from scans + image list; history kept). Idempotent, returns <code>204</code>.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Images</h2></div>
+
+    <div class="endpoint">
+      <p class="ep-line"><span class="ep-m ep-get">GET</span><code class="ep-path">/v1/images</code> — list tracked images</p>
+      <p class="muted">Grouped by repository, risk-ranked. Params: <code>min_severity</code>, <code>q</code> (name filter), <code>label</code>, <code>sort</code>, <code>dir</code>, <code>cursor</code>, <code>limit</code>.</p>
+      <div class="copyable">
+        <button class="copy-btn" type="button">Copy</button>
+        <pre>curl -sS "{{.BaseURL}}/v1/images?min_severity=high&label=prod" \
+  -H "Authorization: Bearer $DR_TOKEN"</pre>
+      </div>
+    </div>
+
+    <div class="endpoint">
+      <p class="ep-line"><span class="ep-m ep-get">GET</span><code class="ep-path">/v1/images/sboms</code> — SBOMs for one image</p>
+      <p class="muted">Params: <code>repo</code> (required), <code>sort</code>, <code>dir</code>, <code>cursor</code>, <code>limit</code>.</p>
+    </div>
+
+    <div class="endpoint">
+      <p class="ep-line"><span class="ep-m ep-get">GET</span><code class="ep-path">/v1/images/timeline</code> — change history across all digests</p>
+      <p class="muted">The change log for one image over time. Params: <code>repo</code> (or legacy <code>ref</code>), <code>min_severity</code>, <code>sort</code>, <code>dir</code>, <code>cursor</code>, <code>limit</code>.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Findings &amp; changes</h2></div>
+
+    <div class="endpoint">
+      <p class="ep-line"><span class="ep-m ep-get">GET</span><code class="ep-path">/v1/sboms/{id}/findings</code> — current findings</p>
+      <p class="muted">Params: <code>min_severity</code>, <code>fixable=true</code>, <code>suppressed=true</code>, <code>sort</code>, <code>dir</code>, <code>cursor</code>, <code>limit</code>. Each finding carries EPSS/KEV risk overlays when available.</p>
+    </div>
+
+    <div class="endpoint">
+      <p class="ep-line"><span class="ep-m ep-get">GET</span><code class="ep-path">/v1/sboms/{id}/events</code> — change log</p>
+      <p class="muted">Added / resolved / re-rated / fixed events, newest first, each labeled with its cause (image | db | tooling). Params: <code>min_severity</code>, <code>cursor</code>, <code>limit</code>.</p>
+    </div>
+
+    <div class="endpoint">
+      <p class="ep-line"><span class="ep-m ep-get">GET</span><code class="ep-path">/v1/sboms/{id}/failures</code> — scan issues</p>
+      <p class="muted">Recent scan failures (a scanner errored or returned nothing) for one SBOM. Params: <code>limit</code>.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Licenses</h2></div>
+
+    <div class="endpoint">
+      <p class="ep-line"><span class="ep-m ep-get">GET</span><code class="ep-path">/v1/sboms/{id}/licenses</code> — package licenses</p>
+      <p class="muted">Per-package licenses, obligation category, and compliance-policy verdict (violations first).</p>
+    </div>
+
+    <div class="endpoint">
+      <p class="ep-line"><span class="ep-m ep-get">GET</span><code class="ep-path">/v1/licenses</code> — fleet license rollup</p>
+      <p class="muted">Distribution by license family and category, plus unlicensed and violation counts.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>VEX</h2></div>
+
+    <div class="endpoint">
+      <p class="ep-line"><span class="ep-m ep-post">POST</span><code class="ep-path">/v1/vex</code> — submit an OpenVEX document</p>
+      <p class="muted">Raw <a href="https://github.com/openvex/spec" rel="noopener noreferrer" target="_blank">OpenVEX</a> JSON body. Matched <code>not_affected</code>/<code>fixed</code> statements suppress those findings (read-time overlay, digest-scoped). Response reports matched/unmatched/skipped counts.</p>
+    </div>
+
+    <div class="endpoint">
+      <p class="ep-line"><span class="ep-m ep-get">GET</span><code class="ep-path">/v1/vex</code> — list VEX documents</p>
+      <p class="muted">The tenant's submitted VEX documents (metadata only).</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Machine-readable spec</h2></div>
+    <p style="margin-top:0">The full contract — every parameter, schema, and response — is published as an OpenAPI 3.1 document. Use it with Postman, code generators, or the CLI.</p>
+    <div class="copyable">
+      <button class="copy-btn" type="button">Copy</button>
+      <pre>curl -sS {{.BaseURL}}/openapi.yaml -o devradar-openapi.yaml</pre>
+    </div>
+    <p class="muted" style="margin-bottom:0"><a href="/openapi.yaml" download>Download OpenAPI spec →</a></p>
+  </div>
+</main>
+{{template "foot" .}}

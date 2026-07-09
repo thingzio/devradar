@@ -13,3 +13,6 @@ ignore: |
   vendor/
   dist/
   .spike/
+  # OpenAPI contract — hand-authored in flow style, validated by `redocly lint`,
+  # not subject to the config-YAML style rules.
+  pkg/server/static/openapi.yaml

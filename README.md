@@ -411,6 +411,10 @@ Note the license endpoints work **before** `make scan` — they read the ingest-
 inventory, not scan results. Set a compliance policy in the `/licenses` UI to flag
 packages carrying a denied license category.
 
+**Full API reference.** Every endpoint is documented at **`/api`** (a human-readable
+page) and **`/openapi.yaml`** (a machine-readable OpenAPI 3.1 spec for Postman,
+codegen, etc.) — both public, no login required.
+
 **Pagination.** List endpoints (`/v1/images`, `/v1/images/sboms`,
 `/v1/images/timeline`, `/v1/sboms/{id}/events`) return at most `?limit` rows
 (default 100, max 1000) and include a `next_cursor` when more exist — pass it

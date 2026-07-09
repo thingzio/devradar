@@ -108,6 +108,7 @@ curl -sS -X POST "$DR_BASE_URL/v1/sboms" \
   <div class="card">
     <div class="card-head"><h2>That's it</h2></div>
     <p class="muted" style="margin:0">The scan job runs on a schedule (every ~15 min) and picks up new SBOMs automatically — no manual trigger needed. License data is captured immediately at submission; vulnerability findings appear on <a href="/dashboard">Images</a> and licenses on <a href="/licenses">Licenses</a> after the next scan completes. Re-submitting the same image after a rebuild (new digest) tracks the change over time.</p>
+    <p class="muted" style="margin:0.6rem 0 0">Reading results back? See the full <a href="/api">REST API reference →</a></p>
   </div>
 </main>
 {{template "foot" .}}

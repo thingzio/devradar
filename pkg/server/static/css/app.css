@@ -263,6 +263,19 @@ code {
 .opt-list { margin: 0.4rem 0 0.6rem; padding-left: 1.2rem; }
 .opt-list li { margin: 0.3rem 0; font-size: 0.9rem; }
 
+/* API reference page */
+.api-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.endpoint { padding: 0.6rem 0; border-top: 1px solid var(--border); }
+.endpoint:first-of-type { border-top: 0; }
+.ep-line { display: flex; align-items: center; gap: 0.5rem; margin: 0 0 0.25rem; flex-wrap: wrap; }
+.ep-m { font-family: var(--font-mono); font-size: 0.7rem; font-weight: 700; letter-spacing: 0.03em;
+  padding: 0.12rem 0.45rem; border-radius: 4px; color: #fff; }
+.ep-get { background: #1a7f37; }
+.ep-post { background: #0969da; }
+.ep-del { background: #cf222e; }
+.ep-path { font-family: var(--font-mono); font-size: 0.9rem; background: none; border: 0; padding: 0; }
+.endpoint .muted { margin: 0; font-size: 0.88rem; }
+
 /* Change-log "unrated" toggle */
 .sev .chk { display: inline-flex; align-items: center; gap: 0.3rem; margin-left: 0.75rem; cursor: pointer; }
 
