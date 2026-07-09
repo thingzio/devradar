@@ -1,8 +1,11 @@
 package server
 
 import (
+	"crypto/rand"
+	"crypto/subtle"
 	"database/sql"
 	"embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"html/template"
@@ -13,6 +16,7 @@ import (
 	"github.com/thingzio/devradar/pkg/config"
 	"github.com/thingzio/devradar/pkg/data"
 	"github.com/thingzio/devradar/pkg/middleware"
+	"github.com/thingzio/devradar/pkg/oauth"
 	"github.com/thingzio/devradar/pkg/tenant"
 )
 
@@ -73,6 +77,12 @@ func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("POST /auth/verify", s.handleVerify)
 	mux.HandleFunc("POST /auth/logout", s.handleLogout)
 
+	// GitHub OAuth sign-in — registered only when configured (see Server.github).
+	if s.github != nil {
+		mux.HandleFunc("GET /auth/github", s.handleGitHubStart)
+		mux.HandleFunc("GET /auth/github/callback", s.handleGitHubCallback)
+	}
+
 	// Public API docs: a human-readable reference and the machine-readable spec.
 	// The endpoints they document require a token, but the docs themselves are
 	// open so DevRadar can be evaluated before signing up.
@@ -106,11 +116,12 @@ func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	render(w, "landing.html", map[string]any{
-		"Title":    "Sign in",
-		"SignedIn": false,
-		"Error":    r.URL.Query().Get("error"),
-		"Sent":     r.URL.Query().Get("sent") == "1",
-		"Version":  s.opts.Version,
+		"Title":       "Sign in",
+		"SignedIn":    false,
+		"Error":       r.URL.Query().Get("error"),
+		"Sent":        r.URL.Query().Get("sent") == "1",
+		"GitHubOAuth": s.github != nil,
+		"Version":     s.opts.Version,
 	})
 }
 
@@ -215,6 +226,89 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	middleware.ClearSessionCookie(w)
 	http.Redirect(w, r, loginPath, http.StatusFound)
+}
+
+// oauthStateTTL bounds how long a started OAuth flow may take to complete. Long
+// enough for the user to authorize at GitHub, short enough to limit replay of a
+// leaked state cookie.
+const oauthStateTTL = 10 * time.Minute
+
+// handleGitHubStart begins the GitHub OAuth flow: it mints a random state,
+// binds it to the browser in a short-lived HttpOnly cookie (CSRF defense), and
+// redirects to GitHub's authorize URL. The callback re-checks the state.
+func (s *Server) handleGitHubStart(w http.ResponseWriter, r *http.Request) {
+	state, err := randomState()
+	if err != nil {
+		slog.Error("oauth state generation", "error", err)
+		http.Redirect(w, r, loginPath+"?error=server", http.StatusFound)
+		return
+	}
+	middleware.SetOAuthStateCookie(w, state, int(oauthStateTTL.Seconds()))
+	http.Redirect(w, r, s.github.AuthCodeURL(state), http.StatusFound)
+}
+
+// handleGitHubCallback completes the flow. It verifies the state matches the
+// cookie (CSRF), exchanges the code for a provider-verified identity, resolves
+// (or creates) the tenant by that verified email, and mints a session. An
+// unverified provider account is rejected with a specific message.
+func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// CSRF: the state in the query must match the one we set on the browser, and
+	// the cookie is single-use — clear it regardless of outcome.
+	c, err := r.Cookie(middleware.OAuthStateCookieName())
+	middleware.ClearOAuthStateCookie(w)
+	state := r.URL.Query().Get("state")
+	if err != nil || state == "" || subtle.ConstantTimeCompare([]byte(c.Value), []byte(state)) != 1 {
+		slog.Warn("oauth state mismatch")
+		http.Redirect(w, r, loginPath+"?error=oauth", http.StatusFound)
+		return
+	}
+
+	code := r.URL.Query().Get("code")
+	if code == "" {
+		http.Redirect(w, r, loginPath+"?error=oauth", http.StatusFound)
+		return
+	}
+
+	id, err := s.github.Exchange(ctx, code)
+	if err != nil {
+		if errors.Is(err, oauth.ErrNoVerifiedEmail) {
+			http.Redirect(w, r, loginPath+"?error=unverified", http.StatusFound)
+			return
+		}
+		slog.Error("github oauth exchange", "error", err)
+		http.Redirect(w, r, loginPath+"?error=oauth", http.StatusFound)
+		return
+	}
+
+	tn, err := tenant.ResolveByIdentity(ctx, s.store.DB(), tenant.ProviderGitHub, id.Subject, id.Email)
+	if err != nil {
+		slog.Error("resolve identity", "error", err)
+		http.Redirect(w, r, loginPath+"?error=server", http.StatusFound)
+		return
+	}
+	if tn.Status == tenant.StatusSuspended {
+		http.Redirect(w, r, loginPath+"?error=suspended", http.StatusFound)
+		return
+	}
+
+	sess, err := tenant.CreateSession(ctx, s.store.DB(), tn.ID, sessionTTL)
+	if err != nil {
+		http.Redirect(w, r, loginPath+"?error=server", http.StatusFound)
+		return
+	}
+	middleware.SetSessionCookie(w, sess, int(sessionTTL.Seconds()))
+	http.Redirect(w, r, "/overview", http.StatusFound)
+}
+
+// randomState returns a 256-bit URL-safe random string for the OAuth state.
+func randomState() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 func (s *Server) handleTokensPage(w http.ResponseWriter, r *http.Request) {

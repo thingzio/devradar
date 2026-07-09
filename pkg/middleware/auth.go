@@ -121,6 +121,40 @@ func SetSessionCookie(w http.ResponseWriter, token string, maxAge int) {
 // ClearSessionCookie expires the session cookie.
 func ClearSessionCookie(w http.ResponseWriter) { SetSessionCookie(w, "", -1) }
 
+const (
+	oauthStateSecure = "__Host-oauth_state"
+	oauthStatePlain  = "oauth_state"
+)
+
+// oauthStateCookieName is the scheme-appropriate name for the OAuth CSRF state
+// cookie (the __Host- prefix is only valid over HTTPS with Secure set).
+func oauthStateCookieName() string {
+	if secure {
+		return oauthStateSecure
+	}
+	return oauthStatePlain
+}
+
+// OAuthStateCookieName returns the scheme-appropriate OAuth state cookie name.
+func OAuthStateCookieName() string { return oauthStateCookieName() }
+
+// SetOAuthStateCookie sets the short-lived, HttpOnly OAuth CSRF state cookie.
+// SameSite=Lax so it survives the top-level GET redirect back from the provider.
+func SetOAuthStateCookie(w http.ResponseWriter, state string, maxAge int) {
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // Secure is env-driven (BASE_URL scheme)
+		Name:     oauthStateCookieName(),
+		Value:    state,
+		Path:     "/",
+		MaxAge:   maxAge,
+		Secure:   secure,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+// ClearOAuthStateCookie expires the OAuth state cookie (single-use).
+func ClearOAuthStateCookie(w http.ResponseWriter) { SetOAuthStateCookie(w, "", -1) }
+
 func bearer(r *http.Request) string {
 	auth := r.Header.Get("Authorization")
 	if !strings.HasPrefix(auth, "Bearer ") {

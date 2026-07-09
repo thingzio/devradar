@@ -19,6 +19,7 @@ import (
 	"github.com/thingzio/devradar/pkg/gcs"
 	"github.com/thingzio/devradar/pkg/middleware"
 	drnet "github.com/thingzio/devradar/pkg/net"
+	"github.com/thingzio/devradar/pkg/oauth"
 )
 
 // Options configures the server.
@@ -30,10 +31,11 @@ type Options struct {
 
 // Server holds handler dependencies.
 type Server struct {
-	store *postgres.Store
-	blobs BlobStore
-	email drnet.Sender // nil in dev → magic links are logged, not sent
-	opts  Options
+	store  *postgres.Store
+	blobs  BlobStore
+	email  drnet.Sender  // nil in dev → magic links are logged, not sent
+	github OAuthProvider // nil when GitHub OAuth is not configured → button/routes hidden
+	opts   Options
 }
 
 // BlobStore persists and retrieves raw SBOM bytes (GCS in production).
@@ -41,10 +43,19 @@ type BlobStore interface {
 	Put(ctx context.Context, objectPath string, data []byte) error
 }
 
+// OAuthProvider turns an OAuth authorization code into a proven identity. The
+// interface is the test seam: production wires *oauth.GitHub; tests inject a fake
+// that returns a canned identity or ErrNoVerifiedEmail without any network.
+type OAuthProvider interface {
+	AuthCodeURL(state string) string
+	Exchange(ctx context.Context, code string) (*oauth.Identity, error)
+}
+
 // New builds a Server. email may be nil (development), in which case magic-link
-// URLs are logged instead of emailed.
-func New(store *postgres.Store, blobs BlobStore, email drnet.Sender, opts Options) *Server {
-	return &Server{store: store, blobs: blobs, email: email, opts: opts}
+// URLs are logged instead of emailed. github may be nil, in which case GitHub
+// sign-in is disabled (no button, no routes).
+func New(store *postgres.Store, blobs BlobStore, email drnet.Sender, github OAuthProvider, opts Options) *Server {
+	return &Server{store: store, blobs: blobs, email: email, github: github, opts: opts}
 }
 
 // Run is the entry point for the serve binary: it wires the store, blob store,
@@ -71,7 +82,17 @@ func Run(ctx context.Context, opts Options) error {
 		slog.Warn("SEND_API_KEY not set; magic-link URLs will be logged, not emailed")
 	}
 
-	return New(store, blobs, email, opts).Serve(ctx)
+	// GitHub OAuth sign-in. Optional: without both client id and secret the UI
+	// falls back to email-only sign-in (no button, no routes).
+	var github OAuthProvider
+	if config.GitHubOAuthConfigured() {
+		github = oauth.NewGitHub(config.GitHubClientID(), config.GitHubClientSecret(),
+			config.GitHubOAuthRedirectURL())
+	} else {
+		slog.Info("GitHub OAuth not configured; email-only sign-in")
+	}
+
+	return New(store, blobs, email, github, opts).Serve(ctx)
 }
 
 // Handler builds the routed, middleware-wrapped http.Handler.
@@ -188,5 +209,8 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
-// Compile-time assertion that the GCS client satisfies BlobStore.
-var _ BlobStore = (*gcs.Client)(nil)
+// Compile-time assertions that the concrete implementations satisfy the seams.
+var (
+	_ BlobStore     = (*gcs.Client)(nil)
+	_ OAuthProvider = (*oauth.GitHub)(nil)
+)

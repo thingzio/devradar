@@ -58,6 +58,19 @@ variable "scan_schedule" {
   default     = "*/15 * * * *"
 }
 
+variable "github_oauth_client_id" {
+  description = "GitHub OAuth App client ID for UI sign-in (public identifier, not a secret — injected as a plain env var). The matching client secret is stored in Secret Manager (devradar-saas-oauth-client-secret). Leave empty to disable GitHub sign-in (falls back to email-only magic links)."
+  type        = string
+  default     = ""
+}
+
+variable "github_oauth_client_secret" {
+  description = "GitHub OAuth App client secret for UI sign-in. Set in the gitignored terraform.tfvars (never committed); flows into Secret Manager. Leave empty to keep the placeholder (GitHub sign-in stays disabled)."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 # --- Shared infrastructure (owned by thingzio/infra; referenced, not created) ---
 
 variable "vpc_id" {

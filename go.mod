@@ -7,6 +7,7 @@ require github.com/Jeffail/gabs/v2 v2.7.0
 require (
 	cloud.google.com/go/storage v1.63.0
 	github.com/lib/pq v1.12.3
+	golang.org/x/oauth2 v0.36.0
 )
 
 require (
@@ -45,7 +46,6 @@ require (
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	golang.org/x/crypto v0.53.0 // indirect
 	golang.org/x/net v0.56.0 // indirect
-	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.38.0 // indirect

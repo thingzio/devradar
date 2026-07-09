@@ -52,6 +52,30 @@ resource "google_secret_manager_secret" "anthropic_api_key" {
   depends_on = [google_project_service.default]
 }
 
+# GitHub OAuth App client secret — UI sign-in via GitHub. The client *ID* is a
+# public identifier passed as a plain env var (var.github_oauth_client_id); only
+# this secret is sensitive.
+resource "google_secret_manager_secret" "oauth_client_secret" {
+  secret_id = "${var.prefix}-oauth-client-secret"
+  project   = var.project_id
+  replication {
+    auto {}
+  }
+  depends_on = [google_project_service.default]
+}
+
+# The secret value is supplied from var.github_oauth_client_secret, set in the
+# gitignored terraform.tfvars (never committed) — same pattern DevTrace uses for
+# github_token. When the var is empty a placeholder is written so serve (which
+# references `latest`) can still deploy; the config layer treats the placeholder
+# as unset (GitHubOAuthConfigured() → false), so the UI stays email-only until a
+# real value is provided. No ignore_changes here: tfvars is the source of truth,
+# so updating the tfvars value and re-applying rotates the secret.
+resource "google_secret_manager_secret_version" "oauth_client_secret" {
+  secret      = google_secret_manager_secret.oauth_client_secret.id
+  secret_data = var.github_oauth_client_secret != "" ? var.github_oauth_client_secret : "placeholder-set-real-value-out-of-band"
+}
+
 # --- Grant the run SA read access to each secret ---
 
 resource "google_secret_manager_secret_iam_member" "run_database_url" {
@@ -68,6 +92,12 @@ resource "google_secret_manager_secret_iam_member" "run_send_api_key" {
 
 resource "google_secret_manager_secret_iam_member" "run_anthropic" {
   secret_id = google_secret_manager_secret.anthropic_api_key.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.run.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "run_oauth_client_secret" {
+  secret_id = google_secret_manager_secret.oauth_client_secret.id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.run.email}"
 }

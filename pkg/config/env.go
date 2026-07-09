@@ -98,6 +98,37 @@ func EmailFrom() string {
 	return GetEnv("EMAIL_FROM", "DevRadar <no-reply@thingz.io>")
 }
 
+// GitHubClientID returns the GitHub OAuth app client id, or "" if unset.
+// Unprefixed like the other platform-integration secrets (SEND_API_KEY): it
+// names an external app registration, not a DevRadar service tunable.
+func GitHubClientID() string {
+	return GetEnv("GITHUB_OAUTH_CLIENT_ID", "")
+}
+
+// GitHubClientSecret returns the GitHub OAuth app client secret, or "" if unset
+// or still the Terraform placeholder (treated as unconfigured, mirroring
+// SendAPIKey so the service degrades to email-only sign-in rather than failing).
+func GitHubClientSecret() string {
+	k := GetEnv("GITHUB_OAUTH_CLIENT_SECRET", "")
+	if k == sendAPIKeyPlaceholder {
+		return ""
+	}
+	return k
+}
+
+// GitHubOAuthConfigured reports whether GitHub sign-in is enabled — both the
+// client id and secret must be set. When false, the server hides the "Continue
+// with GitHub" button and does not register the OAuth routes.
+func GitHubOAuthConfigured() bool {
+	return GitHubClientID() != "" && GitHubClientSecret() != ""
+}
+
+// GitHubOAuthRedirectURL is the OAuth callback URL, derived from BASE_URL. Must
+// exactly match the callback registered in the GitHub OAuth app.
+func GitHubOAuthRedirectURL() string {
+	return BaseURL() + "/auth/github/callback"
+}
+
 // DebugEnabled reports whether debug-level logging is on (DEVRADAR_DEBUG).
 func DebugEnabled() bool {
 	return GetEnvBool("DEVRADAR_DEBUG")

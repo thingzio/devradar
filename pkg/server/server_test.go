@@ -42,8 +42,8 @@ func testServer(t *testing.T) (*server.Server, *postgres.Store) {
 		t.Skipf("skipping (no database): %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	// OAuth nil → API-only; local blob store under a temp dir.
-	srv := server.New(st, gcs.LocalStore{Dir: t.TempDir()}, nil, server.Options{Version: "test"})
+	// email + OAuth nil → API-only; local blob store under a temp dir.
+	srv := server.New(st, gcs.LocalStore{Dir: t.TempDir()}, nil, nil, server.Options{Version: "test"})
 	return srv, st
 }
 

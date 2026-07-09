@@ -215,6 +215,18 @@ select {
 .btn.danger { background: transparent; color: var(--danger); border: 1px solid var(--border); padding: 0.3rem 0.7rem; font-size: 0.85rem; }
 .btn.danger:hover { background: rgba(207,34,46,0.1); }
 
+/* GitHub OAuth sign-in button + "or" divider (landing sign-in card). */
+.btn-github {
+  display: flex; align-items: center; justify-content: center; gap: 0.55rem;
+  width: 100%; box-sizing: border-box;
+  background: var(--surface-alt); color: var(--text); border: 1px solid var(--border);
+  text-decoration: none;
+}
+.btn-github:hover { background: var(--surface-hover); border-color: var(--accent); text-decoration: none; }
+.btn-github svg { flex: none; }
+.or-divider { display: flex; align-items: center; gap: 0.75rem; margin: 0.9rem 0; color: var(--muted); font-size: 0.85rem; }
+.or-divider::before, .or-divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+
 /* Messages */
 .msg { margin: 1rem 0; padding: 0.75rem 1rem; border-radius: var(--radius); border: 1px solid var(--border); }
 .msg.err { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); background: color-mix(in srgb, var(--danger) 8%, transparent); }

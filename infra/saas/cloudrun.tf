@@ -66,6 +66,24 @@ resource "google_cloud_run_v2_service" "serve" {
         }
       }
 
+      # GitHub OAuth sign-in. Client ID is public → plain env var; client secret
+      # comes from Secret Manager. Both must be non-placeholder for the UI to
+      # show the "Continue with GitHub" button (else it stays email-only).
+      env {
+        name  = "GITHUB_OAUTH_CLIENT_ID"
+        value = var.github_oauth_client_id
+      }
+
+      env {
+        name = "GITHUB_OAUTH_CLIENT_SECRET"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.oauth_client_secret.secret_id
+            version = "latest"
+          }
+        }
+      }
+
       resources {
         limits = {
           cpu    = "1000m"
