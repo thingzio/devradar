@@ -43,7 +43,7 @@ resource "google_secret_manager_secret_version" "send_api_key_placeholder" {
 }
 
 # Anthropic API key — optional (admin /metrics AI health summary; OpenVEX
-# stubbing / future narratives). Value set out-of-band.
+# stubbing / future narratives).
 resource "google_secret_manager_secret" "anthropic_api_key" {
   secret_id = "${var.prefix}-anthropic-api-key"
   project   = var.project_id
@@ -53,18 +53,16 @@ resource "google_secret_manager_secret" "anthropic_api_key" {
   depends_on = [google_project_service.default]
 }
 
-# Placeholder version so serve (which references `latest`) can deploy before a
-# real key is set. Replace out-of-band (`gcloud secrets versions add`);
-# ignore_changes keeps that real value from being reverted on re-apply. The
-# claude client treats the placeholder as unset (New() → nil), so the AI health
-# summary simply stays absent until a real key is added.
-resource "google_secret_manager_secret_version" "anthropic_api_key_placeholder" {
+# The value comes from var.anthropic_api_key, set in the gitignored
+# terraform.tfvars (never committed) — same pattern as the OAuth client secret.
+# When the var is empty a placeholder is written so serve (which references
+# `latest`) can still deploy; the claude client treats the placeholder as unset
+# (New() → nil), so the AI health summary stays off until a real value is set.
+# No ignore_changes: tfvars is the source of truth, so updating it and
+# re-applying rotates the key.
+resource "google_secret_manager_secret_version" "anthropic_api_key" {
   secret      = google_secret_manager_secret.anthropic_api_key.id
-  secret_data = "placeholder-set-real-value-out-of-band"
-
-  lifecycle {
-    ignore_changes = [secret_data]
-  }
+  secret_data = var.anthropic_api_key != "" ? var.anthropic_api_key : "placeholder-set-real-value-out-of-band"
 }
 
 # GitHub OAuth App client secret — UI sign-in via GitHub. The client *ID* is a

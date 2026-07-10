@@ -77,6 +77,13 @@ variable "admin_users" {
   default     = ""
 }
 
+variable "anthropic_api_key" {
+  description = "Anthropic API key for the admin /metrics AI health summary (and later narratives). Set in the gitignored terraform.tfvars (never committed); flows into Secret Manager. Leave empty to keep the placeholder (the summary stays off; raw metrics still render)."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 # --- Shared infrastructure (owned by thingzio/infra; referenced, not created) ---
 
 variable "vpc_id" {
