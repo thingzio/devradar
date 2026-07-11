@@ -28,12 +28,19 @@ type fakeStore struct {
 	hasPkgs    map[string]bool // SBOM ids already carrying a license inventory
 	backfilled []string        // SBOM ids that reached UpsertSBOMPackages
 	scanMaxAge time.Duration   // staleness window passed to ListScannableSBOMs
+	expected   []string        // expected-scanner set passed to ListScannableSBOMs
+	cleared    []string        // SBOM ids that reached ClearRescanRequested
 }
 
 func (f *fakeStore) ListActiveSBOMs(context.Context) ([]*postgres.SBOM, error) { return f.sboms, nil }
-func (f *fakeStore) ListScannableSBOMs(_ context.Context, maxAge time.Duration) ([]*postgres.SBOM, error) {
+func (f *fakeStore) ListScannableSBOMs(_ context.Context, maxAge time.Duration, expected []string) ([]*postgres.SBOM, error) {
 	f.scanMaxAge = maxAge
+	f.expected = expected
 	return f.sboms, nil
+}
+func (f *fakeStore) ClearRescanRequested(_ context.Context, sbomID string) error {
+	f.cleared = append(f.cleared, sbomID)
+	return nil
 }
 func (f *fakeStore) ApplyScan(_ context.Context, sb *postgres.SBOM, _ string, _ postgres.Versions, _ []data.Vulnerability) error {
 	f.applied++
@@ -311,12 +318,13 @@ type enrichStore struct {
 }
 
 func (s *enrichStore) ListActiveSBOMs(context.Context) ([]*postgres.SBOM, error) { return nil, nil }
-func (s *enrichStore) ListScannableSBOMs(context.Context, time.Duration) ([]*postgres.SBOM, error) {
+func (s *enrichStore) ListScannableSBOMs(context.Context, time.Duration, []string) ([]*postgres.SBOM, error) {
 	return nil, nil
 }
 func (s *enrichStore) ApplyScan(context.Context, *postgres.SBOM, string, postgres.Versions, []data.Vulnerability) error {
 	return nil
 }
+func (s *enrichStore) ClearRescanRequested(context.Context, string) error               { return nil }
 func (s *enrichStore) RecordScanFailure(context.Context, string, string, string, error) {}
 func (s *enrichStore) HasSBOMPackages(context.Context, string) (bool, error)            { return true, nil }
 func (s *enrichStore) UpsertSBOMPackages(context.Context, string, []data.PackageLicense) error {

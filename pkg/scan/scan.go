@@ -37,9 +37,14 @@ type Fetcher interface {
 type Store interface {
 	ListActiveSBOMs(ctx context.Context) ([]*postgres.SBOM, error)
 	// ListScannableSBOMs returns active SBOMs due for a scan given a staleness
-	// window (never-scanned or last-scanned older than maxAge). maxAge 0 = all.
-	ListScannableSBOMs(ctx context.Context, maxAge time.Duration) ([]*postgres.SBOM, error)
+	// window and the set of expected scanners. An SBOM is due if any expected
+	// scanner lacks a run within maxAge (per-scanner freshness), or a rescan was
+	// requested. maxAge 0 or empty expected = every active SBOM.
+	ListScannableSBOMs(ctx context.Context, maxAge time.Duration, expected []string) ([]*postgres.SBOM, error)
 	ApplyScan(ctx context.Context, sb *postgres.SBOM, scanner string, ver postgres.Versions, vulns []data.Vulnerability) error
+	// ClearRescanRequested consumes an operator force-rescan marker once the
+	// whole SBOM has been scanned by every expected scanner.
+	ClearRescanRequested(ctx context.Context, sbomID string) error
 	RecordScanFailure(ctx context.Context, sbomID, scanner, stage string, cause error)
 	DistinctActiveCVEs(ctx context.Context) ([]string, error)
 	UpsertCVEEnrichment(ctx context.Context, recs []enrich.Record) error
@@ -183,7 +188,15 @@ func (r *Runner) Execute(ctx context.Context) error {
 		return fmt.Errorf("no scanners available after db refresh (%d attempted)", len(r.scanners))
 	}
 
-	sboms, err := r.store.ListScannableSBOMs(ctx, r.opts.ScanMaxAge)
+	// Freshness is evaluated per scanner, so pass the names of the scanners that
+	// actually became ready this run: an SBOM is due until every one of them has a
+	// recent run. If a scanner was dropped at EnsureDB, it isn't expected this run
+	// (the SBOM won't be held due for a scanner that can't run).
+	expected := make([]string, len(ready))
+	for i, sc := range ready {
+		expected[i] = sc.Name()
+	}
+	sboms, err := r.store.ListScannableSBOMs(ctx, r.opts.ScanMaxAge, expected)
 	if err != nil {
 		return fmt.Errorf("list scannable sboms: %w", err)
 	}
@@ -296,6 +309,15 @@ func (r *Runner) scanOne(ctx context.Context, sb *postgres.SBOM, ready []readySc
 
 	for _, sc := range ready {
 		r.scanWith(ctx, sb, sc, local)
+	}
+
+	// Consume any operator "force rescan" marker only after every scanner has been
+	// attempted, so a forced rescan covers the whole SBOM (all scanners) before the
+	// override is cleared — not just the first scanner in the loop. Best-effort: a
+	// failed clear leaves the marker set, so the SBOM is picked up again next run
+	// (at worst one extra rescan), which is safe.
+	if err := r.store.ClearRescanRequested(ctx, sb.ID); err != nil {
+		slog.Warn("clear rescan marker", "sbom_id", sb.ID, "error", err)
 	}
 }
 

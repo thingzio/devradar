@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 // This file holds the operator-console reads and writes. Unlike every other
@@ -198,9 +200,10 @@ type ScanBacklog struct {
 }
 
 // AdminScanBacklog counts active SBOMs due for a scan under the given staleness
-// window (mirrors ListScannableSBOMs work-selection, including the force-rescan
-// override), and reports the oldest one's submission time.
-func (s *Store) AdminScanBacklog(ctx context.Context, maxAge time.Duration) (*ScanBacklog, error) {
+// window and expected-scanner set (mirrors ListScannableSBOMs work-selection —
+// per-scanner freshness plus the force-rescan override), and reports the oldest
+// one's submission time. An empty expected set counts every active SBOM.
+func (s *Store) AdminScanBacklog(ctx context.Context, maxAge time.Duration, expected []string) (*ScanBacklog, error) {
 	var oldest sql.NullTime
 	b := &ScanBacklog{}
 	err := s.db.QueryRowContext(ctx, `
@@ -208,11 +211,14 @@ func (s *Store) AdminScanBacklog(ctx context.Context, maxAge time.Duration) (*Sc
 		FROM devradar_sbom sb
 		WHERE sb.status = 'active'
 		  AND (sb.rescan_requested_at IS NOT NULL
-		    OR NOT EXISTS (
-		      SELECT 1 FROM devradar_scan_run sr
-		      WHERE sr.sbom_id = sb.id
-		        AND sr.scanned_at > now() - $1::interval))`,
-		fmt.Sprintf("%d seconds", int64(maxAge.Seconds()))).Scan(&b.Due, &oldest)
+		    OR EXISTS (
+		      SELECT 1 FROM unnest($2::text[]) AS want(scanner)
+		      WHERE NOT EXISTS (
+		        SELECT 1 FROM devradar_scan_run sr
+		        WHERE sr.sbom_id = sb.id
+		          AND sr.scanner = want.scanner
+		          AND sr.scanned_at > now() - $1::interval)))`,
+		fmt.Sprintf("%d seconds", int64(maxAge.Seconds())), pq.Array(expected)).Scan(&b.Due, &oldest)
 	if err != nil {
 		return nil, fmt.Errorf("scan backlog: %w", err)
 	}

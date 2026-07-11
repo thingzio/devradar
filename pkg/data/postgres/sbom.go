@@ -92,38 +92,61 @@ func (s *Store) DeletePendingSBOM(ctx context.Context, id string) error {
 // ListActiveSBOMs returns all active SBOMs across all tenants — the scan job's
 // work list. It is intentionally cross-tenant (the scan job is a platform-wide
 // batch); tenant scoping applies only to the read API. Equivalent to
-// ListScannableSBOMs with a zero window (no staleness filter).
+// ListScannableSBOMs with a zero window (no staleness filter, no scanner set).
 func (s *Store) ListActiveSBOMs(ctx context.Context) ([]*SBOM, error) {
-	return s.ListScannableSBOMs(ctx, 0)
+	return s.ListScannableSBOMs(ctx, 0, nil)
 }
 
-// ListScannableSBOMs returns the active SBOMs due for a scan: those never
-// scanned yet (no devradar_scan_run row — a freshly submitted SBOM, prioritized
-// so a new submission is picked up on the very next run) OR whose most recent
-// scan is older than maxAge. A maxAge of 0 disables the staleness filter and
-// returns every active SBOM (the daily-full-pass behavior).
+// ClearRescanRequested clears an operator-requested rescan marker for one SBOM.
+// It runs once per SBOM after every expected scanner has been attempted (not
+// inside per-scanner ApplyScan), so a "force rescan" covers the whole SBOM —
+// every scanner runs — before the override is consumed. Idempotent: a no-op
+// when no override was set.
+func (s *Store) ClearRescanRequested(ctx context.Context, sbomID string) error {
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE devradar_sbom SET rescan_requested_at = NULL
+		 WHERE id = $1 AND rescan_requested_at IS NOT NULL`, sbomID); err != nil {
+		return fmt.Errorf("clear rescan marker: %w", err)
+	}
+	return nil
+}
+
+// ListScannableSBOMs returns the active SBOMs due for a scan. Freshness is
+// evaluated PER SCANNER: an SBOM is due when, for ANY scanner in expected, no
+// devradar_scan_run for that scanner exists within maxAge. This covers the
+// never-scanned case (a new submission has no runs, so it's due for every
+// scanner) and — critically — the case where one scanner succeeded but another
+// never ran or failed: the SBOM stays due until every expected scanner has a
+// recent run, instead of one scanner's success masking another's absence. An
+// operator-set rescan_requested_at forces the SBOM due regardless of freshness.
+//
+// A maxAge of 0 (or an empty expected set) disables the staleness filter and
+// returns every active SBOM — the legacy daily-full-pass, used by
+// ListActiveSBOMs. Ordering by submitted_at keeps the oldest work first.
 //
 // This lets the scheduler fire frequently (low submission-to-result latency)
 // while each SBOM is still scanned at most a bounded number of times per day:
 // cron frequency controls latency, maxAge controls per-SBOM load, independently.
 // Cross-tenant by design, like ListActiveSBOMs.
-func (s *Store) ListScannableSBOMs(ctx context.Context, maxAge time.Duration) ([]*SBOM, error) {
-	// The staleness predicate is applied as an interval bound on the SBOM's latest
-	// scan_run. NOT EXISTS covers the never-scanned case (new submissions) so they
-	// are always due. An operator-set rescan_requested_at makes the SBOM due
-	// regardless of staleness (the admin "force rescan" override; cleared by
-	// ApplyScan so it fires once). Ordering by submitted_at keeps the oldest work
-	// first.
+func (s *Store) ListScannableSBOMs(ctx context.Context, maxAge time.Duration, expected []string) ([]*SBOM, error) {
 	where := `WHERE sb.status = 'active'`
 	args := []any{}
-	if maxAge > 0 {
+	if maxAge > 0 && len(expected) > 0 {
+		// Due if forced, OR if any expected scanner lacks a run within the window.
+		// The correlated NOT EXISTS is scanner-scoped: unnest(expected) enumerates
+		// the required scanners and the inner NOT EXISTS asks "is this scanner
+		// missing a recent run for this SBOM?" — true for a never-run or a
+		// stale/failed scanner. $1 = interval, $2 = the expected scanner names.
 		where += `
 		  AND (sb.rescan_requested_at IS NOT NULL
-		    OR NOT EXISTS (
-		      SELECT 1 FROM devradar_scan_run sr
-		      WHERE sr.sbom_id = sb.id
-		        AND sr.scanned_at > now() - $1::interval))`
-		args = append(args, fmt.Sprintf("%d seconds", int64(maxAge.Seconds())))
+		    OR EXISTS (
+		      SELECT 1 FROM unnest($2::text[]) AS want(scanner)
+		      WHERE NOT EXISTS (
+		        SELECT 1 FROM devradar_scan_run sr
+		        WHERE sr.sbom_id = sb.id
+		          AND sr.scanner = want.scanner
+		          AND sr.scanned_at > now() - $1::interval)))`
+		args = append(args, fmt.Sprintf("%d seconds", int64(maxAge.Seconds())), pq.Array(expected))
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT sb.id, sb.tenant_id, sb.image_ref, sb.digest, sb.format, sb.spec_version,

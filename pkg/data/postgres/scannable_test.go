@@ -43,8 +43,11 @@ func TestListScannableSBOMs_StalenessFilter(t *testing.T) {
 		return out
 	}
 
-	// With a 12h window: the just-scanned SBOM is excluded, the never-scanned one due.
-	due, err := st.ListScannableSBOMs(ctx, 12*time.Hour)
+	// Expected set is just grype (the only scanner we recorded a run for), so the
+	// scanned SBOM counts as fully fresh. With a 12h window: the just-scanned SBOM
+	// is excluded, the never-scanned one due.
+	grypeOnly := []string{"grype"}
+	due, err := st.ListScannableSBOMs(ctx, 12*time.Hour, grypeOnly)
 	if err != nil {
 		t.Fatalf("list scannable (12h): %v", err)
 	}
@@ -57,7 +60,7 @@ func TestListScannableSBOMs_StalenessFilter(t *testing.T) {
 	}
 
 	// With a zero window: filter disabled, both returned (legacy full-pass).
-	all, err := st.ListScannableSBOMs(ctx, 0)
+	all, err := st.ListScannableSBOMs(ctx, 0, grypeOnly)
 	if err != nil {
 		t.Fatalf("list scannable (0): %v", err)
 	}
@@ -67,11 +70,96 @@ func TestListScannableSBOMs_StalenessFilter(t *testing.T) {
 	}
 
 	// A tiny window (1ns) makes even the just-scanned SBOM due again.
-	dueTiny, err := st.ListScannableSBOMs(ctx, time.Nanosecond)
+	dueTiny, err := st.ListScannableSBOMs(ctx, time.Nanosecond, grypeOnly)
 	if err != nil {
 		t.Fatalf("list scannable (1ns): %v", err)
 	}
 	if !slices.Contains(ids(dueTiny), scanned.ID) {
 		t.Errorf("with a 1ns window the scanned SBOM should be due again")
+	}
+}
+
+// TestListScannableSBOMs_PerScannerFreshness verifies freshness is evaluated per
+// scanner: an SBOM scanned by grype but not trivy stays due (so trivy runs),
+// and only when BOTH scanners have a recent run does it drop out. This is the
+// fix for one scanner's success masking another's absence.
+func TestListScannableSBOMs_PerScannerFreshness(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+
+	tenantID, sb := seedTenantAndSBOM(t, st)
+	both := []string{"grype", "trivy"}
+	ver := postgres.Versions{DBVersion: "db1", ScannerVersion: "v1", CanonicalizerVersion: "c1"}
+
+	contains := func(sbs []*postgres.SBOM, id string) bool {
+		return slices.ContainsFunc(sbs, func(s *postgres.SBOM) bool { return s.ID == id })
+	}
+
+	// Only grype has run → still due (trivy missing).
+	if err := st.ApplyScan(ctx, sb, "grype", ver,
+		[]data.Vulnerability{vuln("CVE-1", "openssl", "3.0", "high", 7.5, false)}); err != nil {
+		t.Fatalf("apply grype: %v", err)
+	}
+	due, err := st.ListScannableSBOMs(ctx, 12*time.Hour, both)
+	if err != nil {
+		t.Fatalf("list (grype only): %v", err)
+	}
+	if !contains(due, sb.ID) {
+		t.Errorf("SBOM scanned by grype only should still be due (trivy never ran)")
+	}
+
+	// Now trivy has also run → no longer due.
+	if err := st.ApplyScan(ctx, sb, "trivy", ver,
+		[]data.Vulnerability{vuln("CVE-1", "openssl", "3.0", "high", 7.5, false)}); err != nil {
+		t.Fatalf("apply trivy: %v", err)
+	}
+	due, err = st.ListScannableSBOMs(ctx, 12*time.Hour, both)
+	if err != nil {
+		t.Fatalf("list (both): %v", err)
+	}
+	if contains(due, sb.ID) {
+		t.Errorf("SBOM scanned by both grype and trivy should not be due within window")
+	}
+	_ = tenantID
+}
+
+// TestListScannableSBOMs_RescanClearedAfterAllScanners verifies a force-rescan
+// marker keeps the SBOM due until every expected scanner has run, then
+// ClearRescanRequested consumes it.
+func TestListScannableSBOMs_RescanClearedAfterAllScanners(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+
+	_, sb := seedTenantAndSBOM(t, st)
+	both := []string{"grype", "trivy"}
+	ver := postgres.Versions{DBVersion: "db1", ScannerVersion: "v1", CanonicalizerVersion: "c1"}
+
+	// Scan with both so freshness alone would exclude it.
+	for _, sc := range both {
+		if err := st.ApplyScan(ctx, sb, sc, ver, nil); err != nil {
+			t.Fatalf("apply %s: %v", sc, err)
+		}
+	}
+	// Force a rescan.
+	if err := st.AdminRequestRescan(ctx, sb.ID); err != nil {
+		t.Fatalf("request rescan: %v", err)
+	}
+	due, err := st.ListScannableSBOMs(ctx, 12*time.Hour, both)
+	if err != nil {
+		t.Fatalf("list after rescan request: %v", err)
+	}
+	if !slices.ContainsFunc(due, func(s *postgres.SBOM) bool { return s.ID == sb.ID }) {
+		t.Errorf("force-rescan should make the SBOM due regardless of freshness")
+	}
+	// Clear the marker (as scanOne does after all scanners) → no longer due.
+	if err := st.ClearRescanRequested(ctx, sb.ID); err != nil {
+		t.Fatalf("clear rescan: %v", err)
+	}
+	due, err = st.ListScannableSBOMs(ctx, 12*time.Hour, both)
+	if err != nil {
+		t.Fatalf("list after clear: %v", err)
+	}
+	if slices.ContainsFunc(due, func(s *postgres.SBOM) bool { return s.ID == sb.ID }) {
+		t.Errorf("after clearing the rescan marker the fresh SBOM should not be due")
 	}
 }

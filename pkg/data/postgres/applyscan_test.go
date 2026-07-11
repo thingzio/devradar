@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"sync"
 	"testing"
 
 	"github.com/thingzio/devradar/pkg/data"
@@ -291,6 +292,50 @@ func TestApplyScan_Idempotent(t *testing.T) {
 	}
 	if findings != 1 {
 		t.Errorf("current findings = %d, want 1", findings)
+	}
+}
+
+// TestApplyScan_ConcurrentSameKeySerialized verifies the per-(sbom,scanner)
+// transaction advisory lock: two ApplyScan calls racing on the same key both
+// succeed and converge to consistent current state (no torn read-modify-write,
+// no duplicate finding rows). Without the lock the interleaved reads of current
+// state could double-insert or lose an event.
+func TestApplyScan_ConcurrentSameKeySerialized(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	_, sb := seedTenantAndSBOM(t, st)
+
+	v := postgres.Versions{DBVersion: "db-1", ScannerVersion: "grype-1", CanonicalizerVersion: "passthrough"}
+	scan := []data.Vulnerability{
+		vuln("CVE-A", "openssl", "3.0", data.SeverityHigh, 7.5, false),
+		vuln("CVE-B", "zlib", "1.2", data.SeverityMedium, 5.0, false),
+	}
+
+	const n = 6
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = st.ApplyScan(ctx, sb, "grype", v, scan)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("concurrent ApplyScan %d failed: %v", i, err)
+		}
+	}
+	// State converged to exactly the two findings — no duplicates from a torn RMW.
+	var findings int
+	if err := st.DB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM devradar_finding WHERE sbom_id=$1 AND scanner='grype'`, sb.ID).Scan(&findings); err != nil {
+		t.Fatal(err)
+	}
+	if findings != 2 {
+		t.Errorf("current findings = %d, want 2 (serialized, no duplicates)", findings)
 	}
 }
 

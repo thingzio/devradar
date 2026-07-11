@@ -116,8 +116,9 @@ func TestAdmin_CSRFRequired(t *testing.T) {
 }
 
 // TestAdmin_ForceRescanCycle verifies the operator "force rescan" makes an SBOM
-// due for scanning even when it was just scanned, and that a subsequent
-// ApplyScan clears the marker (so the override fires exactly once).
+// due for scanning even when it was just scanned, and that ClearRescanRequested
+// (invoked by the scan loop after every scanner has run) consumes the marker so
+// the override fires exactly once.
 func TestAdmin_ForceRescanCycle(t *testing.T) {
 	_, st := testServer(t)
 	ctx := context.Background()
@@ -132,12 +133,14 @@ func TestAdmin_ForceRescanCycle(t *testing.T) {
 		t.Fatalf("upsert sbom: %v", err)
 	}
 
+	grypeOnly := []string{"grype"}
+
 	// Record a fresh scan so the staleness window would normally exclude it.
 	ver := postgres.Versions{DBVersion: "db1", ScannerVersion: "gv1", CanonicalizerVersion: "c1"}
 	if err := st.ApplyScan(ctx, sb, "grype", ver, nil); err != nil {
 		t.Fatalf("apply scan: %v", err)
 	}
-	due, err := st.ListScannableSBOMs(ctx, time.Hour)
+	due, err := st.ListScannableSBOMs(ctx, time.Hour, grypeOnly)
 	if err != nil {
 		t.Fatalf("list scannable: %v", err)
 	}
@@ -149,19 +152,18 @@ func TestAdmin_ForceRescanCycle(t *testing.T) {
 	if err := st.AdminRequestRescan(ctx, sb.ID); err != nil {
 		t.Fatalf("request rescan: %v", err)
 	}
-	due, _ = st.ListScannableSBOMs(ctx, time.Hour)
+	due, _ = st.ListScannableSBOMs(ctx, time.Hour, grypeOnly)
 	if !containsSBOM(due, sb.ID) {
 		t.Fatal("after force-rescan the SBOM should be due")
 	}
 
-	// A scan clears the marker → no longer due.
-	ver2 := postgres.Versions{DBVersion: "db2", ScannerVersion: "gv1", CanonicalizerVersion: "c1"}
-	if err := st.ApplyScan(ctx, sb, "grype", ver2, nil); err != nil {
-		t.Fatalf("apply scan 2: %v", err)
+	// The scan loop clears the marker after all scanners run → no longer due.
+	if err := st.ClearRescanRequested(ctx, sb.ID); err != nil {
+		t.Fatalf("clear rescan: %v", err)
 	}
-	due, _ = st.ListScannableSBOMs(ctx, time.Hour)
+	due, _ = st.ListScannableSBOMs(ctx, time.Hour, grypeOnly)
 	if containsSBOM(due, sb.ID) {
-		t.Error("after rescan the marker should be cleared and the SBOM not due")
+		t.Error("after clearing the marker the fresh SBOM should not be due")
 	}
 }
 

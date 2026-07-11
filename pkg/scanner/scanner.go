@@ -51,6 +51,16 @@ func (r *Registry) Register(s Scanner) { r.scanners = append(r.scanners, s) }
 // All returns every registered scanner.
 func (r *Registry) All() []Scanner { return r.scanners }
 
+// Names returns the names of every registered scanner — the "expected scanner"
+// set used for per-scanner work selection (freshness and backlog).
+func (r *Registry) Names() []string {
+	out := make([]string, len(r.scanners))
+	for i, s := range r.scanners {
+		out[i] = s.Name()
+	}
+	return out
+}
+
 // Available returns only scanners whose binary is installed.
 func (r *Registry) Available() []Scanner {
 	out := make([]Scanner, 0, len(r.scanners))

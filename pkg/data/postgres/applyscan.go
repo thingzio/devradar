@@ -25,14 +25,30 @@ import (
 // holding the current state; a retry then recomputes the identical incoming set,
 // finds changed()==false for every finding, and emits zero events. A retry that
 // crashes before commit rolls back and writes nothing. So a Cloud Run Job retry
-// is safe. (This holds for the serial single-worker scan job; concurrent runs of
-// the same (sbom, scanner) are out of scope by design.)
+// is safe.
+//
+// Concurrency: the read-modify-write of current state is serialized per
+// (sbom, scanner) by a transaction-scoped advisory lock taken as the first
+// statement. The scan job is single-worker by design, but Cloud Scheduler ticks
+// and operator "force rescan" executions can overlap, and task retries can race
+// a still-running task; the lock makes those safe rather than relying on the
+// single-worker assumption. The lock auto-releases on commit/rollback.
 func (s *Store) ApplyScan(ctx context.Context, sb *SBOM, scanner string, ver Versions, vulns []data.Vulnerability) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }() // no-op after Commit
+
+	// Serialize concurrent ApplyScan of the same (sbom, scanner): a per-key
+	// transaction advisory lock. The two-key lock form takes the SBOM id and the
+	// scanner name as independent 32-bit hashes (hashtext), so distinct pairs get
+	// distinct locks without string concatenation. Held until this tx commits or
+	// rolls back.
+	if _, err := tx.ExecContext(ctx,
+		`SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, sb.ID, scanner); err != nil {
+		return fmt.Errorf("acquire scan lock: %w", err)
+	}
 
 	prev, err := loadCurrentFindings(ctx, tx, sb.ID, scanner)
 	if err != nil {
@@ -52,15 +68,6 @@ func (s *Store) ApplyScan(ctx context.Context, sb *SBOM, scanner string, ver Ver
 	runID, err := insertScanRun(ctx, tx, sb.ID, scanner, ver, now, vulns)
 	if err != nil {
 		return err
-	}
-
-	// Clear any operator-requested rescan marker now that this SBOM has been
-	// scanned, so a "force rescan" fires exactly once. Idempotent across the two
-	// scanners in a run; a no-op when no override was set.
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE devradar_sbom SET rescan_requested_at = NULL
-		 WHERE id = $1 AND rescan_requested_at IS NOT NULL`, sb.ID); err != nil {
-		return fmt.Errorf("clear rescan marker: %w", err)
 	}
 
 	// Cause is a property of the run, not of any single finding: one set of

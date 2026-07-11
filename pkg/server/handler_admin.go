@@ -12,6 +12,7 @@ import (
 	"github.com/thingzio/devradar/pkg/data"
 	"github.com/thingzio/devradar/pkg/data/postgres"
 	"github.com/thingzio/devradar/pkg/middleware"
+	"github.com/thingzio/devradar/pkg/scanner"
 	"github.com/thingzio/devradar/pkg/tenant"
 )
 
@@ -144,7 +145,7 @@ func (s *Server) handleAdminScans(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to load scans", http.StatusInternalServerError)
 		return
 	}
-	backlog, err := s.store.AdminScanBacklog(ctx, config.ScanMaxAge())
+	backlog, err := s.store.AdminScanBacklog(ctx, config.ScanMaxAge(), scanner.DefaultRegistry().Names())
 	if err != nil {
 		slog.Error("admin scan backlog", "error", err)
 		http.Error(w, "failed to load scans", http.StatusInternalServerError)
