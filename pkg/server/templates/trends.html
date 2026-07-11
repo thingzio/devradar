@@ -3,10 +3,19 @@
 <main class="page-content">
   <div class="page-head">
     <div>
-      <h1 class="page-title">Fleet posture trends</h1>
+      <h1 class="page-title">{{if .SelectedRepository}}Repository posture trends{{else}}Fleet posture trends{{end}}</h1>
+      {{if .SelectedRepository}}
+      <p class="sub">Recorded vulnerability debt for {{.SelectedRepository}}. VEX-suppressed findings are excluded.</p>
+      {{else}}
       <p class="sub">Recorded vulnerability debt across active tracked images. VEX-suppressed findings are excluded.</p>
+      {{end}}
     </div>
     <form class="trend-window" method="get" action="/trends">
+      <label for="trend-repository">Scope</label>
+      <select id="trend-repository" name="repository" data-autosubmit>
+        <option value="" {{if not .SelectedRepository}}selected{{end}}>Entire fleet</option>
+        {{range .RepositoryOptions}}<option value="{{.Repository}}" {{if .Selected}}selected{{end}}>{{.Repository}} · since {{.CoverageStart}}</option>{{end}}
+      </select>
       <label for="trend-days">Window</label>
       <select id="trend-days" name="days" data-autosubmit>
         {{range .DayOptions}}<option value="{{.Value}}" {{if .Selected}}selected{{end}}>Last {{.Value}} days</option>{{end}}
@@ -56,7 +65,7 @@
   </div>
   {{else}}
   <div class="card">
-    <div class="card-head"><h2>No posture snapshots yet</h2></div>
+    <div class="card-head"><h2>No posture snapshots yet{{if .SelectedRepository}} for {{.SelectedRepository}}{{end}}</h2></div>
     <p class="muted">Trend coverage begins with the first completed daily snapshot. DevRadar does not reconstruct earlier history from current findings.</p>
   </div>
   {{end}}

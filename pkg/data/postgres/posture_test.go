@@ -2,8 +2,12 @@ package postgres_test
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/thingzio/devradar/pkg/data/postgres"
 )
 
 func TestSnapshotTenantPosture_DeduplicatesAndIsolates(t *testing.T) {
@@ -322,5 +326,263 @@ func TestTenantPostureCoverageStart_IsolatesAndReturnsNilWithoutSnapshots(t *tes
 	}
 	if empty != nil {
 		t.Fatalf("empty tenant coverage start = %v, want nil", empty)
+	}
+}
+
+func TestSnapshotTenantPosture_RepositorySnapshotsReplaceTodayAndRespectVEX(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	tenantID, first := seedTenantAndSBOM(t, st)
+	first.Repository = "registry.test/repository-posture-" + randID(t)[:8]
+	if _, err := st.DB().ExecContext(ctx,
+		`UPDATE devradar_sbom SET repository=$2 WHERE id=$1`, first.ID, first.Repository); err != nil {
+		t.Fatal(err)
+	}
+	second := &postgres.SBOM{
+		ID: randID(t) + randID(t), TenantID: tenantID,
+		ImageRef: "registry.test/quiet:v1", Repository: "registry.test/quiet-" + randID(t)[:8],
+		Digest: "sha256:" + randID(t) + randID(t), Format: "cyclonedx",
+		PackageCount: 10, ObjectPath: "gs://test/quiet", Status: "active",
+	}
+	if _, _, _, err := st.UpsertSBOM(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	for _, scanner := range []string{"grype", "trivy"} {
+		severity, fixed := "high", false
+		if scanner == "trivy" {
+			severity, fixed = "critical", true
+		}
+		if _, err := st.DB().ExecContext(ctx, `
+			INSERT INTO devradar_finding
+			(sbom_id,scanner,finding_id,exposure,package,version,severity,score,is_fixed)
+			VALUES ($1,$2,'canonical','CVE-2026-8251','pkg','1',$3,9.8,$4)`,
+			first.ID, scanner, severity, fixed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_finding
+		(sbom_id,scanner,finding_id,exposure,package,version,severity,score,is_fixed)
+		VALUES ($1,'grype','suppressed','CVE-2026-8252','pkg','1','high',8,true)`, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	var documentID string
+	if err := st.DB().QueryRowContext(ctx, `
+		INSERT INTO devradar_vex_document (tenant_id, document)
+		VALUES ($1, '{}'::jsonb) RETURNING id`, tenantID).Scan(&documentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_vex_statement
+		(tenant_id,document_id,product_digest,vulnerability,status)
+		VALUES ($1,$2,$3,'CVE-2026-8252','not_affected')`, tenantID, documentID, second.Digest); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := st.SnapshotTenantPosture(ctx); err != nil {
+		t.Fatal(err)
+	}
+	firstTrend, err := st.RepositoryPostureTrend(ctx, tenantID, first.Repository, 30)
+	if err != nil || len(firstTrend) != 1 || firstTrend[0].Images != 1 || firstTrend[0].Total != 1 ||
+		firstTrend[0].Critical != 1 || firstTrend[0].High != 0 || firstTrend[0].Fixable != 1 {
+		t.Fatalf("first repository trend = %+v error=%v", firstTrend, err)
+	}
+	secondTrend, err := st.RepositoryPostureTrend(ctx, tenantID, second.Repository, 30)
+	if err != nil || len(secondTrend) != 1 || secondTrend[0].Images != 1 || secondTrend[0].Total != 0 {
+		t.Fatalf("VEX-aware repository trend = %+v error=%v", secondTrend, err)
+	}
+	options, err := st.RepositoryPostureOptions(ctx, tenantID)
+	if err != nil || len(options) != 2 {
+		t.Fatalf("repository options = %+v error=%v", options, err)
+	}
+	otherTenantID, _ := seedTenantAndSBOM(t, st)
+	foreign, err := st.RepositoryPostureTrend(ctx, otherTenantID, first.Repository, 30)
+	if err != nil || len(foreign) != 0 {
+		t.Fatalf("cross-tenant repository trend = %+v error=%v", foreign, err)
+	}
+
+	if _, err := st.DB().ExecContext(ctx,
+		`UPDATE devradar_sbom SET status='archived' WHERE id=$1`, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SnapshotTenantPosture(ctx); err != nil {
+		t.Fatal(err)
+	}
+	secondTrend, err = st.RepositoryPostureTrend(ctx, tenantID, second.Repository, 30)
+	if err != nil || len(secondTrend) != 0 {
+		t.Fatalf("same-day repository replacement retained archived repository: trend=%+v error=%v", secondTrend, err)
+	}
+	fleet, err := st.TenantPostureTrend(ctx, tenantID, 30)
+	if err != nil || len(fleet) != 1 || fleet[0].Images != 1 || fleet[0].Total != 1 {
+		t.Fatalf("fleet snapshot did not converge with repository rows: trend=%+v error=%v", fleet, err)
+	}
+}
+
+func TestRepositoryPostureTrend_BoundsObservedPointsAndOptions(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	tenantID, _ := seedTenantAndSBOM(t, st)
+	otherTenantID, _ := seedTenantAndSBOM(t, st)
+	repositoryA := "registry.test/a-" + randID(t)[:8]
+	repositoryB := "registry.test/b-" + randID(t)[:8]
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_repository_posture_snapshot
+			(tenant_id,repository,snapshot_date,images,relevant_findings)
+		VALUES
+			($1,$2,CURRENT_DATE - 365,1,365),
+			($1,$2,CURRENT_DATE - 364,1,364),
+			($1,$2,CURRENT_DATE - 2,1,2),
+			($1,$2,CURRENT_DATE,1,0),
+			($1,$3,CURRENT_DATE - 20,1,20),
+			($4,$2,CURRENT_DATE,1,999)`,
+		tenantID, repositoryA, repositoryB, otherTenantID); err != nil {
+		t.Fatal(err)
+	}
+
+	oneDay, err := st.RepositoryPostureTrend(ctx, tenantID, repositoryA, 0)
+	if err != nil || len(oneDay) != 1 || oneDay[0].Total != 0 {
+		t.Fatalf("one-day repository trend = %+v error=%v", oneDay, err)
+	}
+	maximum, err := st.RepositoryPostureTrend(ctx, tenantID, repositoryA, 999)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []int{364, 2, 0}
+	if len(maximum) != len(want) {
+		t.Fatalf("bounded repository trend = %+v, want totals %v", maximum, want)
+	}
+	for i, total := range want {
+		if maximum[i].Total != total {
+			t.Fatalf("repository trend[%d] = %+v, want total %d", i, maximum[i], total)
+		}
+		if i > 0 && !maximum[i-1].Date.Before(maximum[i].Date) {
+			t.Fatalf("repository trend is not chronological: %+v", maximum)
+		}
+	}
+	options, err := st.RepositoryPostureOptions(ctx, tenantID)
+	if err != nil || len(options) != 2 || options[0].Repository != repositoryA || options[1].Repository != repositoryB {
+		t.Fatalf("repository options = %+v error=%v", options, err)
+	}
+	var coverageA, coverageB string
+	if err := st.DB().QueryRowContext(ctx, `
+		SELECT to_char(CURRENT_DATE - 365,'YYYY-MM-DD'),
+		       to_char(CURRENT_DATE - 20,'YYYY-MM-DD')`).Scan(&coverageA, &coverageB); err != nil {
+		t.Fatal(err)
+	}
+	if got := options[0].CoverageStart.Format(time.DateOnly); got != coverageA {
+		t.Errorf("repository A coverage = %s, want %s", got, coverageA)
+	}
+	if got := options[1].CoverageStart.Format(time.DateOnly); got != coverageB {
+		t.Errorf("repository B coverage = %s, want %s", got, coverageB)
+	}
+	unknown, err := st.RepositoryPostureTrend(ctx, tenantID, fmt.Sprintf("foreign-%s", repositoryA), 365)
+	if err != nil || len(unknown) != 0 {
+		t.Fatalf("unknown repository trend = %+v error=%v", unknown, err)
+	}
+}
+
+func TestSnapshotTenantPosture_ReplacesRowsForSuspendedTenant(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	tenantID, sb := seedTenantAndSBOM(t, st)
+	repository := "registry.test/suspended-" + randID(t)[:8]
+	if _, err := st.DB().ExecContext(ctx,
+		`UPDATE devradar_sbom SET repository=$2 WHERE id=$1`, sb.ID, repository); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SnapshotTenantPosture(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB().ExecContext(ctx,
+		`UPDATE devradar_tenant SET status='suspended' WHERE id=$1`, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SnapshotTenantPosture(ctx); err != nil {
+		t.Fatal(err)
+	}
+	fleet, err := st.TenantPostureTrend(ctx, tenantID, 30)
+	if err != nil || len(fleet) != 0 {
+		t.Fatalf("suspended tenant snapshot retained: trend=%+v error=%v", fleet, err)
+	}
+	repositoryTrend, err := st.RepositoryPostureTrend(ctx, tenantID, repository, 30)
+	if err != nil || len(repositoryTrend) != 0 {
+		t.Fatalf("suspended repository snapshot retained: trend=%+v error=%v", repositoryTrend, err)
+	}
+}
+
+func TestSnapshotTenantPosture_SkipsEmptyRepositoryKeys(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	tenantID, _ := seedTenantAndSBOM(t, st)
+	if err := st.SnapshotTenantPosture(ctx); err != nil {
+		t.Fatal(err)
+	}
+	fleet, err := st.TenantPostureTrend(ctx, tenantID, 30)
+	if err != nil || len(fleet) != 1 || fleet[0].Images != 1 {
+		t.Fatalf("fleet snapshot lost legacy empty-repository image: trend=%+v error=%v", fleet, err)
+	}
+	var repositoryRows int
+	if err := st.DB().QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM devradar_repository_posture_snapshot
+		WHERE tenant_id=$1`, tenantID).Scan(&repositoryRows); err != nil {
+		t.Fatal(err)
+	}
+	if repositoryRows != 0 {
+		t.Fatalf("empty repository produced %d repository snapshots", repositoryRows)
+	}
+}
+
+func TestSnapshotTenantPosture_ConcurrentRetries(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	tenantID, sb := seedTenantAndSBOM(t, st)
+	repository := "registry.test/concurrent-" + randID(t)[:8]
+	if _, err := st.DB().ExecContext(ctx,
+		`UPDATE devradar_sbom SET repository=$2 WHERE id=$1`, sb.ID, repository); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SnapshotTenantPosture(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	suffix := randID(t)
+	functionName := "delay_repository_snapshot_" + suffix
+	triggerName := "delay_repository_snapshot_" + suffix
+	if _, err := st.DB().ExecContext(ctx, fmt.Sprintf(`
+		CREATE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF OLD.tenant_id = '%s'::uuid THEN
+				PERFORM pg_sleep(0.2);
+			END IF;
+			RETURN OLD;
+		END $$;
+		CREATE TRIGGER %s BEFORE DELETE ON devradar_repository_posture_snapshot
+		FOR EACH ROW EXECUTE FUNCTION %s()`, functionName, tenantID, triggerName, functionName)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = st.DB().ExecContext(context.Background(), fmt.Sprintf(
+			`DROP TRIGGER IF EXISTS %s ON devradar_repository_posture_snapshot; DROP FUNCTION IF EXISTS %s()`,
+			triggerName, functionName))
+	})
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- st.SnapshotTenantPosture(ctx)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent posture snapshot: %v", err)
+		}
 	}
 }

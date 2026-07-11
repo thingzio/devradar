@@ -19,6 +19,12 @@ type trendDayOption struct {
 	Selected bool
 }
 
+type trendRepositoryOption struct {
+	Repository    string
+	CoverageStart string
+	Selected      bool
+}
+
 type trendStat struct {
 	Label        string
 	Value        int
@@ -38,6 +44,8 @@ type trendsView struct {
 	SignedIn                              bool
 	Days                                  int
 	DayOptions                            []trendDayOption
+	SelectedRepository                    string
+	RepositoryOptions                     []trendRepositoryOption
 	HasData, HasPrevious, HasLifetimeData bool
 	CoverageStart                         string
 	WindowFirstDate, WindowLastDate       string
@@ -51,21 +59,53 @@ type trendsView struct {
 func (s *Server) handleTrends(w http.ResponseWriter, r *http.Request) {
 	tn := middleware.TenantFromContext(r.Context())
 	days := trendDays(r.URL.Query().Get("days"))
-	points, err := s.store.TenantPostureTrend(r.Context(), tn.ID, days)
+	repository := r.URL.Query().Get("repository")
+	repositories, err := s.store.RepositoryPostureOptions(r.Context(), tn.ID)
 	if err != nil {
 		http.Error(w, "failed to load posture trends", http.StatusInternalServerError)
 		return
 	}
-	coverageStart, err := s.store.TenantPostureCoverageStart(r.Context(), tn.ID)
+	repositoryOptions := make([]trendRepositoryOption, 0, len(repositories))
+	var selectedCoverage *time.Time
+	for _, option := range repositories {
+		selected := option.Repository == repository
+		repositoryOptions = append(repositoryOptions, trendRepositoryOption{
+			Repository: option.Repository, CoverageStart: option.CoverageStart.Format(time.DateOnly), Selected: selected,
+		})
+		if selected {
+			coverage := option.CoverageStart
+			selectedCoverage = &coverage
+		}
+	}
+
+	var points []postgres.TenantPosturePoint
+	var coverageStart *time.Time
+	if repository == "" {
+		points, err = s.store.TenantPostureTrend(r.Context(), tn.ID, days)
+		if err == nil {
+			coverageStart, err = s.store.TenantPostureCoverageStart(r.Context(), tn.ID)
+		}
+	} else {
+		if selectedCoverage == nil {
+			http.NotFound(w, r)
+			return
+		}
+		points, err = s.store.RepositoryPostureTrend(r.Context(), tn.ID, repository, days)
+		coverageStart = selectedCoverage
+	}
 	if err != nil {
-		http.Error(w, "failed to load posture trend coverage", http.StatusInternalServerError)
+		http.Error(w, "failed to load posture trends", http.StatusInternalServerError)
 		return
 	}
 
 	v := trendsView{
 		Title: "Fleet posture trends", SignedIn: true, Tab: "trends", Email: tn.Email,
 		AvatarURL: tn.AvatarURL, Version: s.opts.Version, Days: days,
-		DayOptions: trendDayOptions(days), SnapshotCount: len(points),
+		DayOptions: trendDayOptions(days), SnapshotCount: len(points), SelectedRepository: repository,
+		RepositoryOptions: repositoryOptions,
+	}
+	if repository != "" {
+		v.Title = "Repository posture trends"
 	}
 	if coverageStart != nil {
 		v.HasLifetimeData = true

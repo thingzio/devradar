@@ -5,6 +5,7 @@ import (
 	"html"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -144,5 +145,65 @@ func TestTrendsPage_StartsAtFirstRealSnapshot(t *testing.T) {
 	if !strings.Contains(body, "No prior snapshot is available for comparison.") ||
 		strings.Contains(body, `data-snapshot-date="`+priorDate+`"`) {
 		t.Fatalf("trend synthesized history or hid coverage: %s", body)
+	}
+}
+
+func TestTrendsPage_RepositorySelectorUsesObservedTenantSnapshots(t *testing.T) {
+	srv, st := testServer(t)
+	tenantID, _ := seedTenantToken(t, st)
+	otherTenantID, _ := seedTenantToken(t, st)
+	repository := "registry.test/team/repository-trend"
+	foreignRepository := "registry.test/foreign/repository-trend"
+	ctx := context.Background()
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_repository_posture_snapshot
+			(tenant_id,repository,snapshot_date,images,relevant_findings,critical,high,fixable,kev)
+		VALUES
+			($1,$2,CURRENT_DATE - 2,1,8,2,3,4,1),
+			($1,$2,CURRENT_DATE,1,5,1,2,3,0),
+			($3,$4,CURRENT_DATE,1,777,77,77,77,77)`,
+		tenantID, repository, otherTenantID, foreignRepository); err != nil {
+		t.Fatal(err)
+	}
+	var firstDate, currentDate string
+	if err := st.DB().QueryRowContext(ctx, `
+		SELECT to_char(CURRENT_DATE - 2,'YYYY-MM-DD'),
+		       to_char(CURRENT_DATE,'YYYY-MM-DD')`).Scan(&firstDate, &currentDate); err != nil {
+		t.Fatal(err)
+	}
+
+	path := "/trends?" + url.Values{"days": {"30"}, "repository": {repository}}.Encode()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.AddCookie(seedSession(t, st, tenantID))
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	body := html.UnescapeString(rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET repository trends = %d body=%s", rec.Code, body)
+	}
+	for _, want := range []string{
+		"Repository posture trends",
+		"Recorded vulnerability debt for " + repository,
+		`<option value="` + repository + `" selected>`,
+		`data-snapshot-date="` + firstDate + `"`,
+		`data-snapshot-date="` + currentDate + `"`,
+		"Change since " + firstDate,
+		`<span class="trend-delta trend-down">-3</span>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("repository trends missing %q body=%s", want, body)
+		}
+	}
+	if strings.Count(body, `class="trend-row"`) != 2 || strings.Contains(body, "777") || strings.Contains(body, foreignRepository) {
+		t.Fatalf("repository trends synthesized or leaked rows: %s", body)
+	}
+
+	foreignPath := "/trends?" + url.Values{"repository": {foreignRepository}}.Encode()
+	req = httptest.NewRequest(http.MethodGet, foreignPath, nil)
+	req.AddCookie(seedSession(t, st, tenantID))
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-tenant repository trend = %d, want 404 body=%s", rec.Code, rec.Body.String())
 	}
 }
