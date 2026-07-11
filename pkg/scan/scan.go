@@ -236,6 +236,17 @@ func (r *Runner) Execute(ctx context.Context) error {
 		}
 	}
 
+	// Capture exact daily tenant vulnerability debt after findings, enrichment,
+	// and alerts have converged. The optional boundary keeps focused scan fakes
+	// small; snapshot failure is best-effort and never changes the scan result.
+	if snapshotter, ok := r.store.(interface {
+		SnapshotTenantPosture(context.Context) error
+	}); ok {
+		if err := snapshotter.SnapshotTenantPosture(ctx); err != nil {
+			slog.Warn("tenant posture snapshot failed", "error", err)
+		}
+	}
+
 	// Record a daily platform snapshot for the admin dashboard's trend deltas, so
 	// they accrue even on days with no dashboard visit. Best-effort and optional:
 	// only the concrete postgres store implements it, and a failure never affects

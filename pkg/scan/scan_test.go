@@ -110,6 +110,40 @@ func TestRunner_AlertEvaluationIsBestEffort(t *testing.T) {
 	}
 }
 
+func TestRunner_PostureSnapshotRunsAfterAlertsAndIsBestEffort(t *testing.T) {
+	store := &postureSnapshotFakeStore{snapshotErr: errors.New("posture snapshot failed")}
+	r := NewRunner(store, fakeFetcher{data: []byte(`{"bomFormat":"CycloneDX"}`)},
+		sbom.NewPassthroughCanonicalizer(), []scanner.Scanner{&fakeScanner{name: "grype", out: grypeDoc}},
+		converter.DefaultRegistry(), nil, DefaultOptions())
+
+	if err := r.Execute(context.Background()); err != nil {
+		t.Fatalf("posture snapshot must not fail the scan run: %v", err)
+	}
+	if !slices.Equal(store.steps, []string{"alerts", "posture"}) {
+		t.Fatalf("lifecycle steps = %v, want [alerts posture]", store.steps)
+	}
+}
+
+type postureSnapshotFakeStore struct {
+	fakeStore
+	steps       []string
+	snapshotErr error
+}
+
+func (f *postureSnapshotFakeStore) NextAlertEvents(context.Context, string, int) ([]postgres.AlertCandidate, postgres.AlertPosition, bool, error) {
+	f.steps = append(f.steps, "alerts")
+	return nil, postgres.AlertPosition{}, true, nil
+}
+
+func (f *postureSnapshotFakeStore) CommitAlertBatch(context.Context, string, []postgres.AlertDraft, []postgres.AlertFailure, postgres.AlertPosition) error {
+	return nil
+}
+
+func (f *postureSnapshotFakeStore) SnapshotTenantPosture(context.Context) error {
+	f.steps = append(f.steps, "posture")
+	return f.snapshotErr
+}
+
 type alertingFakeStore struct {
 	fakeStore
 	nextErr   error
