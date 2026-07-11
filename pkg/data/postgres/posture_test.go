@@ -152,7 +152,7 @@ func TestSnapshotTenantPosture_ExcludesVEXSuppressedFindings(t *testing.T) {
 }
 
 func TestSnapshotTenantPosture_LatestVEXStatementRestoresExposure(t *testing.T) {
-	st := testStore(t)
+	st := isolatedAdminProductHealthStore(t)
 	ctx := context.Background()
 	tenantID, sb := seedTenantAndSBOM(t, st)
 	if _, err := st.DB().ExecContext(ctx, `

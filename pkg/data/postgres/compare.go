@@ -284,7 +284,8 @@ func (s *Store) comparisonSide(ctx context.Context, tenantID, sbomID string) (Co
 	var side ComparisonSide
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, repository, COALESCE(version,''), digest
-		FROM devradar_sbom WHERE tenant_id=$1 AND id=$2`, tenantID, sbomID).
+		FROM devradar_sbom
+		WHERE tenant_id=$1 AND id=$2 AND status IN ('active','archived')`, tenantID, sbomID).
 		Scan(&side.SBOMID, &side.Repository, &side.Version, &side.Digest)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ComparisonSide{}, ErrNotFound
@@ -319,7 +320,7 @@ func (s *Store) comparisonFindings(ctx context.Context, tenantID, sbomID string)
 		JOIN devradar_sbom sb ON sb.id=f.sbom_id
 		LEFT JOIN devradar_cve_enrichment e ON e.cve=f.exposure
 		%s
-		WHERE sb.tenant_id=$1 AND sb.id=$2
+		WHERE sb.tenant_id=$1 AND sb.id=$2 AND sb.status IN ('active','archived')
 		  AND NOT %s
 		GROUP BY f.finding_id`, severityRankSQLCol("f.severity"), vexStatusJoin, vexSuppressedExpr), tenantID, sbomID)
 	if err != nil {
@@ -343,7 +344,7 @@ func (s *Store) comparisonPackages(ctx context.Context, tenantID, sbomID string)
 		SELECT p.package, p.version, p.licenses
 		FROM devradar_sbom_package p
 		JOIN devradar_sbom sb ON sb.id=p.sbom_id
-		WHERE sb.tenant_id=$1 AND sb.id=$2
+		WHERE sb.tenant_id=$1 AND sb.id=$2 AND sb.status IN ('active','archived')
 		ORDER BY p.package, p.version`, tenantID, sbomID)
 	if err != nil {
 		return nil, fmt.Errorf("load comparison packages: %w", err)

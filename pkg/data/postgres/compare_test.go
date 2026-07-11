@@ -90,7 +90,7 @@ func TestComparisonReadyRepositoryCount_DistinctActiveDigestsAndTenantIsolation(
 	}
 }
 
-func TestCompareSBOMs_ExcludesVEXSuppressedFindings(t *testing.T) {
+func TestCompareSBOMs_LatestVEXSameTimestampRestoresExposure(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
 	tenantID, from := seedTenantAndSBOM(t, st)
@@ -110,8 +110,9 @@ func TestCompareSBOMs_ExcludesVEXSuppressedFindings(t *testing.T) {
 	insertComparisonFinding(t, st, from.ID, "grype", "foreign-vex", "CVE-2026-8004", "medium", false)
 	insertComparisonVEX(t, st, tenantID, from.Digest, "", "CVE-2026-8001", "fixed", time.Now().Add(-time.Hour))
 	insertComparisonVEX(t, st, tenantID, "", "vex-compare", "CVE-2026-8002", "not_affected", time.Now())
-	insertComparisonVEX(t, st, tenantID, from.Digest, "", "CVE-2026-8003", "fixed", time.Now().Add(-time.Hour))
-	insertComparisonVEX(t, st, tenantID, from.Digest, "", "CVE-2026-8003", "affected", time.Now())
+	latestTie := time.Now().UTC()
+	insertComparisonVEX(t, st, tenantID, from.Digest, "", "CVE-2026-8003", "fixed", latestTie)
+	insertComparisonVEX(t, st, tenantID, from.Digest, "", "CVE-2026-8003", "affected", latestTie)
 	otherTenantID, _ := seedTenantAndSBOM(t, st)
 	insertComparisonVEX(t, st, otherTenantID, from.Digest, "", "CVE-2026-8004", "fixed", time.Now())
 
@@ -124,6 +125,13 @@ func TestCompareSBOMs_ExcludesVEXSuppressedFindings(t *testing.T) {
 	}
 	if got.Resolved[0].Exposure != "CVE-2026-8003" || got.Resolved[1].Exposure != "CVE-2026-8004" {
 		t.Fatalf("resolved findings = %+v", got.Resolved)
+	}
+	if err := st.SnapshotTenantPosture(ctx); err != nil {
+		t.Fatal(err)
+	}
+	trend, err := st.TenantPostureTrend(ctx, tenantID, 30)
+	if err != nil || len(trend) != 1 || trend[0].Total != 2 {
+		t.Fatalf("latest VEX aggregate = %+v error=%v", trend, err)
 	}
 }
 
@@ -383,6 +391,25 @@ func TestCompareSBOMs_AllowsArchivedEvidenceButRecommendationRequiresActiveBasel
 	}
 	if _, err := st.RecommendUpgrade(ctx, tenantID, to.ID); !errors.Is(err, postgres.ErrNotFound) {
 		t.Fatalf("archived recommendation baseline error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestCompareSBOMs_RejectsPendingEvidence(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	tenantID, from := seedTenantAndSBOM(t, st)
+	pending := comparisonSBOM(t, tenantID, from.Repository, "pending-v2", time.Now().UTC())
+	pending.Status = "pending"
+	if _, _, _, err := st.UpsertSBOM(ctx, pending); err != nil {
+		t.Fatal(err)
+	}
+	insertComparisonFinding(t, st, pending.ID, "grype", "pending", "CVE-2026-6303", "critical", false)
+
+	if _, err := st.CompareSBOMs(ctx, tenantID, from.ID, pending.ID); !errors.Is(err, postgres.ErrNotFound) {
+		t.Fatalf("pending comparison error = %v, want ErrNotFound", err)
+	}
+	if _, err := st.RecommendUpgrade(ctx, tenantID, pending.ID); !errors.Is(err, postgres.ErrNotFound) {
+		t.Fatalf("pending recommendation baseline error = %v, want ErrNotFound", err)
 	}
 }
 

@@ -29,7 +29,7 @@ const (
 			  AND vs.vulnerability = f.exposure
 			  AND (vs.product_digest = sb.digest
 			       OR vs.product_repo = ` + vexRepoKeyExpr + `)
-			ORDER BY vs.created_at DESC
+			ORDER BY vs.created_at DESC, vs.id DESC
 			LIMIT 1
 		) vex ON true`
 
@@ -47,7 +47,7 @@ const (
 		WHERE vs.tenant_id = sb.tenant_id
 		  AND vs.vulnerability = f.exposure
 		  AND (vs.product_digest = sb.digest OR vs.product_repo = ` + vexRepoKeyExpr + `)
-		ORDER BY vs.created_at DESC
+		ORDER BY vs.created_at DESC, vs.id DESC
 		LIMIT 1), false)`
 )
 
