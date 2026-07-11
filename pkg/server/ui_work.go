@@ -55,7 +55,7 @@ func workRows(items []postgres.FleetCVE) []workRow {
 	for _, item := range items {
 		agreement := "Single-scanner signal"
 		if item.ScannerCount > 1 {
-			agreement = fmt.Sprintf("%d scanners agree", item.ScannerCount)
+			agreement = fmt.Sprintf("Reported by %d scanners", item.ScannerCount)
 		}
 		age := "first seen just now"
 		if !item.FirstSeen.IsZero() {

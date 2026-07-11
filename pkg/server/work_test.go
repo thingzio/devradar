@@ -28,7 +28,7 @@ func TestWorkQueue(t *testing.T) {
 	body := rec.Body.String()
 	if rec.Code != http.StatusOK || !strings.Contains(body, "What should I fix?") ||
 		!strings.Contains(body, "CVE-2026-5001") || !strings.Contains(body, "Fix available") ||
-		!strings.Contains(body, "2 scanners agree") || strings.Contains(body, "CVE-2026-5999") {
+		!strings.Contains(body, "Reported by 2 scanners") || strings.Contains(body, "CVE-2026-5999") {
 		t.Fatalf("GET /work = %d body=%s", rec.Code, body)
 	}
 }

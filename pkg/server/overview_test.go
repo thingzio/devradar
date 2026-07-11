@@ -68,7 +68,7 @@ func TestOverviewSignals(t *testing.T) {
 		"License policy", "1 policy violation", "View licenses",
 		"Compare releases", "1 repository ready", "Choose digests",
 		"CVE-2026-7101", "CVE-2026-7102", "CVE-2026-7103",
-		"KEV", "Fix available", "2 scanners agree",
+		"KEV", "Fix available", "Reported by 2 scanners",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %q", want)
