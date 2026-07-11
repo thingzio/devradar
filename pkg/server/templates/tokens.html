@@ -2,7 +2,7 @@
 {{template "nav" .}}
 <main class="page-content narrow">
   <h1 class="page-title">Tokens &amp; settings</h1>
-  <p class="sub">API tokens for submitting SBOMs, and your default severity threshold.</p>
+  <p class="sub">Choose what DevRadar surfaces, then manage credentials for SBOM submission.</p>
 
   {{if .NewToken}}
   <div class="msg ok">
@@ -11,6 +11,42 @@
     <p class="muted" style="margin-bottom:0">Use it as <code>Authorization: Bearer &lt;token&gt;</code> when calling <code>POST /v1/sboms</code>.</p>
   </div>
   {{end}}
+
+  {{if .AlertsSaved}}<div class="msg ok">Alert settings saved.</div>{{end}}
+
+  <div class="card">
+    <div class="card-head"><h2>Browser alerts</h2></div>
+    <p class="muted">Create alerts from new image- and vulnerability-database changes. Email and webhook delivery can be added later without changing these rules.</p>
+    <form method="post" action="/settings/alerts">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <div class="setting-grid">
+        <label class="setting-check"><input type="checkbox" name="enabled" {{if .AlertPolicy.Enabled}}checked{{end}}> Enable new browser alerts</label>
+        <label class="setting-field">Minimum severity
+          <select name="min_severity">
+            {{$cur := .AlertPolicy.MinSeverity}}
+            {{range .Severities}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}
+          </select>
+        </label>
+        <fieldset class="setting-group">
+          <legend>Signals</legend>
+          <label class="setting-check"><input type="checkbox" name="alert_kev" {{if .AlertPolicy.AlertKEV}}checked{{end}}> Known exploited vulnerabilities</label>
+          <label class="setting-check"><input type="checkbox" name="alert_fix_available" {{if .AlertPolicy.AlertFixAvailable}}checked{{end}}> Fix now available</label>
+        </fieldset>
+        <fieldset class="setting-group">
+          <legend>Change source</legend>
+          <label class="setting-check"><input type="checkbox" name="include_image" {{if .AlertPolicy.IncludeImage}}checked{{end}}> New image inventory</label>
+          <label class="setting-check"><input type="checkbox" name="include_db" {{if .AlertPolicy.IncludeDB}}checked{{end}}> Vulnerability database update</label>
+        </fieldset>
+        {{if .AlertLabels}}
+        <fieldset class="setting-group setting-wide">
+          <legend>Only these labels <span class="muted">(leave all clear for every image)</span></legend>
+          <div class="setting-labels">{{range .AlertLabels}}<label class="setting-check"><input type="checkbox" name="labels" value="{{.Label}}" {{if .Selected}}checked{{end}}> {{.Label}}</label>{{end}}</div>
+        </fieldset>
+        {{end}}
+      </div>
+      <button class="btn" type="submit">Save alert settings</button>
+    </form>
+  </div>
 
   <div class="card">
     <div class="card-head"><h2>API tokens</h2></div>
