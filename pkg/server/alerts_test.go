@@ -143,6 +143,34 @@ func TestAlertPages(t *testing.T) {
 	}
 }
 
+func TestOverviewUnreadAlerts(t *testing.T) {
+	srv, st := testServer(t)
+	tenantID, _ := seedTenantToken(t, st)
+	otherTenantID, _ := seedTenantToken(t, st)
+	sb := seedLabeledSBOM(t, st, tenantID, "overview")
+	otherSB := seedLabeledSBOM(t, st, otherTenantID, "overview-other")
+	for i := 0; i < 6; i++ {
+		seedBrowserAlert(t, st, tenantID, sb, "CVE-2026-40"+string(rune('0'+i)))
+	}
+	seedBrowserAlert(t, st, otherTenantID, otherSB, "CVE-2026-4999")
+	session := seedSession(t, st, tenantID)
+
+	req := httptest.NewRequest(http.MethodGet, "/overview", nil)
+	req.AddCookie(session)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /overview = %d body=%s", rec.Code, body)
+	}
+	if got := strings.Count(body, `class="overview-alert`); got != 5 {
+		t.Fatalf("overview alert count = %d, want 5", got)
+	}
+	if !strings.Contains(body, `href="/alerts"`) || strings.Contains(body, "CVE-2026-4999") {
+		t.Fatalf("overview alert links/isolation body=%s", body)
+	}
+}
+
 func seedLabeledSBOM(t *testing.T, st *postgres.Store, tenantID, label string) *postgres.SBOM {
 	t.Helper()
 	random := make([]byte, 32)

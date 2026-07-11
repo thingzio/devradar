@@ -488,6 +488,33 @@ table.images td { vertical-align: middle; }
 .nowrap { white-space: nowrap; }
 .loadmore { margin-top: 1rem; }
 
+/* Browser alerts: a narrow rail encodes why an alert deserves attention. The
+   rest stays deliberately quiet so event facts remain the visual focus. */
+.alert-list { display: flex; flex-direction: column; margin-top: 1rem; }
+.alert-item {
+  display: grid; grid-template-columns: 0.5rem minmax(0, 1fr) auto;
+  align-items: center; gap: 0.75rem; color: var(--text); padding: 0.8rem 0.9rem;
+  border-left: 3px solid var(--accent); border-bottom: 1px solid var(--border);
+  background: var(--surface); text-decoration: none;
+}
+.alert-item:first-child { border-top: 1px solid var(--border); }
+.alert-item:hover { background: var(--surface-alt); text-decoration: none; }
+.alert-item:focus-visible { outline: none; box-shadow: inset var(--focus-ring); }
+.alert-new_kev, .alert-posture_regression { border-left-color: var(--danger); }
+.alert-fix_available { border-left-color: var(--ok); }
+.alert-unread { width: 7px; height: 7px; border-radius: 50%; background: transparent; }
+.is-unread .alert-unread { background: var(--accent); }
+.alert-main { display: flex; flex-direction: column; min-width: 0; }
+.alert-main span { color: var(--muted); font-size: 0.85rem; overflow-wrap: anywhere; }
+.alert-meta { display: flex; align-items: center; justify-content: flex-end; gap: 0.6rem; color: var(--muted); font-size: 0.78rem; }
+.alert-detail { border-left: 3px solid var(--accent); }
+.alert-detail.alert-new_kev, .alert-detail.alert-posture_regression { border-left-color: var(--danger); }
+.alert-detail.alert-fix_available { border-left-color: var(--ok); }
+.detail-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.65rem 1rem; margin: 1.25rem 0; }
+.detail-grid dt { color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.detail-grid dd { min-width: 0; overflow-wrap: anywhere; }
+.detail-grid code { word-break: break-all; }
+
 /* Event type + cause + severity badges (small pills) */
 .evt, .cause, .sev-badge {
   display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px;
@@ -606,4 +633,8 @@ table.findings td { vertical-align: middle; }
   .top-nav { padding: 10px 16px; }
   .setting-grid { grid-template-columns: 1fr; }
   .setting-wide { grid-column: auto; }
+  .alert-item { grid-template-columns: 0.5rem minmax(0, 1fr); }
+  .alert-meta { grid-column: 2; justify-content: flex-start; flex-wrap: wrap; }
+  .detail-grid { grid-template-columns: 1fr; gap: 0.2rem; }
+  .detail-grid dd { margin-bottom: 0.6rem; }
 }

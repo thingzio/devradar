@@ -11,7 +11,7 @@
       <a class="alert-item alert-{{.Kind}} {{if .Unread}}is-unread{{end}}" href="/alerts/{{.ID}}">
         <span class="alert-unread" aria-label="{{if .Unread}}Unread{{else}}Read{{end}}"></span>
         <span class="alert-main"><strong>{{.Title}}</strong><span>{{.Exposure}} · {{.Repository}}</span></span>
-        <span class="alert-meta"><span class="sev-badge sev-{{.Severity}}">{{.Severity}}</span><span>{{.Cause}}</span><time>{{.CreatedAt.Format "2006-01-02 15:04"}}</time></span>
+        <span class="alert-meta"><span class="sev-badge sev-b-{{.Severity}}">{{.Severity}}</span><span>{{.Cause}}</span><time>{{.CreatedAt.Format "2006-01-02 15:04"}}</time></span>
       </a>
       {{else}}
       <div class="empty-cta"><span class="muted">No alerts yet. Enable browser alerts in Settings to evaluate new changes.</span><a class="btn secondary" href="/tokens">Open settings</a></div>

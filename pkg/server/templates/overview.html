@@ -9,6 +9,25 @@
     <button class="btn" type="submit">Search</button>
   </form>
 
+  {{if or .Alerts .AlertsUnavailable}}
+  <div class="card">
+    <div class="card-head"><h2>Unread alerts</h2><a href="/alerts" class="muted">All alerts →</a></div>
+    {{if .AlertsUnavailable}}
+    <p class="muted">Alerts are temporarily unavailable. Image and finding data is unaffected.</p>
+    {{else}}
+    <div class="alert-list overview-alerts">
+      {{range .Alerts}}
+      <a class="overview-alert alert-item alert-{{.Kind}} is-unread" href="/alerts/{{.ID}}">
+        <span class="alert-unread" aria-label="Unread"></span>
+        <span class="alert-main"><strong>{{.Title}}</strong><span>{{.Exposure}} · {{.Repository}}</span></span>
+        <span class="alert-meta"><span class="sev-badge sev-b-{{.Severity}}">{{.Severity}}</span><time>{{.CreatedAt.Format "2006-01-02 15:04"}}</time></span>
+      </a>
+      {{end}}
+    </div>
+    {{end}}
+  </div>
+  {{end}}
+
   {{if .HasData}}
   {{if .ScanStatus}}<p class="scan-status">{{.ScanStatus}}</p>{{end}}
   <section class="stats stats-5">

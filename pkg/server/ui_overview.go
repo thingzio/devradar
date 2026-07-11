@@ -2,6 +2,7 @@ package server
 
 import (
 	"html/template"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -34,7 +35,9 @@ type overviewView struct {
 	SevChart   template.HTML // inline SVG: fleet severity composition (donut)
 	RemedChart template.HTML // inline SVG: fixable-now vs open, per severity
 	// Top-risk images teaser.
-	TopImages []imageRow
+	TopImages         []imageRow
+	Alerts            []alertRow
+	AlertsUnavailable bool
 }
 
 // handleOverview is the signed-in landing tab: fleet headline stats, a unified
@@ -83,6 +86,15 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		}
 		row.Bar = severityBar(im.Counts)
 		v.TopImages = append(v.TopImages, row)
+	}
+	alerts, err := s.store.UnreadAlerts(r.Context(), tn.ID, 5)
+	if err != nil {
+		slog.Warn("load overview alerts", "tenant_id", tn.ID, "error", err)
+		v.AlertsUnavailable = true
+	} else {
+		for _, item := range alerts {
+			v.Alerts = append(v.Alerts, makeAlertRow(item))
+		}
 	}
 	render(w, "overview.html", v)
 }
