@@ -65,7 +65,8 @@ func TestEvaluator_DrainsBoundedBatches(t *testing.T) {
 
 func TestEvaluator_PostureRegressionDetectionIsOptionalAndBounded(t *testing.T) {
 	policy := postgres.AlertPolicy{ID: "policy-1", Enabled: true, MinSeverity: data.SeverityMedium,
-		AlertKEV: true, AlertFixAvailable: true, IncludeImage: true, IncludeDB: true}
+		AlertKEV: true, AlertFixAvailable: true, IncludeImage: true, IncludeDB: true,
+		UpdatedAt: time.Unix(1, 0).UTC()}
 	first := evaluatorEvent(1)
 	first.SBOMID, first.Cause = "sbom-regresses", data.CauseImage
 	secondFinding := evaluatorEvent(2)
@@ -95,6 +96,9 @@ func TestEvaluator_PostureRegressionDetectionIsOptionalAndBounded(t *testing.T) 
 	}
 	var normal, regressions int
 	for _, draft := range store.drafts {
+		if !draft.PolicyUpdatedAt.Equal(policy.UpdatedAt) {
+			t.Fatalf("draft policy version = %v, want %v", draft.PolicyUpdatedAt, policy.UpdatedAt)
+		}
 		if draft.Kind == KindPostureRegression {
 			regressions++
 			if draft.Event.ID != first.ID {
@@ -112,44 +116,41 @@ func TestEvaluator_PostureRegressionDetectionIsOptionalAndBounded(t *testing.T) 
 	}
 }
 
-func TestEvaluator_PostureRegressionComparisonFailureRetriesBatch(t *testing.T) {
+func TestEvaluator_PostureRegressionComparisonFailureIsIsolated(t *testing.T) {
 	policy := postgres.AlertPolicy{ID: "policy-1", Enabled: true, MinSeverity: data.SeverityMedium,
 		AlertKEV: true, IncludeImage: true}
-	event := evaluatorEvent(1)
-	event.SBOMID, event.Cause = "sbom-retry", data.CauseImage
-	batch := []postgres.AlertCandidate{{Policy: policy, Event: event}}
+	failed := evaluatorEvent(1)
+	failed.SBOMID, failed.Cause = "sbom-fails", data.CauseImage
+	later := evaluatorEvent(2)
+	later.SBOMID, later.FindingID, later.Cause = "sbom-later", "finding-2", data.CauseImage
 	store := &fakeEvaluatorStore{
-		batches:        [][]postgres.AlertCandidate{batch},
+		batches: [][]postgres.AlertCandidate{{
+			{Policy: policy, Event: failed},
+			{Policy: policy, Event: later},
+		}},
 		comparisons:    make(map[string]*postgres.SBOMComparison),
-		comparisonErrs: map[string]error{event.SBOMID: errors.New("compare boom")},
-	}
-	evaluator := Evaluator{Store: store, Consumer: "test", BatchSize: 100}
-
-	got, err := evaluator.Evaluate(context.Background())
-	if err == nil || !errors.Is(err, store.comparisonErrs[event.SBOMID]) {
-		t.Fatalf("first Evaluate() error = %v, want compare boom", err)
-	}
-	if got.Examined != 1 || got.Matched != 1 || got.Failures != 0 {
-		t.Fatalf("first result = %+v, want examined=1 matched=1 failures=0", got)
-	}
-	if store.commits != 0 || len(store.drafts) != 0 || len(store.failures) != 0 {
-		t.Fatalf("failed comparison committed: commits=%d drafts=%+v failures=%+v", store.commits, store.drafts, store.failures)
+		comparisonErrs: map[string]error{failed.SBOMID: errors.New("compare boom")},
 	}
 
-	delete(store.comparisonErrs, event.SBOMID)
-	store.comparisons[event.SBOMID] = &postgres.SBOMComparison{Verdict: postgres.PostureRegresses}
-	got, err = evaluator.Evaluate(context.Background())
+	got, err := (Evaluator{Store: store, Consumer: "test", BatchSize: 100}).Evaluate(context.Background())
 	if err != nil {
-		t.Fatalf("retry Evaluate() error: %v", err)
+		t.Fatalf("Evaluate() error: %v", err)
 	}
-	if got.Examined != 1 || got.Matched != 2 || got.Failures != 0 || store.commits != 1 {
-		t.Fatalf("retry result = %+v, commits=%d", got, store.commits)
+	if got.Examined != 2 || got.Matched != 2 || got.Failures != 1 || store.commits != 1 {
+		t.Fatalf("result = %+v, commits=%d, want examined=2 matched=2 failures=1 commits=1", got, store.commits)
 	}
-	if len(store.drafts) != 2 || store.drafts[0].Kind != KindNewFinding || store.drafts[1].Kind != KindPostureRegression {
-		t.Fatalf("retry drafts = %+v, want normal and regression", store.drafts)
+	if len(store.drafts) != 2 || store.drafts[0].Kind != KindNewFinding || store.drafts[1].Kind != KindNewFinding {
+		t.Fatalf("drafts = %+v, want both normal alerts", store.drafts)
 	}
-	if len(store.failures) != 0 {
-		t.Fatalf("retry failures = %+v, want none", store.failures)
+	if len(store.failures) != 1 || store.failures[0].Position.EventID != failed.ID ||
+		store.failures[0].Error != `compare previous SBOM "sbom-fails": compare boom` {
+		t.Fatalf("failures = %+v, want persisted comparison failure", store.failures)
+	}
+	if len(store.processed) != 2 || store.processed[0].EventID != failed.ID || store.processed[1].EventID != later.ID {
+		t.Fatalf("processed = %+v, want failed and later positions", store.processed)
+	}
+	if len(store.compareSBOMIDs) != 2 || store.compareSBOMIDs[0] != failed.SBOMID || store.compareSBOMIDs[1] != later.SBOMID {
+		t.Fatalf("compared SBOMs = %v, want failed and later SBOMs", store.compareSBOMIDs)
 	}
 }
 

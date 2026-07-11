@@ -76,9 +76,10 @@ type AlertCandidate struct {
 
 // AlertDraft is a matched event ready for idempotent persistence.
 type AlertDraft struct {
-	PolicyID string
-	Kind     string
-	Event    AlertEvent
+	PolicyID        string
+	PolicyUpdatedAt time.Time
+	Kind            string
+	Event           AlertEvent
 }
 
 // AlertPosition identifies one source event and its stable pending-queue key.

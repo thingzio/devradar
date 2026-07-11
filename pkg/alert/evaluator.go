@@ -100,13 +100,22 @@ func (e Evaluator) Evaluate(ctx context.Context) (Result, error) {
 			seenSBOM[candidate.Event.SBOMID] = struct{}{}
 			comparison, err := regressionStore.ComparePreviousSBOM(ctx, candidate.Event.TenantID, candidate.Event.SBOMID)
 			if err != nil {
-				return result, fmt.Errorf("compare previous SBOM %q: %w", candidate.Event.SBOMID, err)
+				failures = append(failures, postgres.AlertFailure{
+					Position: postgres.AlertPosition{
+						OccurredAt: candidate.Event.OccurredAt,
+						EventID:    candidate.Event.ID,
+					},
+					Error: fmt.Sprintf("compare previous SBOM %q: %v", candidate.Event.SBOMID, err),
+				})
+				result.Failures++
+				continue
 			}
 			if comparison != nil && comparison.Verdict == postgres.PostureRegresses {
 				drafts = append(drafts, postgres.AlertDraft{
-					PolicyID: candidate.Policy.ID,
-					Kind:     KindPostureRegression,
-					Event:    candidate.Event,
+					PolicyID:        candidate.Policy.ID,
+					PolicyUpdatedAt: candidate.Policy.UpdatedAt,
+					Kind:            KindPostureRegression,
+					Event:           candidate.Event,
 				})
 				result.Matched++
 			}

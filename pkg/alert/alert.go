@@ -22,6 +22,9 @@ func Match(policy postgres.AlertPolicy, event postgres.AlertEvent) ([]postgres.A
 	if err := validateEvent(event); err != nil {
 		return nil, err
 	}
+	if !policy.UpdatedAt.IsZero() && event.OccurredAt.Before(policy.UpdatedAt) {
+		return nil, nil
+	}
 	if !policy.Enabled || !causeEnabled(policy, event.Cause) || !labelsMatch(policy.Labels, event.Labels) {
 		return nil, nil
 	}
@@ -45,7 +48,12 @@ func Match(policy postgres.AlertPolicy, event postgres.AlertEvent) ([]postgres.A
 	if kind == "" {
 		return nil, nil
 	}
-	return []postgres.AlertDraft{{PolicyID: policy.ID, Kind: kind, Event: event}}, nil
+	return []postgres.AlertDraft{{
+		PolicyID:        policy.ID,
+		PolicyUpdatedAt: policy.UpdatedAt,
+		Kind:            kind,
+		Event:           event,
+	}}, nil
 }
 
 func validateEvent(event postgres.AlertEvent) error {

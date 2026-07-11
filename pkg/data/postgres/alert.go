@@ -213,10 +213,6 @@ func (s *Store) NextAlertEvents(ctx context.Context, consumer string, limit int)
 		Scan(&start.OccurredAt, &start.EventID); err != nil {
 		return nil, AlertPosition{}, false, fmt.Errorf("read alert cursor: %w", err)
 	}
-	if inserted == 1 {
-		return nil, start, true, nil
-	}
-
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT e.id, e.occurred_at, e.tenant_id, e.sbom_id,
 		       sb.repository, sb.digest, e.finding_id, e.event_type,
@@ -271,7 +267,7 @@ func (s *Store) NextAlertEvents(ctx context.Context, consumer string, limit int)
 	if err := rows.Err(); err != nil {
 		return nil, AlertPosition{}, false, fmt.Errorf("iterate alert events: %w", err)
 	}
-	return candidates, end, false, nil
+	return candidates, end, inserted == 1 && len(candidates) == 0, nil
 }
 
 // CommitAlertBatch atomically persists all effects, marks every examined queue
@@ -286,14 +282,21 @@ func (s *Store) CommitAlertBatch(ctx context.Context, consumer string, drafts []
 
 	for _, draft := range drafts {
 		e := draft.Event
+		policyUpdatedAt := sql.NullTime{
+			Time:  draft.PolicyUpdatedAt,
+			Valid: !draft.PolicyUpdatedAt.IsZero(),
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO devradar_alert
 			(tenant_id, policy_id, event_id, event_occurred_at, alert_kind, sbom_id,
 			 repository, digest, finding_id, exposure, package, version, severity, score, cause)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+			SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15
+			FROM devradar_alert_policy p
+			WHERE p.id=$2 AND p.tenant_id=$1 AND p.enabled
+			  AND ($16::timestamptz IS NULL OR p.updated_at=$16)
 			ON CONFLICT DO NOTHING`, e.TenantID, draft.PolicyID, e.ID, e.OccurredAt, draft.Kind,
 			e.SBOMID, e.Repository, e.Digest, e.FindingID, e.Exposure, e.Package,
-			e.Version, e.Severity, e.Score, e.Cause); err != nil {
+			e.Version, e.Severity, e.Score, e.Cause, policyUpdatedAt); err != nil {
 			return fmt.Errorf("insert alert: %w", err)
 		}
 	}

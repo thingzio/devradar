@@ -84,7 +84,7 @@ func (s *Store) ApplyScan(ctx context.Context, sb *SBOM, scanner string, ver Ver
 			if err != nil {
 				return err
 			}
-			if err := enqueueAlertEvent(ctx, tx, eventID, cause, now); err != nil {
+			if err := enqueueAlertEvent(ctx, tx, sb.TenantID, eventID, cause, now); err != nil {
 				return err
 			}
 			if err := upsertFinding(ctx, tx, sb.ID, scanner, id, in, now); err != nil {
@@ -99,7 +99,7 @@ func (s *Store) ApplyScan(ctx context.Context, sb *SBOM, scanner string, ver Ver
 			if err != nil {
 				return err
 			}
-			if err := enqueueAlertEvent(ctx, tx, eventID, cause, now); err != nil {
+			if err := enqueueAlertEvent(ctx, tx, sb.TenantID, eventID, cause, now); err != nil {
 				return err
 			}
 			if err := upsertFinding(ctx, tx, sb.ID, scanner, id, in, now); err != nil {
@@ -118,7 +118,7 @@ func (s *Store) ApplyScan(ctx context.Context, sb *SBOM, scanner string, ver Ver
 		if err != nil {
 			return err
 		}
-		if err := enqueueAlertEvent(ctx, tx, eventID, cause, now); err != nil {
+		if err := enqueueAlertEvent(ctx, tx, sb.TenantID, eventID, cause, now); err != nil {
 			return err
 		}
 		if err := deleteFinding(ctx, tx, sb.ID, scanner, id); err != nil {
@@ -330,16 +330,16 @@ func insertEvent(ctx context.Context, tx *sql.Tx, sb *SBOM, scanner, findingID, 
 	return eventID, nil
 }
 
-func enqueueAlertEvent(ctx context.Context, tx *sql.Tx, eventID int64, cause string, at time.Time) error {
+func enqueueAlertEvent(ctx context.Context, tx *sql.Tx, tenantID string, eventID int64, cause string, at time.Time) error {
 	if eventID == 0 || (cause != data.CauseImage && cause != data.CauseDB) {
 		return nil
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO devradar_alert_event_queue
-			(consumer, event_occurred_at, event_id)
-		VALUES ('browser-alerts-v1',$1,$2)
+			(consumer, tenant_id, event_occurred_at, event_id)
+		VALUES ('browser-alerts-v1',$1,$2,$3)
 		ON CONFLICT (consumer, event_occurred_at, event_id) DO NOTHING`,
-		at, eventID); err != nil {
+		tenantID, at, eventID); err != nil {
 		return fmt.Errorf("enqueue alert event: %w", err)
 	}
 	return nil

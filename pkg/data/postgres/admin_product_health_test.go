@@ -181,8 +181,8 @@ func TestAdminProductHealth(t *testing.T) {
 		if cause == "image" || cause == "db" {
 			if _, err := db.ExecContext(ctx, `
 					INSERT INTO devradar_alert_event_queue
-						(consumer, event_occurred_at, event_id)
-					VALUES ('browser-alerts-v1',$1,$2)`, at, id); err != nil {
+						(consumer, tenant_id, event_occurred_at, event_id)
+					VALUES ('browser-alerts-v1',$1,$2,$3)`, tenantA, at, id); err != nil {
 				t.Fatalf("enqueue finding event: %v", err)
 			}
 		}

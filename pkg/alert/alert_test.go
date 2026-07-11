@@ -46,6 +46,8 @@ func TestMatch(t *testing.T) {
 	}{
 		{name: "disabled", policy: changePolicy(policy, func(p *postgres.AlertPolicy) { p.Enabled = false }), event: event},
 		{name: "new finding", policy: policy, event: event, want: []string{KindNewFinding}},
+		{name: "before policy update", policy: changePolicy(policy, func(p *postgres.AlertPolicy) { p.UpdatedAt = event.OccurredAt.Add(time.Nanosecond) }), event: event},
+		{name: "at policy update", policy: changePolicy(policy, func(p *postgres.AlertPolicy) { p.UpdatedAt = event.OccurredAt }), event: event, want: []string{KindNewFinding}},
 		{name: "KEV takes precedence", policy: policy, event: changeEvent(event, func(e *postgres.AlertEvent) { e.KEV = true }), want: []string{KindNewKEV}},
 		{name: "KEV disabled falls through", policy: changePolicy(policy, func(p *postgres.AlertPolicy) { p.AlertKEV = false }), event: changeEvent(event, func(e *postgres.AlertEvent) { e.KEV = true }), want: []string{KindNewFinding}},
 		{name: "fix available", policy: policy, event: changeEvent(event, func(e *postgres.AlertEvent) { e.EventType = data.EventFixed }), want: []string{KindFixAvailable}},
@@ -72,6 +74,11 @@ func TestMatch(t *testing.T) {
 			}
 			if !slices.Equal(kinds(got), tt.want) {
 				t.Fatalf("Match() kinds = %v, want %v", kinds(got), tt.want)
+			}
+			for _, draft := range got {
+				if !draft.PolicyUpdatedAt.Equal(tt.policy.UpdatedAt) {
+					t.Fatalf("Match() policy version = %v, want %v", draft.PolicyUpdatedAt, tt.policy.UpdatedAt)
+				}
 			}
 		})
 	}

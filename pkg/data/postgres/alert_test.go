@@ -12,6 +12,7 @@ import (
 	alertengine "github.com/thingzio/devradar/pkg/alert"
 	"github.com/thingzio/devradar/pkg/data"
 	"github.com/thingzio/devradar/pkg/data/postgres"
+	"github.com/thingzio/devradar/pkg/tenant"
 )
 
 func TestAlertEvaluatorStore_ReverseCommitDoesNotLoseEarlierEvent(t *testing.T) {
@@ -58,8 +59,8 @@ func TestAlertEvaluatorStore_ReverseCommitDoesNotLoseEarlierEvent(t *testing.T) 
 		if queueExists {
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO devradar_alert_event_queue
-					(consumer, event_occurred_at, event_id)
-				VALUES ($1,$2,$3)`, consumer, occurredAt, id); err != nil {
+					(consumer, tenant_id, event_occurred_at, event_id)
+				VALUES ($1,$2,$3,$4)`, consumer, tenantID, occurredAt, id); err != nil {
 				t.Fatalf("insert queued event: %v", err)
 			}
 		}
@@ -111,6 +112,70 @@ func TestAlertEvaluatorStore_ReverseCommitDoesNotLoseEarlierEvent(t *testing.T) 
 	}
 	if initialized || len(candidates) != 1 || candidates[0].Event.ID != earlier.EventID {
 		t.Fatalf("second visible batch = %+v initialized=%v, want earlier event %d", candidates, initialized, earlier.EventID)
+	}
+}
+
+func TestAlertEvaluatorStore_NewCursorDoesNotSkipQueuedProspectiveEvent(t *testing.T) {
+	st := isolatedAdminProductHealthStore(t)
+	ctx := context.Background()
+	tenantID, sb := seedTenantAndSBOM(t, st)
+	if _, err := st.EnsureAlertPolicy(ctx, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB().ExecContext(ctx,
+		`UPDATE devradar_alert_policy SET enabled=true WHERE tenant_id=$1`, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ApplyScan(ctx, sb, "grype", postgres.Versions{
+		DBVersion: "cursor-db", ScannerVersion: "cursor-scanner", CanonicalizerVersion: "cursor-canon",
+	}, []data.Vulnerability{vuln("CVE-2026-7003", "pkg", "1", data.SeverityHigh, 8, false)}); err != nil {
+		t.Fatal(err)
+	}
+	consumer := "cursor-observability-" + randID(t)
+	if _, err := st.DB().ExecContext(ctx, `
+		UPDATE devradar_alert_event_queue SET consumer=$1
+		WHERE consumer=$2`, consumer, alertengine.DefaultConsumer); err != nil {
+		t.Fatal(err)
+	}
+
+	candidates, _, initialized, err := st.NextAlertEvents(ctx, consumer, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initialized || len(candidates) != 1 || candidates[0].Event.Exposure != "CVE-2026-7003" {
+		t.Fatalf("first queued read = candidates:%+v initialized:%v, want prospective event", candidates, initialized)
+	}
+}
+
+func TestAlertEventQueue_TenantDeletionCascadesPendingRows(t *testing.T) {
+	st := isolatedAdminProductHealthStore(t)
+	ctx := context.Background()
+	tenantID, sb := seedTenantAndSBOM(t, st)
+	if err := st.ApplyScan(ctx, sb, "grype", postgres.Versions{
+		DBVersion: "delete-db", ScannerVersion: "delete-scanner", CanonicalizerVersion: "delete-canon",
+	}, []data.Vulnerability{vuln("CVE-2026-7004", "pkg", "1", data.SeverityHigh, 8, false)}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := st.AdminProductHealth(ctx)
+	if err != nil || before.EvaluatorBacklog != 1 {
+		t.Fatalf("backlog before tenant deletion = %+v error=%v", before, err)
+	}
+
+	if err := tenant.DeleteTenant(ctx, st.DB(), tenantID); err != nil {
+		t.Fatal(err)
+	}
+	var pending int
+	if err := st.DB().QueryRowContext(ctx, `
+		SELECT count(*) FROM devradar_alert_event_queue
+		WHERE consumer=$1 AND processed_at IS NULL`, alertengine.DefaultConsumer).Scan(&pending); err != nil {
+		t.Fatal(err)
+	}
+	after, err := st.AdminProductHealth(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending != 0 || after.EvaluatorBacklog != 0 || !after.OldestPendingAt.IsZero() {
+		t.Fatalf("queue after tenant deletion = pending:%d health:%+v", pending, after)
 	}
 }
 
@@ -312,6 +377,7 @@ func TestAlertEventQueueMigration_IsProspectiveAndIndexed(t *testing.T) {
 
 	wantIndexes := []string{
 		"idx_devradar_alert_event_queue_pending",
+		"idx_devradar_alert_event_queue_tenant",
 		"idx_devradar_fe_actionable_position",
 		"idx_devradar_alert_created_at",
 		"idx_devradar_alert_failure_occurred_at",
@@ -368,8 +434,8 @@ func TestAlertEvaluatorStore_ProspectiveAndIdempotent(t *testing.T) {
 		t.Fatalf("second scan: %v", err)
 	}
 	if _, err := st.DB().ExecContext(ctx, `
-		INSERT INTO devradar_alert_event_queue (consumer, event_occurred_at, event_id)
-		SELECT $1, occurred_at, id
+		INSERT INTO devradar_alert_event_queue (consumer, tenant_id, event_occurred_at, event_id)
+		SELECT $1, tenant_id, occurred_at, id
 		FROM devradar_finding_event
 		WHERE sbom_id=$2 AND event_type='added' AND exposure=$3`,
 		consumer, sb.ID, second.Exposure); err != nil {
@@ -433,6 +499,104 @@ func TestAlertEvaluatorStore_ProspectiveAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestAlertEvaluatorStore_StalePolicyDraftIsSkippedAndProcessed(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate string
+	}{
+		{name: "disabled at same version", mutate: `UPDATE devradar_alert_policy SET enabled=false WHERE tenant_id=$1`},
+		{name: "updated while enabled", mutate: `UPDATE devradar_alert_policy SET min_severity='critical', updated_at=updated_at + interval '1 second' WHERE tenant_id=$1`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := testStore(t)
+			ctx := context.Background()
+			tenantID, sb := seedTenantAndSBOM(t, st)
+			consumer := "stale-policy-" + randID(t)
+
+			if _, err := st.EnsureAlertPolicy(ctx, tenantID); err != nil {
+				t.Fatalf("ensure policy: %v", err)
+			}
+			if _, err := st.DB().ExecContext(ctx,
+				`UPDATE devradar_alert_policy SET enabled=true WHERE tenant_id=$1`, tenantID); err != nil {
+				t.Fatalf("enable policy: %v", err)
+			}
+			policy, err := st.EnsureAlertPolicy(ctx, tenantID)
+			if err != nil {
+				t.Fatalf("read enabled policy: %v", err)
+			}
+			if _, _, initialized, err := st.NextAlertEvents(ctx, consumer, 100); err != nil {
+				t.Fatalf("initialize consumer: %v", err)
+			} else if !initialized {
+				t.Fatal("new consumer was not initialized prospectively")
+			}
+
+			occurredAt := policy.UpdatedAt.Add(time.Second)
+			var eventID int64
+			if err := st.DB().QueryRowContext(ctx, `
+				INSERT INTO devradar_finding_event
+					(tenant_id, sbom_id, scanner, finding_id, event_type, exposure,
+					 package, version, severity, score, cause, db_version,
+					 scanner_version, scan_run_id, occurred_at)
+				VALUES ($1,$2,'grype',$3,'added',$4,'pkg','1','high',8.0,'db',
+				        'db','scanner',gen_random_uuid(),$5)
+				RETURNING id`, tenantID, sb.ID, "finding-"+randID(t), "CVE-2026-"+randID(t)[:4], occurredAt).Scan(&eventID); err != nil {
+				t.Fatalf("insert source event: %v", err)
+			}
+			if _, err := st.DB().ExecContext(ctx, `
+				INSERT INTO devradar_alert_event_queue (consumer, tenant_id, event_occurred_at, event_id)
+				VALUES ($1,$2,$3,$4)`, consumer, tenantID, occurredAt, eventID); err != nil {
+				t.Fatalf("enqueue event: %v", err)
+			}
+
+			candidates, end, initialized, err := st.NextAlertEvents(ctx, consumer, 100)
+			if err != nil {
+				t.Fatalf("read candidate: %v", err)
+			}
+			if initialized || len(candidates) != 1 {
+				t.Fatalf("candidates=%d initialized=%v, want 1/false", len(candidates), initialized)
+			}
+			drafts, err := alertengine.Match(candidates[0].Policy, candidates[0].Event)
+			if err != nil {
+				t.Fatalf("match candidate: %v", err)
+			}
+			if len(drafts) != 1 || drafts[0].PolicyUpdatedAt.IsZero() {
+				t.Fatalf("drafts = %+v, want one versioned draft", drafts)
+			}
+
+			if _, err := st.DB().ExecContext(ctx, tt.mutate, tenantID); err != nil {
+				t.Fatalf("mutate policy: %v", err)
+			}
+			processed := alertCandidatePositions(candidates)
+			if err := st.CommitAlertBatch(ctx, consumer, drafts, nil, processed, end); err != nil {
+				t.Fatalf("commit stale draft: %v", err)
+			}
+
+			var alertCount int
+			if err := st.DB().QueryRowContext(ctx, `
+				SELECT COUNT(*) FROM devradar_alert
+				WHERE tenant_id=$1 AND event_id=$2 AND event_occurred_at=$3`,
+				tenantID, eventID, occurredAt).Scan(&alertCount); err != nil {
+				t.Fatalf("count stale alerts: %v", err)
+			}
+			if alertCount != 0 {
+				t.Fatalf("stale alerts = %d, want 0", alertCount)
+			}
+			var processedAt sql.NullTime
+			if err := st.DB().QueryRowContext(ctx, `
+				SELECT processed_at FROM devradar_alert_event_queue
+				WHERE consumer=$1 AND event_occurred_at=$2 AND event_id=$3`,
+				consumer, occurredAt, eventID).Scan(&processedAt); err != nil {
+				t.Fatalf("read queue state: %v", err)
+			}
+			if !processedAt.Valid {
+				t.Fatal("stale draft queue row was not processed")
+			}
+		})
+	}
+}
+
 func TestAlertEvaluatorStore_PostureRegressionIsIdempotentPerSBOM(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
@@ -455,6 +619,10 @@ func TestAlertEvaluatorStore_PostureRegressionIsIdempotentPerSBOM(t *testing.T) 
 	policy, err := st.EnsureAlertPolicy(ctx, tenantID)
 	if err != nil {
 		t.Fatalf("ensure policy: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx,
+		`UPDATE devradar_alert_policy SET enabled=true WHERE tenant_id=$1`, tenantID); err != nil {
+		t.Fatalf("enable policy: %v", err)
 	}
 	base := time.Now().UTC()
 	drafts := []postgres.AlertDraft{
