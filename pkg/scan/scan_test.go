@@ -96,6 +96,35 @@ func TestRunner_ScansAndApplies(t *testing.T) {
 	}
 }
 
+func TestRunner_AlertEvaluationIsBestEffort(t *testing.T) {
+	store := &alertingFakeStore{fakeStore: fakeStore{}, nextErr: errors.New("alert read failed")}
+	r := NewRunner(store, fakeFetcher{data: []byte(`{"bomFormat":"CycloneDX"}`)},
+		sbom.NewPassthroughCanonicalizer(), []scanner.Scanner{&fakeScanner{name: "grype", out: grypeDoc}},
+		converter.DefaultRegistry(), nil, DefaultOptions())
+
+	if err := r.Execute(context.Background()); err != nil {
+		t.Fatalf("alert evaluation must not fail the scan run: %v", err)
+	}
+	if store.nextCalls != 1 {
+		t.Fatalf("NextAlertEvents calls = %d, want 1", store.nextCalls)
+	}
+}
+
+type alertingFakeStore struct {
+	fakeStore
+	nextErr   error
+	nextCalls int
+}
+
+func (f *alertingFakeStore) NextAlertEvents(context.Context, string, int) ([]postgres.AlertCandidate, postgres.AlertPosition, bool, error) {
+	f.nextCalls++
+	return nil, postgres.AlertPosition{}, false, f.nextErr
+}
+
+func (f *alertingFakeStore) CommitAlertBatch(context.Context, string, []postgres.AlertDraft, []postgres.AlertFailure, postgres.AlertPosition) error {
+	return nil
+}
+
 // A minimal CycloneDX SBOM carrying one licensed component, for backfill tests.
 const cdxWithLicense = `{"bomFormat":"CycloneDX","components":[
   {"type":"library","name":"openssl","version":"3.0","licenses":[{"license":{"id":"Apache-2.0"}}]}]}`

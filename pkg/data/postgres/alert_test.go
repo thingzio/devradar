@@ -51,6 +51,20 @@ func TestAlertMigration_DefaultsAndConstraints(t *testing.T) {
 	}
 }
 
+func TestAlertMigration_DefaultConsumerCursorExists(t *testing.T) {
+	st := testStore(t)
+	var position postgres.AlertPosition
+	if err := st.DB().QueryRowContext(context.Background(), `
+		SELECT last_occurred_at, last_event_id
+		FROM devradar_alert_cursor
+		WHERE consumer='browser-alerts-v1'`).Scan(&position.OccurredAt, &position.EventID); err != nil {
+		t.Fatalf("default alert cursor: %v", err)
+	}
+	if position.OccurredAt.IsZero() {
+		t.Fatal("default alert cursor has zero timestamp")
+	}
+}
+
 func TestAlertEvaluatorStore_ProspectiveAndIdempotent(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
