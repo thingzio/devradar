@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"html/template"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/thingzio/devradar/pkg/data"
 	"github.com/thingzio/devradar/pkg/data/postgres"
 	"github.com/thingzio/devradar/pkg/middleware"
 )
@@ -33,6 +35,11 @@ type overviewLicenseSignal struct {
 	Configured bool
 	Violations int
 	Packages   int
+}
+
+type overviewLicenseReader interface {
+	GetLicensePolicy(context.Context, string) (data.LicensePolicy, error)
+	FleetLicenseStats(context.Context, string, data.LicensePolicy) (postgres.FleetLicenseStats, error)
 }
 
 type overviewView struct {
@@ -142,20 +149,10 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		v.Trend = overviewTrend(points)
 	}
 
-	policy, err := s.store.GetLicensePolicy(r.Context(), tn.ID)
+	v.License, err = loadOverviewLicense(r.Context(), s.store, tn.ID)
 	if err != nil {
-		slog.Warn("load overview license policy", "tenant_id", tn.ID, "error", err)
+		slog.Warn("load overview license signal", "tenant_id", tn.ID, "error", err)
 		v.LicenseUnavailable = true
-	} else {
-		v.License.Configured = !policy.IsEmpty()
-		stats, err := s.store.FleetLicenseStats(r.Context(), tn.ID, policy)
-		if err != nil {
-			slog.Warn("load overview license stats", "tenant_id", tn.ID, "error", err)
-			v.LicenseUnavailable = true
-		} else {
-			v.License.Violations = stats.Violations
-			v.License.Packages = stats.Packages
-		}
 	}
 
 	v.ComparisonReady, err = s.store.ComparisonReadyRepositoryCount(r.Context(), tn.ID)
@@ -164,6 +161,21 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		v.ComparisonUnavailable = true
 	}
 	render(w, "overview.html", v)
+}
+
+func loadOverviewLicense(ctx context.Context, reader overviewLicenseReader, tenantID string) (overviewLicenseSignal, error) {
+	policy, err := reader.GetLicensePolicy(ctx, tenantID)
+	if err != nil {
+		return overviewLicenseSignal{}, err
+	}
+	if policy.IsEmpty() {
+		return overviewLicenseSignal{}, nil
+	}
+	stats, err := reader.FleetLicenseStats(ctx, tenantID, policy)
+	if err != nil {
+		return overviewLicenseSignal{}, err
+	}
+	return overviewLicenseSignal{Configured: true, Violations: stats.Violations, Packages: stats.Packages}, nil
 }
 
 func overviewTrend(points []postgres.TenantPosturePoint) overviewTrendSignal {
