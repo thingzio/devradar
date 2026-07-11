@@ -1,12 +1,14 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"log/slog"
 	"maps"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/thingzio/devradar/pkg/config"
 	"github.com/thingzio/devradar/pkg/data"
@@ -29,6 +31,14 @@ const (
 	adminFailuresMax = 50
 	adminHistoryMax  = 720 // 30 days of hourly buckets
 )
+
+type adminProductHealthReader interface {
+	AdminProductHealth(context.Context) (*postgres.AdminProductHealth, error)
+}
+
+func loadAdminProductHealth(ctx context.Context, reader adminProductHealthReader) (*postgres.AdminProductHealth, error) {
+	return reader.AdminProductHealth(ctx)
+}
 
 // auditLog records an operator action. Log-only (slog.Warn), matching the
 // sibling services — no persisted audit table in v1.
@@ -76,11 +86,23 @@ func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("admin platform deltas", "error", err)
 		deltas = nil
 	}
+	productHealth, productHealthErr := loadAdminProductHealth(r.Context(), s.store)
+	if productHealthErr != nil {
+		slog.Warn("admin product health unavailable", "error", productHealthErr)
+	}
+	oldestPendingAge := ""
+	if productHealth != nil && productHealth.EvaluatorBacklog > 0 && !productHealth.OldestPendingAt.IsZero() {
+		oldestPendingAge = humanizeSince(time.Since(productHealth.OldestPendingAt))
+	}
 
 	render(w, "admin_dashboard.html", s.adminBase(tn, "dashboard", map[string]any{
-		"Title":     "Admin — Dashboard",
-		"Counts":    counts,
-		"TrendRows": trendRows(deltas),
+		"Title":                         "Admin — Dashboard",
+		"Counts":                        counts,
+		"TrendRows":                     trendRows(deltas),
+		"ProductHealth":                 productHealth,
+		"ProductHealthUnavailable":      productHealthErr != nil,
+		"ProductHealthOldestPendingAge": oldestPendingAge,
+		"ProductHealthUTCDate":          time.Now().UTC().Format("2006-01-02"),
 	}))
 }
 
