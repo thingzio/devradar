@@ -11,12 +11,7 @@ import (
 
 func adminTestDB(t *testing.T) *postgres.Store {
 	t.Helper()
-	st, err := postgres.NewFromEnv(context.Background())
-	if err != nil {
-		t.Skipf("skipping (no database): %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	return st
+	return testDB(t)
 }
 
 // TestAdminListTenants_SearchAndPage covers the operator tenant list: a substring

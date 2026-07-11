@@ -287,8 +287,7 @@ func (s *Store) CommitAlertBatch(ctx context.Context, consumer string, drafts []
 			(tenant_id, policy_id, event_id, event_occurred_at, alert_kind, sbom_id,
 			 repository, digest, finding_id, exposure, package, version, severity, score, cause)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-			ON CONFLICT (tenant_id, policy_id, event_id, event_occurred_at, alert_kind)
-			DO NOTHING`, e.TenantID, draft.PolicyID, e.ID, e.OccurredAt, draft.Kind,
+			ON CONFLICT DO NOTHING`, e.TenantID, draft.PolicyID, e.ID, e.OccurredAt, draft.Kind,
 			e.SBOMID, e.Repository, e.Digest, e.FindingID, e.Exposure, e.Package,
 			e.Version, e.Severity, e.Score, e.Cause); err != nil {
 			return fmt.Errorf("insert alert: %w", err)

@@ -37,14 +37,23 @@ func seedSession(t *testing.T, st *postgres.Store, tenantID string) *http.Cookie
 
 func testServer(t *testing.T) (*server.Server, *postgres.Store) {
 	t.Helper()
-	st, err := postgres.NewFromEnv(context.Background())
-	if err != nil {
-		t.Skipf("skipping (no database): %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := testPostgresStore(t)
 	// email + OAuth nil → API-only; local blob store under a temp dir.
 	srv := server.New(st, gcs.LocalStore{Dir: t.TempDir()}, nil, nil, server.Options{Version: "test"})
 	return srv, st
+}
+
+func testPostgresStore(t *testing.T) *postgres.Store {
+	t.Helper()
+	st, err := postgres.NewFromEnv(context.Background())
+	if err != nil {
+		if os.Getenv("DATABASE_URL") != "" {
+			t.Fatalf("connect configured integration database: %v", err)
+		}
+		t.Skipf("skipping (no database): %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	return st
 }
 
 // csrfFor performs a GET of path with the session cookie, extracts the CSRF

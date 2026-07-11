@@ -276,3 +276,59 @@ func TestAlertEvaluatorStore_ProspectiveAndIdempotent(t *testing.T) {
 		t.Fatalf("events after commit = %d initialized=%v", len(candidates), initialized)
 	}
 }
+
+func TestAlertEvaluatorStore_PostureRegressionIsIdempotentPerSBOM(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	var duplicateGroups int
+	if err := st.DB().QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM (
+			SELECT tenant_id, policy_id, sbom_id, alert_kind
+			FROM devradar_alert
+			WHERE alert_kind='posture_regression'
+			GROUP BY tenant_id, policy_id, sbom_id, alert_kind
+			HAVING COUNT(*) > 1
+		) duplicates`).Scan(&duplicateGroups); err != nil {
+		t.Fatalf("count duplicate posture regression groups: %v", err)
+	}
+	if duplicateGroups != 0 {
+		t.Fatalf("duplicate posture regression groups = %d, want 0", duplicateGroups)
+	}
+	tenantID, sb := seedTenantAndSBOM(t, st)
+	policy, err := st.EnsureAlertPolicy(ctx, tenantID)
+	if err != nil {
+		t.Fatalf("ensure policy: %v", err)
+	}
+	base := time.Now().UTC()
+	drafts := []postgres.AlertDraft{
+		{PolicyID: policy.ID, Kind: alertengine.KindPostureRegression, Event: postgres.AlertEvent{
+			ID: 501, OccurredAt: base, TenantID: tenantID, SBOMID: sb.ID,
+			Repository: sb.Repository, Digest: sb.Digest, FindingID: "finding-501",
+			Exposure: "CVE-2026-9501", Package: "pkg", Version: "1", Severity: data.SeverityHigh,
+			Cause: data.CauseImage, Score: 8,
+		}},
+		{PolicyID: policy.ID, Kind: alertengine.KindPostureRegression, Event: postgres.AlertEvent{
+			ID: 502, OccurredAt: base.Add(time.Second), TenantID: tenantID, SBOMID: sb.ID,
+			Repository: sb.Repository, Digest: sb.Digest, FindingID: "finding-502",
+			Exposure: "CVE-2026-9502", Package: "pkg", Version: "1", Severity: data.SeverityCritical,
+			Cause: data.CauseImage, Score: 9,
+		}},
+	}
+	if err := st.CommitAlertBatch(ctx, "posture-test", drafts, nil, postgres.AlertPosition{}); err != nil {
+		t.Fatalf("commit posture regression drafts: %v", err)
+	}
+	if err := st.CommitAlertBatch(ctx, "posture-test", drafts, nil, postgres.AlertPosition{}); err != nil {
+		t.Fatalf("retry posture regression drafts: %v", err)
+	}
+	var count int
+	if err := st.DB().QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM devradar_alert
+		WHERE tenant_id=$1 AND policy_id=$2 AND sbom_id=$3 AND alert_kind='posture_regression'`,
+		tenantID, policy.ID, sb.ID).Scan(&count); err != nil {
+		t.Fatalf("count posture regression alerts: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("posture regression alerts = %d, want 1", count)
+	}
+}

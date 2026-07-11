@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/thingzio/devradar/pkg/data"
 	"github.com/thingzio/devradar/pkg/data/postgres"
 )
 
@@ -16,6 +17,10 @@ const (
 type Store interface {
 	NextAlertEvents(ctx context.Context, consumer string, limit int) ([]postgres.AlertCandidate, postgres.AlertPosition, bool, error)
 	CommitAlertBatch(ctx context.Context, consumer string, drafts []postgres.AlertDraft, failures []postgres.AlertFailure, end postgres.AlertPosition) error
+}
+
+type postureRegressionStore interface {
+	ComparePreviousSBOM(context.Context, string, string) (*postgres.SBOMComparison, error)
 }
 
 // Evaluator drains new finding events in bounded batches.
@@ -49,6 +54,8 @@ func (e Evaluator) Evaluate(ctx context.Context) (Result, error) {
 	}
 
 	var result Result
+	regressionStore, detectsRegressions := e.Store.(postureRegressionStore)
+	seenSBOM := make(map[string]struct{})
 	for {
 		if err := ctx.Err(); err != nil {
 			return result, err
@@ -79,6 +86,25 @@ func (e Evaluator) Evaluate(ctx context.Context) (Result, error) {
 			}
 			drafts = append(drafts, matched...)
 			result.Matched += len(matched)
+			if !detectsRegressions || len(matched) == 0 || candidate.Event.EventType != data.EventAdded || candidate.Event.Cause != data.CauseImage {
+				continue
+			}
+			if _, seen := seenSBOM[candidate.Event.SBOMID]; seen {
+				continue
+			}
+			seenSBOM[candidate.Event.SBOMID] = struct{}{}
+			comparison, err := regressionStore.ComparePreviousSBOM(ctx, candidate.Event.TenantID, candidate.Event.SBOMID)
+			if err != nil {
+				return result, fmt.Errorf("compare previous SBOM %q: %w", candidate.Event.SBOMID, err)
+			}
+			if comparison != nil && comparison.Verdict == postgres.PostureRegresses {
+				drafts = append(drafts, postgres.AlertDraft{
+					PolicyID: candidate.Policy.ID,
+					Kind:     KindPostureRegression,
+					Event:    candidate.Event,
+				})
+				result.Matched++
+			}
 		}
 		if err := e.Store.CommitAlertBatch(ctx, consumer, drafts, failures, end); err != nil {
 			return result, fmt.Errorf("commit alert events: %w", err)
