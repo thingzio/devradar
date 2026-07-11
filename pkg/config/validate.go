@@ -116,7 +116,7 @@ func validateDatabaseURL(key string) error {
 		return nil
 	}
 	if _, err := url.Parse(strings.TrimSpace(v)); err != nil {
-		return fmt.Errorf("%s is not a parseable connection string: %v", key, err)
+		return fmt.Errorf("%s is not a parseable connection string: %w", key, err)
 	}
 	return nil
 }
