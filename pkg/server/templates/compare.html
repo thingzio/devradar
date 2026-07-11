@@ -10,6 +10,14 @@
     <span>{{.Comparison.From.Version}} <code>{{.Comparison.From.Digest}}</code> → {{.Comparison.To.Version}} <code>{{.Comparison.To.Digest}}</code></span>
   </div>
 
+  {{with .Recommendation}}
+  <div class="card">
+    <div class="card-head"><h2>Upgrade guidance</h2></div>
+    <p><a href="{{.Link}}">newer tracked digest with fewer relevant findings</a></p>
+    <p class="muted">Comparison basis: {{if .BaselineVersion}}{{.BaselineVersion}} {{end}}<code>{{.BaselineDigest}}</code> → {{if .CandidateVersion}}{{.CandidateVersion}} {{end}}<code>{{.CandidateDigest}}</code></p>
+  </div>
+  {{end}}
+
   <section class="stats stats-3">
     <div class="stat"><span class="stat-n">{{.Comparison.From.Counts.Total}} → {{.Comparison.To.Counts.Total}}</span><span class="stat-l">Canonical findings</span></div>
     <div class="stat"><span class="stat-n danger-n">{{.Comparison.From.Counts.Critical}} → {{.Comparison.To.Counts.Critical}}</span><span class="stat-l">Critical</span></div>
@@ -29,6 +37,8 @@
   </div>
 
   {{if .LicenseChanges}}<div class="card"><div class="card-head"><h2>License changes</h2></div><table><thead><tr><th>Package</th><th>From</th><th>To</th></tr></thead><tbody>{{range .LicenseChanges}}<tr><td>{{.Package}} <span class="muted">{{.Version}}</span></td><td>{{.From}}</td><td>{{.To}}</td></tr>{{end}}</tbody></table></div>{{end}}
+
+  {{if .LicensePolicyRegressions}}<div class="card"><div class="card-head"><h2>License-policy regressions</h2><span class="pill">{{len .LicensePolicyRegressions}}</span></div><p class="muted">Evaluated against the tenant's current license policy.</p><table><thead><tr><th>Package</th><th>From</th><th>To</th><th>Policy</th></tr></thead><tbody>{{range .LicensePolicyRegressions}}<tr><td>{{.Package}} <span class="muted">{{.Version}}</span></td><td>{{if .From}}{{.From}}{{else}}Not present{{end}}</td><td>{{if .To}}{{.To}}{{else}}No license declared{{end}}</td><td>{{.Reason}}</td></tr>{{end}}</tbody></table></div>{{end}}
 </main>
 {{template "foot" .}}
 

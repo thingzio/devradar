@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/thingzio/devradar/pkg/data/postgres"
@@ -23,6 +24,18 @@ type compareLicenseRow struct {
 	Package, Version, From, To string
 }
 
+type compareLicensePolicyRegressionRow struct {
+	Package, Version, From, To, Reason string
+}
+
+type compareRecommendationView struct {
+	Link             string
+	BaselineVersion  string
+	BaselineDigest   string
+	CandidateVersion string
+	CandidateDigest  string
+}
+
 type compareView struct {
 	Title                                  string
 	SignedIn                               bool
@@ -35,6 +48,8 @@ type compareView struct {
 	Added, Resolved, Rerated, NewlyFixable []compareFindingRow
 	PackagesAdded, PackagesRemoved         []comparePackageRow
 	LicenseChanges                         []compareLicenseRow
+	LicensePolicyRegressions               []compareLicensePolicyRegressionRow
+	Recommendation                         *compareRecommendationView
 }
 
 func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
@@ -77,6 +92,27 @@ func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
 			Package: change.Package, Version: change.Version,
 			From: strings.Join(change.From, ", "), To: strings.Join(change.To, ", "),
 		})
+	}
+	for _, regression := range comparison.LicensePolicyRegressions {
+		v.LicensePolicyRegressions = append(v.LicensePolicyRegressions, compareLicensePolicyRegressionRow{
+			Package: regression.Package, Version: regression.Version,
+			From: strings.Join(regression.From, ", "), To: strings.Join(regression.To, ", "), Reason: regression.Reason,
+		})
+	}
+	recommendation, err := s.store.RecommendUpgrade(r.Context(), tn.ID, toID)
+	if err != nil {
+		http.Error(w, "failed to load upgrade guidance", http.StatusInternalServerError)
+		return
+	}
+	if recommendation != nil {
+		v.Recommendation = &compareRecommendationView{
+			Link: "/compare?" + url.Values{
+				"from": {recommendation.Baseline.SBOMID},
+				"to":   {recommendation.Candidate.SBOMID},
+			}.Encode(),
+			BaselineVersion: recommendation.Baseline.Version, BaselineDigest: recommendation.Baseline.Digest,
+			CandidateVersion: recommendation.Candidate.Version, CandidateDigest: recommendation.Candidate.Digest,
+		}
 	}
 	render(w, "compare.html", v)
 }
