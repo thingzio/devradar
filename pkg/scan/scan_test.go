@@ -135,7 +135,7 @@ func (f *postureSnapshotFakeStore) NextAlertEvents(context.Context, string, int)
 	return nil, postgres.AlertPosition{}, true, nil
 }
 
-func (f *postureSnapshotFakeStore) CommitAlertBatch(context.Context, string, []postgres.AlertDraft, []postgres.AlertFailure, postgres.AlertPosition) error {
+func (f *postureSnapshotFakeStore) CommitAlertBatch(context.Context, string, []postgres.AlertDraft, []postgres.AlertFailure, []postgres.AlertPosition, postgres.AlertPosition) error {
 	return nil
 }
 
@@ -155,7 +155,7 @@ func (f *alertingFakeStore) NextAlertEvents(context.Context, string, int) ([]pos
 	return nil, postgres.AlertPosition{}, false, f.nextErr
 }
 
-func (f *alertingFakeStore) CommitAlertBatch(context.Context, string, []postgres.AlertDraft, []postgres.AlertFailure, postgres.AlertPosition) error {
+func (f *alertingFakeStore) CommitAlertBatch(context.Context, string, []postgres.AlertDraft, []postgres.AlertFailure, []postgres.AlertPosition, postgres.AlertPosition) error {
 	return nil
 }
 

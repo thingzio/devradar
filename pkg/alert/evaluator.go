@@ -16,7 +16,7 @@ const (
 // Store is the durable event/cursor boundary required by the evaluator.
 type Store interface {
 	NextAlertEvents(ctx context.Context, consumer string, limit int) ([]postgres.AlertCandidate, postgres.AlertPosition, bool, error)
-	CommitAlertBatch(ctx context.Context, consumer string, drafts []postgres.AlertDraft, failures []postgres.AlertFailure, end postgres.AlertPosition) error
+	CommitAlertBatch(ctx context.Context, consumer string, drafts []postgres.AlertDraft, failures []postgres.AlertFailure, processed []postgres.AlertPosition, end postgres.AlertPosition) error
 }
 
 type postureRegressionStore interface {
@@ -70,8 +70,13 @@ func (e Evaluator) Evaluate(ctx context.Context) (Result, error) {
 
 		drafts := make([]postgres.AlertDraft, 0, len(candidates))
 		failures := make([]postgres.AlertFailure, 0)
+		processed := make([]postgres.AlertPosition, 0, len(candidates))
 		for _, candidate := range candidates {
 			result.Examined++
+			processed = append(processed, postgres.AlertPosition{
+				OccurredAt: candidate.Event.OccurredAt,
+				EventID:    candidate.Event.ID,
+			})
 			matched, err := Match(candidate.Policy, candidate.Event)
 			if err != nil {
 				failures = append(failures, postgres.AlertFailure{
@@ -106,7 +111,7 @@ func (e Evaluator) Evaluate(ctx context.Context) (Result, error) {
 				result.Matched++
 			}
 		}
-		if err := e.Store.CommitAlertBatch(ctx, consumer, drafts, failures, end); err != nil {
+		if err := e.Store.CommitAlertBatch(ctx, consumer, drafts, failures, processed, end); err != nil {
 			return result, fmt.Errorf("commit alert events: %w", err)
 		}
 		if len(candidates) < batchSize {

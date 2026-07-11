@@ -81,7 +81,7 @@ type AlertDraft struct {
 	Event    AlertEvent
 }
 
-// AlertPosition identifies one stable location in the finding-event stream.
+// AlertPosition identifies one source event and its stable pending-queue key.
 type AlertPosition struct {
 	OccurredAt time.Time
 	EventID    int64

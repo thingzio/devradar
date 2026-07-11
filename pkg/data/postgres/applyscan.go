@@ -80,7 +80,11 @@ func (s *Store) ApplyScan(ctx context.Context, sb *SBOM, scanner string, ver Ver
 		old, existed := prev[id]
 		switch {
 		case !existed:
-			if err := insertEvent(ctx, tx, sb, scanner, id, data.EventAdded, in, nil, cause, ver, runID, now); err != nil {
+			eventID, err := insertEvent(ctx, tx, sb, scanner, id, data.EventAdded, in, nil, cause, ver, runID, now)
+			if err != nil {
+				return err
+			}
+			if err := enqueueAlertEvent(ctx, tx, eventID, cause, now); err != nil {
 				return err
 			}
 			if err := upsertFinding(ctx, tx, sb.ID, scanner, id, in, now); err != nil {
@@ -91,7 +95,11 @@ func (s *Store) ApplyScan(ctx context.Context, sb *SBOM, scanner string, ver Ver
 			if !old.IsFixed && in.IsFixed {
 				evType = data.EventFixed
 			}
-			if err := insertEvent(ctx, tx, sb, scanner, id, evType, in, &old, cause, ver, runID, now); err != nil {
+			eventID, err := insertEvent(ctx, tx, sb, scanner, id, evType, in, &old, cause, ver, runID, now)
+			if err != nil {
+				return err
+			}
+			if err := enqueueAlertEvent(ctx, tx, eventID, cause, now); err != nil {
 				return err
 			}
 			if err := upsertFinding(ctx, tx, sb.ID, scanner, id, in, now); err != nil {
@@ -106,7 +114,11 @@ func (s *Store) ApplyScan(ctx context.Context, sb *SBOM, scanner string, ver Ver
 		if _, stillPresent := incoming[id]; stillPresent {
 			continue
 		}
-		if err := insertEvent(ctx, tx, sb, scanner, id, data.EventResolved, old, &old, cause, ver, runID, now); err != nil {
+		eventID, err := insertEvent(ctx, tx, sb, scanner, id, data.EventResolved, old, &old, cause, ver, runID, now)
+		if err != nil {
+			return err
+		}
+		if err := enqueueAlertEvent(ctx, tx, eventID, cause, now); err != nil {
 			return err
 		}
 		if err := deleteFinding(ctx, tx, sb.ID, scanner, id); err != nil {
@@ -288,7 +300,7 @@ func insertScanRun(ctx context.Context, tx *sql.Tx, sbomID, scanner string, ver 
 }
 
 func insertEvent(ctx context.Context, tx *sql.Tx, sb *SBOM, scanner, findingID, evType string,
-	cur data.Vulnerability, prev *data.Vulnerability, cause string, ver Versions, runID string, at time.Time) error {
+	cur data.Vulnerability, prev *data.Vulnerability, cause string, ver Versions, runID string, at time.Time) (int64, error) {
 
 	var prevSev any
 	var prevScore any
@@ -296,19 +308,39 @@ func insertEvent(ctx context.Context, tx *sql.Tx, sb *SBOM, scanner, findingID, 
 		prevSev = prev.Severity
 		prevScore = prev.Score
 	}
-	_, err := tx.ExecContext(ctx, `
+	var eventID int64
+	err := tx.QueryRowContext(ctx, `
 		INSERT INTO devradar_finding_event
 			(tenant_id, sbom_id, scanner, finding_id, event_type, exposure, package, version,
 			 severity, score, prev_severity, prev_score, cause, db_version, scanner_version,
 			 scan_run_id, occurred_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
 		ON CONFLICT (sbom_id, scanner, finding_id, event_type, db_version, scanner_version, occurred_at)
-		DO NOTHING`,
+		DO NOTHING
+		RETURNING id`,
 		sb.TenantID, sb.ID, scanner, findingID, evType, cur.Exposure, cur.Package, cur.Version,
 		cur.Severity, cur.Score, prevSev, prevScore, cause, ver.DBVersion, ver.ScannerVersion,
-		runID, at)
+		runID, at).Scan(&eventID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
 	if err != nil {
-		return fmt.Errorf("insert event: %w", err)
+		return 0, fmt.Errorf("insert event: %w", err)
+	}
+	return eventID, nil
+}
+
+func enqueueAlertEvent(ctx context.Context, tx *sql.Tx, eventID int64, cause string, at time.Time) error {
+	if eventID == 0 || (cause != data.CauseImage && cause != data.CauseDB) {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO devradar_alert_event_queue
+			(consumer, event_occurred_at, event_id)
+		VALUES ('browser-alerts-v1',$1,$2)
+		ON CONFLICT (consumer, event_occurred_at, event_id) DO NOTHING`,
+		at, eventID); err != nil {
+		return fmt.Errorf("enqueue alert event: %w", err)
 	}
 	return nil
 }

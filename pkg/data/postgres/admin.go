@@ -80,18 +80,9 @@ func (s *Store) AdminProductHealth(ctx context.Context) (*AdminProductHealth, er
 
 	var oldestPending sql.NullTime
 	if err := s.db.QueryRowContext(ctx, `
-		WITH position AS (
-			SELECT
-				COALESCE((SELECT last_occurred_at FROM devradar_alert_cursor
-				          WHERE consumer=$1), 'epoch') AS occurred_at,
-				COALESCE((SELECT last_event_id FROM devradar_alert_cursor
-				          WHERE consumer=$1), 0) AS event_id
-		)
-		SELECT count(*), min(e.occurred_at)
-		FROM devradar_finding_event e
-		CROSS JOIN position p
-		WHERE e.cause IN ('image','db')
-		  AND (e.occurred_at,e.id) > (p.occurred_at,p.event_id)`,
+		SELECT count(*), min(event_occurred_at)
+		FROM devradar_alert_event_queue
+		WHERE consumer=$1 AND processed_at IS NULL`,
 		"browser-alerts-v1").Scan(&health.EvaluatorBacklog, &oldestPending); err != nil {
 		return nil, fmt.Errorf("product health evaluator backlog: %w", err)
 	}

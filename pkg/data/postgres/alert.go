@@ -227,14 +227,17 @@ func (s *Store) NextAlertEvents(ctx context.Context, consumer string, limit int)
 		       COALESCE(p.alert_fix_available, true), COALESCE(p.include_image, true),
 		       COALESCE(p.include_db, true), COALESCE(p.labels, '{}'),
 		       p.created_at, p.updated_at
-		FROM devradar_finding_event e
+		FROM devradar_alert_event_queue q
+		JOIN devradar_finding_event e
+		  ON e.occurred_at=q.event_occurred_at AND e.id=q.event_id
 		JOIN devradar_sbom sb ON sb.id = e.sbom_id
 		LEFT JOIN devradar_cve_enrichment en ON en.cve = e.exposure
 		LEFT JOIN devradar_alert_policy p ON p.tenant_id = e.tenant_id
-		WHERE (e.occurred_at, e.id) > ($1, $2)
+		WHERE q.consumer=$1
+		  AND q.processed_at IS NULL
 		  AND e.cause IN ('image', 'db')
 		ORDER BY e.occurred_at ASC, e.id ASC
-		LIMIT $3`, start.OccurredAt, start.EventID, limit)
+		LIMIT $2`, consumer, limit)
 	if err != nil {
 		return nil, AlertPosition{}, false, fmt.Errorf("list alert events: %w", err)
 	}
@@ -271,9 +274,10 @@ func (s *Store) NextAlertEvents(ctx context.Context, consumer string, limit int)
 	return candidates, end, false, nil
 }
 
-// CommitAlertBatch atomically persists all effects and advances the consumer's
-// cursor. Conflict guards make retrying a committed batch harmless.
-func (s *Store) CommitAlertBatch(ctx context.Context, consumer string, drafts []AlertDraft, failures []AlertFailure, end AlertPosition) error {
+// CommitAlertBatch atomically persists all effects, marks every examined queue
+// position processed, and advances the consumer's cursor as an observability
+// high-water. Conflict guards make retrying a committed batch harmless.
+func (s *Store) CommitAlertBatch(ctx context.Context, consumer string, drafts []AlertDraft, failures []AlertFailure, processed []AlertPosition, end AlertPosition) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin alert batch: %w", err)
@@ -301,6 +305,15 @@ func (s *Store) CommitAlertBatch(ctx context.Context, consumer string, drafts []
 			ON CONFLICT (consumer, event_id, event_occurred_at) DO NOTHING`,
 			consumer, failure.Position.EventID, failure.Position.OccurredAt, failure.Error); err != nil {
 			return fmt.Errorf("insert alert failure: %w", err)
+		}
+	}
+	for _, position := range processed {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE devradar_alert_event_queue
+			SET processed_at=COALESCE(processed_at, now())
+			WHERE consumer=$1 AND event_occurred_at=$2 AND event_id=$3`,
+			consumer, position.OccurredAt, position.EventID); err != nil {
+			return fmt.Errorf("mark alert event processed: %w", err)
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `

@@ -178,17 +178,33 @@ func TestAdminProductHealth(t *testing.T) {
 			RETURNING id`, tenantA, sbomA.ID, randID(t), canonicalKEVCVE, cause, at).Scan(&id); err != nil {
 			t.Fatalf("seed finding event: %v", err)
 		}
+		if cause == "image" || cause == "db" {
+			if _, err := db.ExecContext(ctx, `
+					INSERT INTO devradar_alert_event_queue
+						(consumer, event_occurred_at, event_id)
+					VALUES ('browser-alerts-v1',$1,$2)`, at, id); err != nil {
+				t.Fatalf("enqueue finding event: %v", err)
+			}
+		}
 		return id
 	}
 	cursorEventID := insertEvent("image", cursorAt)
 	pendingAtCursorID := insertEvent("db", cursorAt)
 	pendingLaterAt := cursorAt.Add(time.Minute)
 	pendingLaterID := insertEvent("image", pendingLaterAt)
-	_ = insertEvent("tooling", cursorAt.Add(2*time.Minute))
+	toolingAt := cursorAt.Add(2 * time.Minute)
+	toolingID := insertEvent("tooling", toolingAt)
 	if _, err := db.ExecContext(ctx, `
-		UPDATE devradar_alert_cursor
-		SET last_occurred_at=$2, last_event_id=$3, updated_at=now()
-		WHERE consumer=$1`, "browser-alerts-v1", cursorAt, cursorEventID); err != nil {
+			UPDATE devradar_alert_event_queue
+			SET processed_at=now()
+			WHERE consumer='browser-alerts-v1' AND event_occurred_at=$1 AND event_id=$2`,
+		cursorAt, cursorEventID); err != nil {
+		t.Fatalf("mark cursor event processed: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+			UPDATE devradar_alert_cursor
+			SET last_occurred_at=$2, last_event_id=$3, updated_at=now()
+			WHERE consumer=$1`, "browser-alerts-v1", toolingAt, toolingID); err != nil {
 		t.Fatalf("set alert cursor: %v", err)
 	}
 
@@ -276,11 +292,11 @@ func TestAdminProductHealth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("admin product health without cursor: %v", err)
 	}
-	if withoutCursor.EvaluatorBacklog != 3 {
-		t.Errorf("epoch-fallback evaluator backlog = %d, want 3", withoutCursor.EvaluatorBacklog)
+	if withoutCursor.EvaluatorBacklog != 2 {
+		t.Errorf("cursor-independent evaluator backlog = %d, want 2", withoutCursor.EvaluatorBacklog)
 	}
 	if !withoutCursor.OldestPendingAt.Equal(cursorAt) {
-		t.Errorf("epoch-fallback oldest pending at = %s, want %s",
+		t.Errorf("cursor-independent oldest pending at = %s, want %s",
 			withoutCursor.OldestPendingAt, cursorAt)
 	}
 }

@@ -2,6 +2,7 @@ package postgres_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"testing"
@@ -12,6 +13,106 @@ import (
 	"github.com/thingzio/devradar/pkg/data"
 	"github.com/thingzio/devradar/pkg/data/postgres"
 )
+
+func TestAlertEvaluatorStore_ReverseCommitDoesNotLoseEarlierEvent(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	tenantID, sb := seedTenantAndSBOM(t, st)
+	consumer := "reverse-commit-" + randID(t)
+
+	if _, err := st.EnsureAlertPolicy(ctx, tenantID); err != nil {
+		t.Fatalf("ensure policy: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx,
+		`UPDATE devradar_alert_policy SET enabled=true WHERE tenant_id=$1`, tenantID); err != nil {
+		t.Fatalf("enable policy: %v", err)
+	}
+
+	_, initializedAt, initialized, err := st.NextAlertEvents(ctx, consumer, 100)
+	if err != nil {
+		t.Fatalf("initialize consumer: %v", err)
+	}
+	if !initialized {
+		t.Fatal("new consumer was not initialized prospectively")
+	}
+
+	var queueExists bool
+	if err := st.DB().QueryRowContext(ctx,
+		`SELECT to_regclass('devradar_alert_event_queue') IS NOT NULL`).Scan(&queueExists); err != nil {
+		t.Fatalf("check queue migration: %v", err)
+	}
+
+	insert := func(tx *sql.Tx, occurredAt time.Time, exposure string) postgres.AlertPosition {
+		t.Helper()
+		var id int64
+		if err := tx.QueryRowContext(ctx, `
+			INSERT INTO devradar_finding_event
+				(tenant_id, sbom_id, scanner, finding_id, event_type, exposure,
+				 package, version, severity, score, cause, db_version,
+				 scanner_version, scan_run_id, occurred_at)
+			VALUES ($1,$2,'grype',$3,'added',$4,'pkg','1','high',8.0,'db',
+			        'db','scanner',gen_random_uuid(),$5)
+			RETURNING id`, tenantID, sb.ID, "finding-"+exposure, exposure, occurredAt).Scan(&id); err != nil {
+			t.Fatalf("insert source event: %v", err)
+		}
+		if queueExists {
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO devradar_alert_event_queue
+					(consumer, event_occurred_at, event_id)
+				VALUES ($1,$2,$3)`, consumer, occurredAt, id); err != nil {
+				t.Fatalf("insert queued event: %v", err)
+			}
+		}
+		return postgres.AlertPosition{OccurredAt: occurredAt, EventID: id}
+	}
+
+	txA, err := st.DB().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin transaction A: %v", err)
+	}
+	t.Cleanup(func() { _ = txA.Rollback() })
+	earlier := insert(txA, initializedAt.OccurredAt.Add(time.Minute), "CVE-2026-7001")
+
+	txB, err := st.DB().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin transaction B: %v", err)
+	}
+	later := insert(txB, initializedAt.OccurredAt.Add(2*time.Minute), "CVE-2026-7002")
+	if err := txB.Commit(); err != nil {
+		t.Fatalf("commit transaction B: %v", err)
+	}
+
+	result, err := (alertengine.Evaluator{Store: st, Consumer: consumer, BatchSize: 100}).Evaluate(ctx)
+	if err != nil {
+		t.Fatalf("evaluate later committed event: %v", err)
+	}
+	if result.Examined != 1 || result.Matched != 1 || result.Failures != 0 {
+		t.Fatalf("later evaluation = %+v, want one examined/matched event", result)
+	}
+	if queueExists {
+		var processedAt sql.NullTime
+		if err := st.DB().QueryRowContext(ctx, `
+			SELECT processed_at FROM devradar_alert_event_queue
+			WHERE consumer=$1 AND event_occurred_at=$2 AND event_id=$3`,
+			consumer, later.OccurredAt, later.EventID).Scan(&processedAt); err != nil {
+			t.Fatalf("read later queue state: %v", err)
+		}
+		if !processedAt.Valid {
+			t.Fatal("later queue row was not marked processed")
+		}
+	}
+
+	if err := txA.Commit(); err != nil {
+		t.Fatalf("commit transaction A: %v", err)
+	}
+	candidates, _, initialized, err := st.NextAlertEvents(ctx, consumer, 100)
+	if err != nil {
+		t.Fatalf("read earlier event after commit: %v", err)
+	}
+	if initialized || len(candidates) != 1 || candidates[0].Event.ID != earlier.EventID {
+		t.Fatalf("second visible batch = %+v initialized=%v, want earlier event %d", candidates, initialized, earlier.EventID)
+	}
+}
 
 func TestAlertMigration_DefaultsAndConstraints(t *testing.T) {
 	st := testStore(t)
@@ -184,6 +285,51 @@ func TestAlertMigration_DefaultConsumerCursorExists(t *testing.T) {
 	}
 }
 
+func TestAlertEventQueueMigration_IsProspectiveAndIndexed(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	tenantID, sb := seedTenantAndSBOM(t, st)
+
+	var eventID int64
+	if err := st.DB().QueryRowContext(ctx, `
+		INSERT INTO devradar_finding_event
+			(tenant_id, sbom_id, scanner, finding_id, event_type, exposure,
+			 package, version, severity, score, cause, db_version,
+			 scanner_version, scan_run_id, occurred_at)
+		VALUES ($1,$2,'grype','historical','added','CVE-2026-7999','pkg','1',
+		        'high',8.0,'db','db','scanner',gen_random_uuid(),now())
+		RETURNING id`, tenantID, sb.ID).Scan(&eventID); err != nil {
+		t.Fatalf("seed source-only event: %v", err)
+	}
+	var queued int
+	if err := st.DB().QueryRowContext(ctx, `
+		SELECT count(*) FROM devradar_alert_event_queue WHERE event_id=$1`, eventID).Scan(&queued); err != nil {
+		t.Fatalf("count source-only queue rows: %v", err)
+	}
+	if queued != 0 {
+		t.Fatalf("source-only historical event was backfilled into queue: %d rows", queued)
+	}
+
+	wantIndexes := []string{
+		"idx_devradar_alert_event_queue_pending",
+		"idx_devradar_fe_actionable_position",
+		"idx_devradar_alert_created_at",
+		"idx_devradar_alert_failure_occurred_at",
+	}
+	for _, name := range wantIndexes {
+		var exists bool
+		if err := st.DB().QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM pg_indexes
+				WHERE schemaname=current_schema() AND indexname=$1)`, name).Scan(&exists); err != nil {
+			t.Fatalf("check index %s: %v", name, err)
+		}
+		if !exists {
+			t.Errorf("index %s does not exist", name)
+		}
+	}
+}
+
 func TestAlertEvaluatorStore_ProspectiveAndIdempotent(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
@@ -221,6 +367,14 @@ func TestAlertEvaluatorStore_ProspectiveAndIdempotent(t *testing.T) {
 	if err := st.ApplyScan(ctx, sb, "grype", v2, []data.Vulnerability{first, second}); err != nil {
 		t.Fatalf("second scan: %v", err)
 	}
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_alert_event_queue (consumer, event_occurred_at, event_id)
+		SELECT $1, occurred_at, id
+		FROM devradar_finding_event
+		WHERE sbom_id=$2 AND event_type='added' AND exposure=$3`,
+		consumer, sb.ID, second.Exposure); err != nil {
+		t.Fatalf("enqueue custom consumer event: %v", err)
+	}
 
 	candidates, end, initialized, err := st.NextAlertEvents(ctx, consumer, 100)
 	if err != nil {
@@ -239,10 +393,11 @@ func TestAlertEvaluatorStore_ProspectiveAndIdempotent(t *testing.T) {
 	if len(drafts) != 1 {
 		t.Fatalf("drafts = %d, want 1", len(drafts))
 	}
-	if err := st.CommitAlertBatch(ctx, consumer, drafts, nil, end); err != nil {
+	processed := alertCandidatePositions(candidates)
+	if err := st.CommitAlertBatch(ctx, consumer, drafts, nil, processed, end); err != nil {
 		t.Fatalf("commit batch: %v", err)
 	}
-	if err := st.CommitAlertBatch(ctx, consumer, drafts, nil, end); err != nil {
+	if err := st.CommitAlertBatch(ctx, consumer, drafts, nil, processed, end); err != nil {
 		t.Fatalf("retry batch: %v", err)
 	}
 
@@ -255,7 +410,7 @@ func TestAlertEvaluatorStore_ProspectiveAndIdempotent(t *testing.T) {
 		t.Fatalf("alerts = %d, want 1", alertCount)
 	}
 
-	if err := st.CommitAlertBatch(ctx, consumer, nil, nil, initializedAt); err != nil {
+	if err := st.CommitAlertBatch(ctx, consumer, nil, nil, nil, initializedAt); err != nil {
 		t.Fatalf("older cursor commit: %v", err)
 	}
 	var cursor postgres.AlertPosition
@@ -264,8 +419,9 @@ func TestAlertEvaluatorStore_ProspectiveAndIdempotent(t *testing.T) {
 		Scan(&cursor.OccurredAt, &cursor.EventID); err != nil {
 		t.Fatalf("read cursor: %v", err)
 	}
-	if cursor != end {
-		t.Fatalf("cursor moved backward: got %+v, want %+v", cursor, end)
+	wantCursor := maxAlertPosition(initializedAt, end)
+	if cursor != wantCursor {
+		t.Fatalf("cursor high-water = %+v, want %+v", cursor, wantCursor)
 	}
 
 	candidates, _, initialized, err = st.NextAlertEvents(ctx, consumer, 100)
@@ -315,10 +471,10 @@ func TestAlertEvaluatorStore_PostureRegressionIsIdempotentPerSBOM(t *testing.T) 
 			Cause: data.CauseImage, Score: 9,
 		}},
 	}
-	if err := st.CommitAlertBatch(ctx, "posture-test", drafts, nil, postgres.AlertPosition{}); err != nil {
+	if err := st.CommitAlertBatch(ctx, "posture-test", drafts, nil, nil, postgres.AlertPosition{}); err != nil {
 		t.Fatalf("commit posture regression drafts: %v", err)
 	}
-	if err := st.CommitAlertBatch(ctx, "posture-test", drafts, nil, postgres.AlertPosition{}); err != nil {
+	if err := st.CommitAlertBatch(ctx, "posture-test", drafts, nil, nil, postgres.AlertPosition{}); err != nil {
 		t.Fatalf("retry posture regression drafts: %v", err)
 	}
 	var count int
@@ -331,4 +487,22 @@ func TestAlertEvaluatorStore_PostureRegressionIsIdempotentPerSBOM(t *testing.T) 
 	if count != 1 {
 		t.Fatalf("posture regression alerts = %d, want 1", count)
 	}
+}
+
+func alertCandidatePositions(candidates []postgres.AlertCandidate) []postgres.AlertPosition {
+	positions := make([]postgres.AlertPosition, len(candidates))
+	for i, candidate := range candidates {
+		positions[i] = postgres.AlertPosition{
+			OccurredAt: candidate.Event.OccurredAt,
+			EventID:    candidate.Event.ID,
+		}
+	}
+	return positions
+}
+
+func maxAlertPosition(a, b postgres.AlertPosition) postgres.AlertPosition {
+	if a.OccurredAt.After(b.OccurredAt) || (a.OccurredAt.Equal(b.OccurredAt) && a.EventID > b.EventID) {
+		return a
+	}
+	return b
 }

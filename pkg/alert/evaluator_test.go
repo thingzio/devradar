@@ -16,16 +16,19 @@ func TestEvaluator_MatchesAndIsolatesMalformedEvents(t *testing.T) {
 	valid := evaluatorEvent(1)
 	malformed := evaluatorEvent(2)
 	malformed.Exposure = ""
+	unmatched := evaluatorEvent(3)
+	unmatched.Severity = data.SeverityLow
 	store := &fakeEvaluatorStore{batches: [][]postgres.AlertCandidate{{
 		{Policy: policy, Event: valid},
 		{Policy: policy, Event: malformed},
+		{Policy: policy, Event: unmatched},
 	}}}
 
 	got, err := (Evaluator{Store: store, Consumer: "test", BatchSize: 100}).Evaluate(context.Background())
 	if err != nil {
 		t.Fatalf("Evaluate() error: %v", err)
 	}
-	if got.Examined != 2 || got.Matched != 1 || got.Failures != 1 || store.commits != 1 {
+	if got.Examined != 3 || got.Matched != 1 || got.Failures != 1 || store.commits != 1 {
 		t.Fatalf("result = %+v, commits=%d", got, store.commits)
 	}
 	if len(store.drafts) != 1 || store.drafts[0].Kind != KindNewFinding {
@@ -33,6 +36,10 @@ func TestEvaluator_MatchesAndIsolatesMalformedEvents(t *testing.T) {
 	}
 	if len(store.failures) != 1 || store.failures[0].Position.EventID != malformed.ID {
 		t.Fatalf("failures = %+v", store.failures)
+	}
+	if len(store.processed) != 3 || store.processed[0].EventID != valid.ID ||
+		store.processed[1].EventID != malformed.ID || store.processed[2].EventID != unmatched.ID {
+		t.Fatalf("processed = %+v, want matched, failed, and unmatched positions", store.processed)
 	}
 }
 
@@ -50,6 +57,9 @@ func TestEvaluator_DrainsBoundedBatches(t *testing.T) {
 	}
 	if got.Examined != 3 || got.Matched != 3 || store.commits != 2 {
 		t.Fatalf("result = %+v, commits=%d", got, store.commits)
+	}
+	if len(store.processed) != 3 {
+		t.Fatalf("processed = %d, want every examined candidate", len(store.processed))
 	}
 }
 
@@ -194,6 +204,7 @@ type fakeEvaluatorStore struct {
 	commits        int
 	drafts         []postgres.AlertDraft
 	failures       []postgres.AlertFailure
+	processed      []postgres.AlertPosition
 	comparisons    map[string]*postgres.SBOMComparison
 	comparisonErrs map[string]error
 	compareSBOMIDs []string
@@ -215,13 +226,14 @@ func (f *fakeEvaluatorStore) NextAlertEvents(context.Context, string, int) ([]po
 	return batch, postgres.AlertPosition{OccurredAt: last.OccurredAt, EventID: last.ID}, false, nil
 }
 
-func (f *fakeEvaluatorStore) CommitAlertBatch(_ context.Context, _ string, drafts []postgres.AlertDraft, failures []postgres.AlertFailure, _ postgres.AlertPosition) error {
+func (f *fakeEvaluatorStore) CommitAlertBatch(_ context.Context, _ string, drafts []postgres.AlertDraft, failures []postgres.AlertFailure, processed []postgres.AlertPosition, _ postgres.AlertPosition) error {
 	f.commits++
 	if f.commitErr != nil {
 		return f.commitErr
 	}
 	f.drafts = append(f.drafts, drafts...)
 	f.failures = append(f.failures, failures...)
+	f.processed = append(f.processed, processed...)
 	f.batchIndex++
 	return nil
 }
