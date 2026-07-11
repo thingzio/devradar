@@ -89,7 +89,7 @@ func (s *Server) handleAdminMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	days := clampInt(r.URL.Query().Get("days"), defaultMetricDays, 1, maxMetricDays)
+	days := clampInt(r.URL.Query().Get("days"), defaultMetricDays, maxMetricDays)
 
 	ctx, cancel := context.WithTimeout(r.Context(), metricsHandlerTO)
 	defer cancel()

@@ -180,7 +180,7 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	pkgSort := r.URL.Query().Get("pkg_sort")
 	pkgDir := r.URL.Query().Get("pkg_dir")
-	pkgPage := clampInt(r.URL.Query().Get("pkg_page"), 1, 1, 1<<20)
+	pkgPage := clampInt(r.URL.Query().Get("pkg_page"), 1, 1<<20)
 	policy, _ := s.store.GetLicensePolicy(r.Context(), tn.ID)
 	pkgs, pkgTotal, pkgViolations, _ := s.store.PackagesByRepo(r.Context(), tn.ID, repo, policy,
 		postgres.RepoPackageQuery{

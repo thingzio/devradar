@@ -181,7 +181,7 @@ func (s *Server) handleAdminScans(w http.ResponseWriter, r *http.Request) {
 
 // handleAdminScanHistory returns hourly scan/finding buckets as JSON.
 func (s *Server) handleAdminScanHistory(w http.ResponseWriter, r *http.Request) {
-	hours := clampInt(r.URL.Query().Get("hours"), 24, 1, adminHistoryMax)
+	hours := clampInt(r.URL.Query().Get("hours"), 24, adminHistoryMax)
 	points, err := s.store.AdminScanHistory(r.Context(), hours)
 	if err != nil {
 		slog.Error("admin scan history", "error", err)
@@ -197,7 +197,7 @@ func (s *Server) handleAdminTenants(w http.ResponseWriter, r *http.Request) {
 	auditLog("view_tenants", tn, r.URL.Path, r.RemoteAddr, "")
 
 	query := r.URL.Query().Get("q")
-	page := clampInt(r.URL.Query().Get("page"), 1, 1, 1<<20)
+	page := clampInt(r.URL.Query().Get("page"), 1, 1<<20)
 	offset := (page - 1) * adminPageSize
 
 	tenants, total, err := tenant.AdminListTenants(r.Context(), s.store.DB(), query, adminPageSize, offset)
@@ -408,14 +408,16 @@ func (s *Server) adminBase(tn *tenant.Tenant, active string, extra map[string]an
 	return d
 }
 
-// clampInt parses s as an int and clamps it to [min,max], falling back to def.
-func clampInt(s string, def, minV, maxV int) int {
+// clampInt parses s as an int and clamps it to [1, maxV], falling back to def.
+// The lower bound is always 1 (every caller is a 1-based page/window count), so
+// it isn't a parameter.
+func clampInt(s string, def, maxV int) int {
 	n, err := strconv.Atoi(s)
 	if err != nil {
 		return def
 	}
-	if n < minV {
-		return minV
+	if n < 1 {
+		return 1
 	}
 	if n > maxV {
 		return maxV
