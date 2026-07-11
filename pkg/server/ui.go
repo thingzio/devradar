@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"database/sql"
@@ -10,13 +11,16 @@ import (
 	"fmt"
 	"html/template"
 	"log/slog"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/thingzio/devradar/pkg/config"
 	"github.com/thingzio/devradar/pkg/data"
 	"github.com/thingzio/devradar/pkg/middleware"
 	"github.com/thingzio/devradar/pkg/oauth"
+	"github.com/thingzio/devradar/pkg/ratelimit"
 	"github.com/thingzio/devradar/pkg/tenant"
 )
 
@@ -179,7 +183,18 @@ func (s *Server) handleRequestLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, err := tenant.CreateLoginToken(ctx, s.store.DB(), email, loginTokenTTL)
+	// Rate-limit magic-link requests per email and per client IP (each hit mints
+	// a token row and, in prod, sends an email). Over-limit → generic error, no
+	// token minted, no enumeration signal. A limiter DB error fails OPEN (better
+	// to allow than lock everyone out on a transient blip).
+	db := s.store.DB()
+	if s.overLoginLimit(ctx, db, "login-email:"+email, config.LoginRatePerHourEmail()) ||
+		s.overLoginLimit(ctx, db, "login-ip:"+clientIP(r), config.LoginRatePerHourIP()) {
+		http.Redirect(w, r, loginPath+"?error=ratelimited", http.StatusSeeOther)
+		return
+	}
+
+	raw, err := tenant.CreateLoginToken(ctx, db, email, loginTokenTTL)
 	if err != nil {
 		slog.Error("create login token", "error", err)
 		http.Redirect(w, r, loginPath+"?error=server", http.StatusSeeOther)
@@ -387,6 +402,20 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = "api-token"
 	}
+	// Enforce a per-tenant token cap so a bug or a compromised session can't mint
+	// unbounded credentials. 0 disables the cap.
+	if cap := config.MaxTokensPerTenant(); cap > 0 {
+		n, err := tenant.CountAPITokens(r.Context(), s.store.DB(), tn.ID)
+		if err != nil {
+			http.Error(w, "failed to create token", http.StatusInternalServerError)
+			return
+		}
+		if n >= cap {
+			http.Error(w, fmt.Sprintf("token limit reached (%d per tenant); revoke an unused token first", cap),
+				http.StatusTooManyRequests)
+			return
+		}
+	}
 	raw, err := tenant.CreateAPIToken(r.Context(), s.store.DB(), tn.ID, name)
 	if err != nil {
 		http.Error(w, "failed to create token", http.StatusInternalServerError)
@@ -478,6 +507,41 @@ func plural(n int, unit string) string {
 		s += "s"
 	}
 	return s
+}
+
+// overLoginLimit reports whether key has exceeded limit hits this hour. It
+// prunes stale windows opportunistically. Fails OPEN: a limiter DB error logs
+// and returns false (allow) rather than locking users out on a transient blip.
+func (s *Server) overLoginLimit(ctx context.Context, db *sql.DB, key string, limit int) bool {
+	allowed, err := ratelimit.Allow(ctx, db, key, limit, time.Hour)
+	if err != nil {
+		slog.Error("login rate limit check", "error", err)
+		return false
+	}
+	if allowed {
+		// Best-effort housekeeping; keeps the counter table small without a cron.
+		if perr := ratelimit.Prune(ctx, db, 24*time.Hour); perr != nil {
+			slog.Warn("prune rate events", "error", perr)
+		}
+	}
+	return !allowed
+}
+
+// clientIP extracts the caller's IP for rate-limit keying. Cloud Run sets
+// X-Forwarded-For as "client, proxy1, proxy2, ..."; the left-most entry is the
+// real client (the trailing hops are Google's front end). Falls back to the
+// connection's RemoteAddr host when the header is absent (local/dev).
+func clientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if i := strings.IndexByte(xff, ','); i >= 0 {
+			return strings.TrimSpace(xff[:i])
+		}
+		return strings.TrimSpace(xff)
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
 }
 
 // looksLikeEmail is a minimal sanity check — real validation is that the link is

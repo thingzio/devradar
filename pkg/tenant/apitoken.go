@@ -40,16 +40,28 @@ func CreateAPIToken(ctx context.Context, db *sql.DB, tenantID, name string) (str
 	return rawToken, nil
 }
 
-// ValidateAPIToken returns the owning tenant for a raw token and bumps
-// last_used_at in the same round-trip (CTE), avoiding a fire-and-forget write.
+// lastUsedCoarsening is how stale last_used_at may be before ValidateAPIToken
+// bumps it. Coarsening the write kills the per-request write amplification (one
+// UPDATE on every authenticated API call) while keeping "last used" accurate to
+// the minute — plenty for the UI's day-granularity display.
+const lastUsedCoarsening = time.Minute
+
+// ValidateAPIToken returns the owning tenant for a raw token and refreshes
+// last_used_at at most once per lastUsedCoarsening window (not on every call).
+// The bump is a conditional UPDATE in a CTE; the tenant is resolved by joining
+// the token row directly (not the UPDATE's RETURNING), so authentication
+// succeeds whether or not the bump fired this call.
 func ValidateAPIToken(ctx context.Context, db *sql.DB, rawToken string) (*Tenant, error) {
 	row := db.QueryRowContext(ctx, `
-		WITH used AS (
+		WITH bumped AS (
 			UPDATE devradar_api_token SET last_used_at = NOW()
-			WHERE token_hash = $1 RETURNING tenant_id
+			WHERE token_hash = $1
+			  AND (last_used_at IS NULL OR last_used_at < NOW() - $2::interval)
 		)
 		SELECT `+prefixed("t")+`
-		FROM used u JOIN devradar_tenant t ON t.id = u.tenant_id`, HashToken(rawToken))
+		FROM devradar_api_token a JOIN devradar_tenant t ON t.id = a.tenant_id
+		WHERE a.token_hash = $1`,
+		HashToken(rawToken), fmt.Sprintf("%d seconds", int64(lastUsedCoarsening.Seconds())))
 	t, err := scanTenant(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrTokenInvalid
@@ -58,6 +70,18 @@ func ValidateAPIToken(ctx context.Context, db *sql.DB, rawToken string) (*Tenant
 		return nil, fmt.Errorf("validate api token: %w", err)
 	}
 	return t, nil
+}
+
+// CountAPITokens returns how many API tokens a tenant currently holds. Used to
+// enforce a per-tenant issuance cap so a compromised session (or a bug) can't
+// mint unbounded credentials.
+func CountAPITokens(ctx context.Context, db *sql.DB, tenantID string) (int, error) {
+	var n int
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM devradar_api_token WHERE tenant_id = $1`, tenantID).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count api tokens: %w", err)
+	}
+	return n, nil
 }
 
 // ListAPITokens returns a tenant's tokens, newest first.

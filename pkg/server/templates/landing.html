@@ -22,6 +22,7 @@
         {{else if eq .Error "suspended"}}This account is suspended.
         {{else if eq .Error "unverified"}}Your GitHub account has no primary <em>verified</em> email. Verify one on GitHub, or use the email link below.
         {{else if eq .Error "oauth"}}GitHub sign-in didn't complete — please try again.
+        {{else if eq .Error "ratelimited"}}Too many sign-in requests — please wait a bit and try again.
         {{else}}Something went wrong. Please try again.{{end}}
       </div>{{end}}
 

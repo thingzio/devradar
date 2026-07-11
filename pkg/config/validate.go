@@ -31,6 +31,9 @@ func Validate() error {
 
 	// Non-negative counts/quotas (0 has a documented meaning: disable the cap).
 	check(validateInt("DEVRADAR_MAX_IMAGES_PER_TENANT", 0, -1))
+	check(validateInt("DEVRADAR_MAX_TOKENS_PER_TENANT", 0, -1))
+	check(validateInt("DEVRADAR_LOGIN_RATE_EMAIL", 0, -1))
+	check(validateInt("DEVRADAR_LOGIN_RATE_IP", 0, -1))
 	check(validateInt("DB_MAX_OPEN_CONNS", 1, -1))
 	check(validateInt("DB_MAX_IDLE_CONNS", 0, -1))
 	// Strictly positive: a zero/negative shutdown budget would abort in-flight

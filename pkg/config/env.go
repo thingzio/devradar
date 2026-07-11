@@ -188,6 +188,27 @@ func MaxImagesPerTenant() int {
 	return GetEnvAsInt("DEVRADAR_MAX_IMAGES_PER_TENANT", 500)
 }
 
+// MaxTokensPerTenant caps how many API tokens a tenant may hold at once — a
+// guard so a compromised session or a bug can't mint unbounded credentials.
+// 0 disables the cap. Tunable via DEVRADAR_MAX_TOKENS_PER_TENANT (default 25).
+func MaxTokensPerTenant() int {
+	return GetEnvAsInt("DEVRADAR_MAX_TOKENS_PER_TENANT", 25)
+}
+
+// LoginRatePerHourEmail caps magic-link requests per normalized email per hour
+// (unbounded requests mint login-token rows and send emails). 0 disables.
+// Tunable via DEVRADAR_LOGIN_RATE_EMAIL (default 5).
+func LoginRatePerHourEmail() int {
+	return GetEnvAsInt("DEVRADAR_LOGIN_RATE_EMAIL", 5)
+}
+
+// LoginRatePerHourIP caps magic-link requests per client IP per hour, a
+// coarser guard against a single source enumerating addresses. 0 disables.
+// Tunable via DEVRADAR_LOGIN_RATE_IP (default 20).
+func LoginRatePerHourIP() int {
+	return GetEnvAsInt("DEVRADAR_LOGIN_RATE_IP", 20)
+}
+
 // ScanMaxAge is the staleness window for scan-job work selection: an SBOM is
 // scanned only if never scanned or last scanned longer ago than this. Paired
 // with a frequent scheduler, it bounds per-SBOM scan frequency (default 12h ⇒
