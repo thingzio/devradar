@@ -118,6 +118,9 @@ func NewRunner(store Store, fetch Fetcher, canon sbom.Canonicalizer, scanners []
 // scanners, and canonicalizer from the environment, then executes one scan pass.
 // cmd/devradar-scan is a thin shell around this.
 func Run(ctx context.Context, opts Options) error {
+	if err := config.Validate(); err != nil {
+		return err
+	}
 	store, err := postgres.New(ctx, config.DatabaseURL(), postgres.ScanPoolConfig())
 	if err != nil {
 		return fmt.Errorf("store: %w", err)
