@@ -2,25 +2,22 @@ package postgres_test
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/lib/pq"
+	"github.com/thingzio/devradar/pkg/config"
 	"github.com/thingzio/devradar/pkg/data/postgres"
 )
 
 func TestAdminProductHealth(t *testing.T) {
-	st := testStore(t)
+	st := isolatedAdminProductHealthStore(t)
 	ctx := context.Background()
 	db := st.DB()
-
-	baseline, err := st.AdminProductHealth(ctx)
-	if err != nil {
-		t.Fatalf("baseline product health: %v", err)
-	}
 
 	typ := reflect.TypeOf(postgres.AdminProductHealth{})
 	for _, forbidden := range []string{"TenantID", "Email"} {
@@ -35,59 +32,13 @@ func TestAdminProductHealth(t *testing.T) {
 		}
 	}
 
-	const consumer = "browser-alerts-v1"
-	var previousCursorAt time.Time
-	var previousCursorID int64
-	previousCursorExists := true
-	if err := db.QueryRowContext(ctx, `
-		SELECT last_occurred_at, last_event_id
-		FROM devradar_alert_cursor
-		WHERE consumer=$1`, consumer).Scan(&previousCursorAt, &previousCursorID); err != nil {
-		if err != sql.ErrNoRows {
-			t.Fatalf("read previous alert cursor: %v", err)
-		}
-		previousCursorExists = false
-	}
-
-	var tenantIDs []string
-	var eventIDs []int64
-	var failureIDs []int64
-	var enrichmentCVEs []string
-	t.Cleanup(func() {
-		for _, id := range failureIDs {
-			_, _ = db.ExecContext(ctx, `DELETE FROM devradar_alert_failure WHERE id=$1`, id)
-		}
-		for _, id := range eventIDs {
-			_, _ = db.ExecContext(ctx, `DELETE FROM devradar_finding_event WHERE id=$1`, id)
-		}
-		for _, id := range tenantIDs {
-			_, _ = db.ExecContext(ctx, `DELETE FROM devradar_tenant WHERE id=$1`, id)
-		}
-		for _, cve := range enrichmentCVEs {
-			_, _ = db.ExecContext(ctx, `DELETE FROM devradar_cve_enrichment WHERE cve=$1`, cve)
-		}
-		if previousCursorExists {
-			_, _ = db.ExecContext(ctx, `
-				INSERT INTO devradar_alert_cursor
-					(consumer, last_occurred_at, last_event_id, updated_at)
-				VALUES ($1,$2,$3,now())
-				ON CONFLICT (consumer) DO UPDATE SET
-					last_occurred_at=EXCLUDED.last_occurred_at,
-					last_event_id=EXCLUDED.last_event_id,
-					updated_at=now()`, consumer, previousCursorAt, previousCursorID)
-		} else {
-			_, _ = db.ExecContext(ctx, `DELETE FROM devradar_alert_cursor WHERE consumer=$1`, consumer)
-		}
-	})
-
 	tenantA, sbomA := seedTenantAndSBOM(t, st)
 	tenantB, sbomB := seedTenantAndSBOM(t, st)
 	foreignTenant, foreignSBOM := seedTenantAndSBOM(t, st)
-	tenantIDs = append(tenantIDs, tenantA, tenantB, foreignTenant)
 
-	repositoryA := "registry.test/product-health-ready-" + randID(t)[:8]
-	repositoryB := "registry.test/product-health-single-" + randID(t)[:8]
-	foreignRepository := "registry.test/product-health-foreign-" + randID(t)[:8]
+	repositoryA := "registry.test/product-health-ready"
+	repositoryB := "registry.test/product-health-single"
+	foreignRepository := "registry.test/product-health-foreign"
 	for _, update := range []struct {
 		id, repository, status string
 	}{
@@ -132,16 +83,19 @@ func TestAdminProductHealth(t *testing.T) {
 		t.Fatalf("seed archived foreign generation: %v", err)
 	}
 
-	canonicalCVE := "CVE-2099-" + randID(t)[:8]
-	suppressedCVE := "CVE-2098-" + randID(t)[:8]
-	foreignCVE := "CVE-2097-" + randID(t)[:8]
-	enrichmentCVEs = append(enrichmentCVEs, canonicalCVE, suppressedCVE, foreignCVE)
+	canonicalKEVCVE := "CVE-2099-0001"
+	canonicalNonKEVCVE := "CVE-2099-0002"
+	suppressedCVE := "CVE-2099-0003"
+	foreignCVE := "CVE-2099-0004"
 	for _, finding := range []struct {
 		sbomID, scanner, findingID, exposure string
 		fixed                                bool
 	}{
-		{sbomA.ID, "grype", "canonical", canonicalCVE, false},
-		{sbomA.ID, "trivy", "canonical", canonicalCVE, true},
+		// Deliberately use one canonical finding ID with different scanner
+		// exposures. Only one exposure is KEV and only one row is fixed, so the
+		// aggregate must use bool_or for both facts rather than bool_and.
+		{sbomA.ID, "grype", "canonical", canonicalNonKEVCVE, false},
+		{sbomA.ID, "trivy", "canonical", canonicalKEVCVE, true},
 		{sbomA.ID, "grype", "suppressed", suppressedCVE, true},
 		{foreignSBOM.ID, "grype", "foreign", foreignCVE, true},
 	} {
@@ -157,9 +111,8 @@ func TestAdminProductHealth(t *testing.T) {
 	}
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO devradar_cve_enrichment (cve, kev)
-		VALUES ($1,true),($2,true),($3,true)
-		ON CONFLICT (cve) DO UPDATE SET kev=EXCLUDED.kev`,
-		canonicalCVE, suppressedCVE, foreignCVE); err != nil {
+		VALUES ($1,true),($2,false),($3,true),($4,true)`,
+		canonicalKEVCVE, canonicalNonKEVCVE, suppressedCVE, foreignCVE); err != nil {
 		t.Fatalf("seed KEV enrichment: %v", err)
 	}
 	var vexDocumentID string
@@ -182,8 +135,9 @@ func TestAdminProductHealth(t *testing.T) {
 			(tenant_id, snapshot_date, images, relevant_findings)
 		VALUES
 			($1,(now() AT TIME ZONE 'UTC')::date,1,1),
-			($2,(now() AT TIME ZONE 'UTC')::date,1,99)`,
-		tenantA, foreignTenant); err != nil {
+			($2,(now() AT TIME ZONE 'UTC')::date - 1,1,88),
+			($3,(now() AT TIME ZONE 'UTC')::date,1,99)`,
+		tenantA, tenantB, foreignTenant); err != nil {
 		t.Fatalf("seed posture snapshots: %v", err)
 	}
 
@@ -221,10 +175,9 @@ func TestAdminProductHealth(t *testing.T) {
 				 scanner_version, scan_run_id, occurred_at)
 			VALUES ($1,$2,'grype',$3,'added',$4,'pkg','1','high',8.0,$5,
 			        'db','scanner',gen_random_uuid(),$6)
-			RETURNING id`, tenantA, sbomA.ID, randID(t), canonicalCVE, cause, at).Scan(&id); err != nil {
+			RETURNING id`, tenantA, sbomA.ID, randID(t), canonicalKEVCVE, cause, at).Scan(&id); err != nil {
 			t.Fatalf("seed finding event: %v", err)
 		}
-		eventIDs = append(eventIDs, id)
 		return id
 	}
 	cursorEventID := insertEvent("image", cursorAt)
@@ -233,13 +186,9 @@ func TestAdminProductHealth(t *testing.T) {
 	pendingLaterID := insertEvent("image", pendingLaterAt)
 	_ = insertEvent("tooling", cursorAt.Add(2*time.Minute))
 	if _, err := db.ExecContext(ctx, `
-		INSERT INTO devradar_alert_cursor
-			(consumer, last_occurred_at, last_event_id, updated_at)
-		VALUES ($1,$2,$3,now())
-		ON CONFLICT (consumer) DO UPDATE SET
-			last_occurred_at=EXCLUDED.last_occurred_at,
-			last_event_id=EXCLUDED.last_event_id,
-			updated_at=now()`, consumer, cursorAt, cursorEventID); err != nil {
+		UPDATE devradar_alert_cursor
+		SET last_occurred_at=$2, last_event_id=$3, updated_at=now()
+		WHERE consumer=$1`, "browser-alerts-v1", cursorAt, cursorEventID); err != nil {
 		t.Fatalf("set alert cursor: %v", err)
 	}
 
@@ -247,9 +196,11 @@ func TestAdminProductHealth(t *testing.T) {
 		eventID int64
 		at      time.Time
 		read    bool
+		created time.Time
 	}{
-		{pendingAtCursorID, cursorAt, false},
-		{pendingLaterID, pendingLaterAt, true},
+		{pendingAtCursorID, cursorAt, false, time.Now().UTC()},
+		{pendingLaterID, pendingLaterAt, true, time.Now().UTC()},
+		{cursorEventID, cursorAt, false, time.Now().UTC().Add(-25 * time.Hour)},
 	} {
 		readAt := any(nil)
 		if alert.read {
@@ -260,12 +211,11 @@ func TestAdminProductHealth(t *testing.T) {
 				(tenant_id, policy_id, event_id, event_occurred_at, alert_kind,
 				 sbom_id, repository, digest, finding_id, exposure, package,
 				 version, severity, score, cause, read_at, created_at)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pkg','1','high',8.0,
-			        'image',$11,now())`,
-			tenantA, policyA, alert.eventID, alert.at,
-			[]string{"new_finding", "fix_available"}[i], sbomA.ID,
-			repositoryA, sbomA.Digest, fmt.Sprintf("alert-%d", i), canonicalCVE,
-			readAt); err != nil {
+			VALUES ($1,$2,$3,$4,'new_finding',$5,$6,$7,$8,$9,'pkg','1',
+			        'high',8.0,'image',$10,$11)`,
+			tenantA, policyA, alert.eventID, alert.at, sbomA.ID,
+			repositoryA, sbomA.Digest, fmt.Sprintf("alert-%d", i),
+			canonicalKEVCVE, readAt, alert.created); err != nil {
 			t.Fatalf("seed alert: %v", err)
 		}
 	}
@@ -277,15 +227,13 @@ func TestAdminProductHealth(t *testing.T) {
 		{pendingAtCursorID, time.Now().UTC()},
 		{pendingLaterID, time.Now().UTC().Add(-25 * time.Hour)},
 	} {
-		var id int64
-		if err := db.QueryRowContext(ctx, `
+		if _, err := db.ExecContext(ctx, `
 			INSERT INTO devradar_alert_failure
 				(consumer, event_id, event_occurred_at, error, occurred_at)
-			VALUES ($1,$2,$3,'test failure',$4)
-			RETURNING id`, consumer, failure.eventID, cursorAt, failure.at).Scan(&id); err != nil {
+			VALUES ('browser-alerts-v1',$1,$2,'test failure',$3)`,
+			failure.eventID, cursorAt, failure.at); err != nil {
 			t.Fatalf("seed alert evaluator failure: %v", err)
 		}
-		failureIDs = append(failureIDs, id)
 	}
 
 	got, err := st.AdminProductHealth(ctx)
@@ -293,33 +241,138 @@ func TestAdminProductHealth(t *testing.T) {
 		t.Fatalf("admin product health: %v", err)
 	}
 
-	wantDeltas := map[string]struct{ got, base, delta int }{
-		"enabled alert policies":      {got.EnabledAlertPolicies, baseline.EnabledAlertPolicies, 1},
-		"alerts in 24h":               {got.Alerts24h, baseline.Alerts24h, 2},
-		"unread alerts":               {got.UnreadAlerts, baseline.UnreadAlerts, 1},
-		"evaluator failures in 24h":   {got.EvaluatorFailures24h, baseline.EvaluatorFailures24h, 1},
-		"snapshot tenants today":      {got.SnapshotTenantsToday, baseline.SnapshotTenantsToday, 1},
-		"active SBOM tenants":         {got.ActiveSBOMTenants, baseline.ActiveSBOMTenants, 2},
-		"canonical exposures":         {got.CanonicalExposures, baseline.CanonicalExposures, 1},
-		"canonical fixable exposures": {got.CanonicalFixableExposures, baseline.CanonicalFixableExposures, 1},
-		"canonical KEV exposures":     {got.CanonicalKEVExposures, baseline.CanonicalKEVExposures, 1},
-		"comparison-ready repositories": {got.ComparisonReadyRepositories,
-			baseline.ComparisonReadyRepositories, 1},
-		"license policies configured": {got.LicensePoliciesConfigured, baseline.LicensePoliciesConfigured, 3},
-		"license policies enforcing":  {got.LicensePoliciesEnforcing, baseline.LicensePoliciesEnforcing, 2},
+	want := map[string]struct{ got, want int }{
+		"enabled alert policies":        {got.EnabledAlertPolicies, 1},
+		"alerts in 24h":                 {got.Alerts24h, 2},
+		"unread alerts":                 {got.UnreadAlerts, 2},
+		"evaluator backlog":             {got.EvaluatorBacklog, 2},
+		"evaluator failures in 24h":     {got.EvaluatorFailures24h, 1},
+		"snapshot tenants today":        {got.SnapshotTenantsToday, 1},
+		"active SBOM tenants":           {got.ActiveSBOMTenants, 2},
+		"canonical exposures":           {got.CanonicalExposures, 1},
+		"canonical fixable exposures":   {got.CanonicalFixableExposures, 1},
+		"canonical KEV exposures":       {got.CanonicalKEVExposures, 1},
+		"comparison-ready repositories": {got.ComparisonReadyRepositories, 1},
+		"license policies configured":   {got.LicensePoliciesConfigured, 3},
+		"license policies enforcing":    {got.LicensePoliciesEnforcing, 2},
 	}
-	for name, metric := range wantDeltas {
-		if metric.got != metric.base+metric.delta {
-			t.Errorf("%s = %d, want baseline %d + %d", name, metric.got, metric.base, metric.delta)
+	for name, metric := range want {
+		if metric.got != metric.want {
+			t.Errorf("%s = %d, want %d", name, metric.got, metric.want)
 		}
-	}
-	if got.EvaluatorBacklog != 2 {
-		t.Errorf("evaluator backlog = %d, want 2", got.EvaluatorBacklog)
 	}
 	if !got.OldestPendingAt.Equal(cursorAt) {
 		t.Errorf("oldest pending at = %s, want %s", got.OldestPendingAt, cursorAt)
 	}
 	if strings.Contains(fmt.Sprintf("%+v", got), tenantA) {
 		t.Fatal("aggregate unexpectedly contains tenant identity")
+	}
+
+	if _, err := db.ExecContext(ctx,
+		`DELETE FROM devradar_alert_cursor WHERE consumer='browser-alerts-v1'`); err != nil {
+		t.Fatalf("delete alert cursor: %v", err)
+	}
+	withoutCursor, err := st.AdminProductHealth(ctx)
+	if err != nil {
+		t.Fatalf("admin product health without cursor: %v", err)
+	}
+	if withoutCursor.EvaluatorBacklog != 3 {
+		t.Errorf("epoch-fallback evaluator backlog = %d, want 3", withoutCursor.EvaluatorBacklog)
+	}
+	if !withoutCursor.OldestPendingAt.Equal(cursorAt) {
+		t.Errorf("epoch-fallback oldest pending at = %s, want %s",
+			withoutCursor.OldestPendingAt, cursorAt)
+	}
+}
+
+func isolatedAdminProductHealthStore(t *testing.T) *postgres.Store {
+	t.Helper()
+	ctx := context.Background()
+	base := testStore(t)
+	schema := "devradar_product_health_" + randID(t)
+	quotedSchema := pq.QuoteIdentifier(schema)
+	if _, err := base.DB().ExecContext(ctx, `CREATE SCHEMA `+quotedSchema); err != nil {
+		t.Fatalf("create isolated schema: %v", err)
+	}
+
+	var isolated *postgres.Store
+	t.Cleanup(func() {
+		if isolated != nil {
+			_ = isolated.Close()
+		}
+		_, _ = base.DB().ExecContext(ctx, `DROP SCHEMA IF EXISTS `+quotedSchema+` CASCADE`)
+	})
+
+	if _, err := base.DB().ExecContext(ctx, `
+		CREATE TABLE `+quotedSchema+`.devradar_schema_version (
+			version INTEGER PRIMARY KEY,
+			applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		)`); err != nil {
+		t.Fatalf("precreate isolated schema version table: %v", err)
+	}
+
+	dsn, err := databaseURLWithSearchPath(config.DatabaseURL(), schema)
+	if err != nil {
+		t.Fatalf("set isolated search_path: %v", err)
+	}
+	isolated, err = postgres.New(ctx, dsn, postgres.DefaultPoolConfig())
+	if err != nil {
+		t.Fatalf("open isolated store: %v", err)
+	}
+	return isolated
+}
+
+func databaseURLWithSearchPath(dsn, schema string) (string, error) {
+	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+		u, err := url.Parse(dsn)
+		if err != nil {
+			return "", fmt.Errorf("parse URI DSN: %w", err)
+		}
+		query := u.Query()
+		query.Set("search_path", schema)
+		u.RawQuery = query.Encode()
+		return u.String(), nil
+	}
+	if strings.TrimSpace(dsn) == "" {
+		return "", fmt.Errorf("DATABASE_URL is empty")
+	}
+	return strings.TrimSpace(dsn) + " search_path=" + schema, nil
+}
+
+func TestAdminProductHealth_DatabaseURLWithSearchPath(t *testing.T) {
+	for _, tc := range []struct {
+		name, dsn string
+		check     func(*testing.T, string)
+	}{
+		{
+			name: "URI",
+			dsn:  "postgres://user:pass@localhost/db?sslmode=disable",
+			check: func(t *testing.T, got string) {
+				u, err := url.Parse(got)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if value := u.Query().Get("search_path"); value != "isolated" {
+					t.Fatalf("URI search_path = %q, want isolated", value)
+				}
+			},
+		},
+		{
+			name: "keyword",
+			dsn:  "host=localhost dbname=devradar sslmode=disable",
+			check: func(t *testing.T, got string) {
+				if !strings.HasSuffix(got, " search_path=isolated") {
+					t.Fatalf("keyword DSN = %q, want appended search_path", got)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := databaseURLWithSearchPath(tc.dsn, "isolated")
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc.check(t, got)
+		})
 	}
 }
