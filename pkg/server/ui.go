@@ -116,6 +116,9 @@ func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
 	mux.Handle("GET /cves", authed(http.HandlerFunc(s.handleCVEList)))
 	mux.Handle("GET /cves/{cve}", authed(http.HandlerFunc(s.handleCVEDetail)))
 	mux.Handle("GET /licenses", authed(http.HandlerFunc(s.handleLicensesPage)))
+	mux.Handle("GET /alerts", authed(http.HandlerFunc(s.handleAlerts)))
+	mux.Handle("GET /alerts/{id}", authed(http.HandlerFunc(s.handleAlertDetail)))
+	mux.Handle("POST /alerts/{id}/read", authed(csrf(http.HandlerFunc(s.handleMarkAlertRead))))
 	mux.Handle("POST /settings/license-policy", authed(csrf(http.HandlerFunc(s.handleSetLicensePolicy))))
 	mux.Handle("GET /submit", authed(http.HandlerFunc(s.handleSubmitGuide)))
 	// VEX upload is a multipart file POST: it cannot use the ValidateCSRF wrapper

@@ -24,6 +24,7 @@ func TestTenantMutations_RequireCSRF(t *testing.T) {
 		{"revoke token", "/tokens/00000000-0000-0000-0000-000000000000/revoke", ""},
 		{"min severity", "/settings/min-severity", "min_severity=high"},
 		{"alert settings", "/settings/alerts", "enabled=on&min_severity=high"},
+		{"mark alert read", "/alerts/00000000-0000-0000-0000-000000000000/read", ""},
 		{"license policy", "/settings/license-policy", "denied=strong-copyleft"},
 		{"archive sbom", "/sboms/nope/archive", ""},
 		{"archive image", "/images/archive", "repo=nginx"},

@@ -72,7 +72,78 @@ func TestAlertSettings(t *testing.T) {
 	}
 }
 
-func seedLabeledSBOM(t *testing.T, st *postgres.Store, tenantID, label string) {
+func TestAlertPages(t *testing.T) {
+	srv, st := testServer(t)
+	tenantID, _ := seedTenantToken(t, st)
+	otherTenantID, _ := seedTenantToken(t, st)
+	sb := seedLabeledSBOM(t, st, tenantID, "prod")
+	otherSB := seedLabeledSBOM(t, st, otherTenantID, "other")
+	alertID := seedBrowserAlert(t, st, tenantID, sb, "CVE-2026-3001")
+	otherAlertID := seedBrowserAlert(t, st, otherTenantID, otherSB, "CVE-2026-9999")
+	session := seedSession(t, st, tenantID)
+	otherSession := seedSession(t, st, otherTenantID)
+	h := srv.Handler()
+
+	req := httptest.NewRequest(http.MethodGet, "/alerts", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("unauthenticated alerts = %d, want 302", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/alerts", nil)
+	req.AddCookie(session)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "CVE-2026-3001") ||
+		strings.Contains(rec.Body.String(), "CVE-2026-9999") {
+		t.Fatalf("GET /alerts = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/alerts/"+alertID, nil)
+	req.AddCookie(session)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "New vulnerability") ||
+		!strings.Contains(rec.Body.String(), "CVE-2026-3001") {
+		t.Fatalf("GET alert detail = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/alerts/"+alertID, nil)
+	req.AddCookie(otherSession)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-tenant detail = %d, want 404", rec.Code)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/alerts/"+otherAlertID, nil)
+	req.AddCookie(session)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-tenant other detail = %d, want 404", rec.Code)
+	}
+
+	csrfCookie, token := csrfFor(t, h, session, "/alerts/"+alertID)
+	form := url.Values{"csrf_token": {token}}
+	for i := 0; i < 2; i++ {
+		req = httptest.NewRequest(http.MethodPost, "/alerts/"+alertID+"/read", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(session)
+		req.AddCookie(csrfCookie)
+		rec = httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/alerts/"+alertID {
+			t.Fatalf("mark read attempt %d = %d location=%q", i+1, rec.Code, rec.Header().Get("Location"))
+		}
+	}
+	got, err := st.GetAlert(context.Background(), tenantID, alertID)
+	if err != nil || got.ReadAt == nil {
+		t.Fatalf("alert read state = %+v error=%v", got, err)
+	}
+}
+
+func seedLabeledSBOM(t *testing.T, st *postgres.Store, tenantID, label string) *postgres.SBOM {
 	t.Helper()
 	random := make([]byte, 32)
 	if _, err := rand.Read(random); err != nil {
@@ -88,4 +159,26 @@ func seedLabeledSBOM(t *testing.T, st *postgres.Store, tenantID, label string) {
 	if _, _, _, err := st.UpsertSBOM(context.Background(), sb); err != nil {
 		t.Fatalf("seed labeled sbom: %v", err)
 	}
+	return sb
+}
+
+func seedBrowserAlert(t *testing.T, st *postgres.Store, tenantID string, sb *postgres.SBOM, cve string) string {
+	t.Helper()
+	policy, err := st.EnsureAlertPolicy(context.Background(), tenantID)
+	if err != nil {
+		t.Fatalf("ensure alert policy: %v", err)
+	}
+	var id string
+	err = st.DB().QueryRowContext(context.Background(), `
+		INSERT INTO devradar_alert
+		(tenant_id, policy_id, event_id, event_occurred_at, alert_kind, sbom_id,
+		 repository, digest, finding_id, exposure, package, version, severity, score, cause)
+		VALUES ($1,$2,nextval('devradar_finding_event_id_seq'),now(),'new_finding',$3,$4,$5,
+		        $6,$7,'openssl','1.0.0','high',8.1,'db')
+		RETURNING id`, tenantID, policy.ID, sb.ID, sb.Repository, sb.Digest,
+		"finding-"+cve, cve).Scan(&id)
+	if err != nil {
+		t.Fatalf("seed browser alert: %v", err)
+	}
+	return id
 }
