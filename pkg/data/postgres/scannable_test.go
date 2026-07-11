@@ -22,9 +22,9 @@ func TestListScannableSBOMs_StalenessFilter(t *testing.T) {
 	fresh := &postgres.SBOM{
 		ID: randID(t) + randID(t), TenantID: tenantID, ImageRef: "registry.test/app2",
 		Digest: "sha256:" + randID(t) + randID(t), Format: "cyclonedx",
-		PackageCount: 10, ObjectPath: "gs://test/" + tenantID + "/2",
+		PackageCount: 10, ObjectPath: "gs://test/" + tenantID + "/2", Status: "active",
 	}
-	if _, _, err := st.UpsertSBOM(ctx, fresh); err != nil {
+	if _, _, _, err := st.UpsertSBOM(ctx, fresh); err != nil {
 		t.Fatalf("seed second sbom: %v", err)
 	}
 

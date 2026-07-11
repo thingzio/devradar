@@ -993,9 +993,9 @@ func TestSBOMLabels(t *testing.T) {
 	}
 	// Two images: prodImg labeled "prod", edgeImg labeled "edge".
 	mk := func(repo string, labels []string) {
-		if _, _, err := st.UpsertSBOM(ctx, &postgres.SBOM{
+		if _, _, _, err := st.UpsertSBOM(ctx, &postgres.SBOM{
 			ID: repo + suffix, TenantID: tenantID, ImageRef: repo, Repository: repo,
-			Digest: "sha256:" + repo + suffix, Format: "cyclonedx", ObjectPath: "gs://x", Labels: labels,
+			Digest: "sha256:" + repo + suffix, Format: "cyclonedx", ObjectPath: "gs://x", Labels: labels, Status: "active",
 		}); err != nil {
 			t.Fatalf("upsert %s: %v", repo, err)
 		}

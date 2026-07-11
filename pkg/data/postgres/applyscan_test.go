@@ -51,8 +51,9 @@ func seedTenantAndSBOM(t *testing.T, st *postgres.Store) (tenantID string, sb *p
 		Format:       "cyclonedx",
 		PackageCount: 100,
 		ObjectPath:   "gs://test/" + tenantID,
+		Status:       "active", // seed bypasses ingest; represent a fully-stored SBOM
 	}
-	if _, _, err := st.UpsertSBOM(ctx, sb); err != nil {
+	if _, _, _, err := st.UpsertSBOM(ctx, sb); err != nil {
 		t.Fatalf("seed sbom: %v", err)
 	}
 	return tenantID, sb
@@ -97,7 +98,7 @@ func TestUpsertSBOM_VersionBackfill(t *testing.T) {
 	}
 
 	// 1. First submit, no version.
-	id, inserted, err := st.UpsertSBOM(ctx, &base)
+	id, inserted, _, err := st.UpsertSBOM(ctx, &base)
 	if err != nil || !inserted {
 		t.Fatalf("first submit: inserted=%v err=%v", inserted, err)
 	}
@@ -109,7 +110,7 @@ func TestUpsertSBOM_VersionBackfill(t *testing.T) {
 	withVer := base
 	withVer.ID = randID(t) + randID(t) // different candidate id; conflict resolves to existing
 	withVer.Version = "v1.20.2"
-	id2, inserted2, err := st.UpsertSBOM(ctx, &withVer)
+	id2, inserted2, _, err := st.UpsertSBOM(ctx, &withVer)
 	if err != nil {
 		t.Fatalf("re-submit with version: %v", err)
 	}
@@ -126,7 +127,7 @@ func TestUpsertSBOM_VersionBackfill(t *testing.T) {
 	// 3. Later digest-only re-submit must NOT wipe the version.
 	noVer := base
 	noVer.Version = ""
-	if _, _, err := st.UpsertSBOM(ctx, &noVer); err != nil {
+	if _, _, _, err := st.UpsertSBOM(ctx, &noVer); err != nil {
 		t.Fatalf("digest-only re-submit: %v", err)
 	}
 	if got := sbomVersion(t, st, id); got != "v1.20.2" {

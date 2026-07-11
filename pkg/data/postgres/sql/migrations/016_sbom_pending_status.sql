@@ -1,0 +1,20 @@
+-- Atomic ingest lifecycle: introduce a 'pending' value for devradar_sbom.status.
+--
+-- Before this change ingest committed the SBOM row (status='active') BEFORE
+-- writing the bytes to object storage. A storage failure left an active,
+-- permanently unscannable row: a retry saw the row already present and skipped
+-- the upload, so it could never self-heal.
+--
+-- The fix uses an explicit lifecycle: a new SBOM is inserted 'pending', the
+-- bytes are written, and only then is the row promoted to 'active'
+-- (ActivateSBOM). A retry against a still-'pending' row re-drives the upload,
+-- so ingest is self-healing. Object writes are content-addressed, so re-Put is
+-- idempotent.
+--
+-- No schema change is required: the column is TEXT and the scan/read paths all
+-- filter status='active', so a 'pending' row is already invisible to the
+-- scanner and to tenants (the existing partial index idx_devradar_sbom_active
+-- WHERE status='active' excludes it). This migration only records the new state
+-- in the column comment for auditability, and bumps the schema version so the
+-- lifecycle change is traceable. Idempotent.
+COMMENT ON COLUMN devradar_sbom.status IS 'pending | active | archived — pending is a transient ingest state (row created, bytes not yet stored); promoted to active by ActivateSBOM once bytes are written.';

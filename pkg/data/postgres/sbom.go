@@ -16,9 +16,14 @@ import (
 // row — the first submission is canonical for the content. A re-submit may,
 // however, backfill the version (tag) label if the original submit lacked one.
 //
-// Returns the effective row id (which may differ from sb.ID on conflict) and
-// whether a new row was inserted (false ⇒ the caller may skip writing bytes).
-func (s *Store) UpsertSBOM(ctx context.Context, sb *SBOM) (id string, inserted bool, err error) {
+// Returns the effective row id (which may differ from sb.ID on conflict),
+// whether a new row was inserted, and the row's current status. A new SBOM is
+// inserted 'pending' by default: ingest writes the bytes and then promotes the
+// row to 'active' via ActivateSBOM, so a storage failure never leaves an active
+// row without bytes. The returned status lets the caller self-heal — a retry
+// that resolves to an existing but still-'pending' row (inserted=false,
+// status="pending") re-drives the upload+activate instead of skipping it.
+func (s *Store) UpsertSBOM(ctx context.Context, sb *SBOM) (id string, inserted bool, status string, err error) {
 	var generatedAt any
 	if !sb.GeneratedAt.IsZero() {
 		generatedAt = sb.GeneratedAt.UTC()
@@ -33,7 +38,8 @@ func (s *Store) UpsertSBOM(ctx context.Context, sb *SBOM) (id string, inserted b
 	// a tag should fill it in. COALESCE keeps an existing version when a later
 	// digest-only submit omits it, so it is never wiped. `xmax = 0` is true only
 	// for a freshly inserted row (false for the DO UPDATE path), which is how we
-	// report `inserted` accurately without a second query.
+	// report `inserted` accurately without a second query. The RETURNING status
+	// reflects the post-conflict row so the caller can detect a stuck 'pending'.
 	// Labels union on conflict so a re-submit adds labels without dropping prior ones.
 	err = s.db.QueryRowContext(ctx, `
 		INSERT INTO devradar_sbom
@@ -45,17 +51,42 @@ func (s *Store) UpsertSBOM(ctx context.Context, sb *SBOM) (id string, inserted b
 		SET version = COALESCE(EXCLUDED.version, devradar_sbom.version),
 		    labels = (SELECT COALESCE(array_agg(DISTINCT l), '{}')
 		            FROM unnest(devradar_sbom.labels || EXCLUDED.labels) l)
-		RETURNING id, (xmax = 0)`,
+		RETURNING id, (xmax = 0), status`,
 		sb.ID, sb.TenantID, sb.ImageRef, sb.Repository, nullStr(sb.Version),
 		sb.Digest, sb.Format, sb.SpecVersion,
 		nullStr(sb.Tool), nullStr(sb.ToolVersion), sb.PackageCount, sb.ObjectPath,
-		defaultStr(sb.VerificationStatus, "unverified"), defaultStr(sb.Status, "active"),
+		defaultStr(sb.VerificationStatus, "unverified"), defaultStr(sb.Status, "pending"),
 		pq.Array(labels), generatedAt,
-	).Scan(&id, &inserted)
+	).Scan(&id, &inserted, &status)
 	if err != nil {
-		return "", false, fmt.Errorf("upsert sbom: %w", err)
+		return "", false, "", fmt.Errorf("upsert sbom: %w", err)
 	}
-	return id, inserted, nil
+	return id, inserted, status, nil
+}
+
+// ActivateSBOM promotes a freshly-ingested SBOM from 'pending' to 'active' once
+// its bytes have been durably stored, making it visible to the scan job and the
+// read API. Scoped to the pending→active transition so it never resurrects an
+// archived SBOM. Idempotent: a no-op (0 rows) when the row is already active.
+func (s *Store) ActivateSBOM(ctx context.Context, id string) error {
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE devradar_sbom SET status='active' WHERE id=$1 AND status='pending'`, id); err != nil {
+		return fmt.Errorf("activate sbom: %w", err)
+	}
+	return nil
+}
+
+// DeletePendingSBOM removes a still-'pending' SBOM row — the cleanup path when
+// storing the bytes failed, so no orphaned, unscannable row is left behind. It
+// only deletes rows still in the 'pending' state, so it can never race a
+// concurrent activation or delete a live SBOM. Best-effort; a leftover pending
+// row is harmless (invisible to scan/read) and a later retry re-drives it.
+func (s *Store) DeletePendingSBOM(ctx context.Context, id string) error {
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM devradar_sbom WHERE id=$1 AND status='pending'`, id); err != nil {
+		return fmt.Errorf("delete pending sbom: %w", err)
+	}
+	return nil
 }
 
 // ListActiveSBOMs returns all active SBOMs across all tenants — the scan job's

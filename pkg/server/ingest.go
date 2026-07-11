@@ -23,6 +23,10 @@ import (
 // maxSBOMBytes caps the decoded (and decompressed) SBOM size — untrusted input.
 const maxSBOMBytes = 20 << 20 // 20 MiB
 
+// sbomStatusPending is the transient ingest state of a row whose bytes have not
+// yet been stored (see the pending→active lifecycle in handleSubmitSBOM).
+const sbomStatusPending = "pending"
+
 // maybeGunzip returns b unchanged unless it starts with the gzip magic bytes, in
 // which case it decompresses through a reader bounded to limit+1 so a
 // decompression bomb is rejected rather than exhausting memory.
@@ -181,8 +185,10 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 
 	// Record the row first so we learn the canonical id and whether this is new.
 	// The store keys on (tenant_id, digest, format): one SBOM per digest+format
-	// per tenant, first submission canonical.
-	effID, inserted, err := s.store.UpsertSBOM(ctx, &postgres.SBOM{
+	// per tenant, first submission canonical. A new row is created 'pending' — it
+	// is not scannable or readable until the bytes are stored and the row is
+	// promoted to 'active' below.
+	effID, inserted, status, err := s.store.UpsertSBOM(ctx, &postgres.SBOM{
 		ID:           id,
 		TenantID:     tn.ID,
 		ImageRef:     imageRef,
@@ -203,10 +209,18 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only write bytes for a genuinely new SBOM; the existing row's bytes are
-	// canonical and must not be overwritten.
-	if inserted {
+	// Store bytes then activate, for a genuinely new SBOM OR one left 'pending' by
+	// an earlier submission whose upload failed (self-heal). An existing 'active'
+	// row's bytes are canonical and must not be rewritten. Upload-before-activate
+	// guarantees an active row always has its bytes; a failure here deletes the
+	// pending row so a retry starts clean (writes are content-addressed, so the
+	// re-Put is idempotent).
+	if inserted || status == sbomStatusPending {
 		if err := s.blobs.Put(ctx, objectPath, raw); err != nil {
+			slog.Error("store sbom bytes", "sbom_id", effID, "error", err)
+			if delErr := s.store.DeletePendingSBOM(ctx, effID); delErr != nil {
+				slog.Error("cleanup pending sbom", "sbom_id", effID, "error", delErr)
+			}
 			writeError(w, http.StatusInternalServerError, "failed to store SBOM")
 			return
 		}
@@ -220,6 +234,12 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 				slog.Error("store sbom packages", "sbom_id", effID, "error", err)
 				s.store.RecordScanFailure(ctx, effID, "", "license-extract", err)
 			}
+		}
+		// Promote to active only after the bytes are durably stored.
+		if err := s.store.ActivateSBOM(ctx, effID); err != nil {
+			slog.Error("activate sbom", "sbom_id", effID, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to activate SBOM")
+			return
 		}
 	}
 

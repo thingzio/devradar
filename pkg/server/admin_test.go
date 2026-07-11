@@ -126,9 +126,9 @@ func TestAdmin_ForceRescanCycle(t *testing.T) {
 	// One active SBOM.
 	sb := &postgres.SBOM{
 		ID: "sbom-rescan-" + tenantID, TenantID: tenantID, ImageRef: "img@sha256:abc",
-		Repository: "img", Digest: "sha256:abc", Format: "cyclonedx", ObjectPath: "gs://x/y",
+		Repository: "img", Digest: "sha256:abc", Format: "cyclonedx", ObjectPath: "gs://x/y", Status: "active",
 	}
-	if _, _, err := st.UpsertSBOM(ctx, sb); err != nil {
+	if _, _, _, err := st.UpsertSBOM(ctx, sb); err != nil {
 		t.Fatalf("upsert sbom: %v", err)
 	}
 
