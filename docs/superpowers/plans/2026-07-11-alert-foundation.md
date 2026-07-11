@@ -1,6 +1,6 @@
 # Alert Foundation Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Persist tenant alert policies and channel-neutral alerts, then evaluate new actionable finding events idempotently after each scan pass without coupling alert failures to `ApplyScan`.
 
@@ -31,7 +31,7 @@
 - Produces: `postgres.AlertPolicy`, `postgres.Alert`, `postgres.AlertEvent`, `postgres.AlertCandidate`, `postgres.AlertDraft`, `postgres.AlertFailure`, and `postgres.AlertPosition`.
 - Produces tables: `devradar_alert_policy`, `devradar_alert`, `devradar_alert_cursor`, and `devradar_alert_failure`.
 
-- [ ] **Step 1: Add a failing migration integration test**
+- [x] **Step 1: Add a failing migration integration test**
 
 Add `TestAlertMigration_DefaultsAndConstraints` in `pkg/data/postgres/alert_test.go`. Seed a tenant with `seedTenantAndSBOM`, insert the default policy with only `tenant_id`, and assert `enabled=false`, `min_severity='medium'`, `alert_kev=true`, `alert_fix_available=true`, `include_image=true`, `include_db=true`, and an empty labels array. Attempt a second policy for the tenant and assert a unique-constraint error. Attempt an alert with `cause='tooling'` and assert the cause check rejects it.
 
@@ -77,13 +77,13 @@ func TestAlertMigration_DefaultsAndConstraints(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the test and verify failure**
+- [x] **Step 2: Run the test and verify failure**
 
 Run: `DATABASE_URL=postgres://devradar:devradar@localhost:5432/devradar?sslmode=disable go test ./pkg/data/postgres -run TestAlertMigration_DefaultsAndConstraints -count=1`
 
 Expected: FAIL because migration 019 and alert models do not exist.
 
-- [ ] **Step 3: Add the migration**
+- [x] **Step 3: Add the migration**
 
 Create `019_alerts.sql` with these exact invariants:
 
@@ -147,7 +147,7 @@ CREATE TABLE IF NOT EXISTS devradar_alert_failure (
 );
 ```
 
-- [ ] **Step 4: Add storage models**
+- [x] **Step 4: Add storage models**
 
 Append the exact field shapes below to `pkg/data/postgres/models.go`.
 
@@ -207,13 +207,13 @@ type Alert struct {
 }
 ```
 
-- [ ] **Step 5: Run migration tests**
+- [x] **Step 5: Run migration tests**
 
 Run: `DATABASE_URL=postgres://devradar:devradar@localhost:5432/devradar?sslmode=disable go test ./pkg/data/postgres -run 'TestAlertMigration|TestMigrate' -count=1`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add pkg/data/postgres/sql/migrations/019_alerts.sql pkg/data/postgres/alert_test.go pkg/data/postgres/models.go
@@ -230,7 +230,7 @@ git commit -S -m "feat(alerts): add durable alert schema"
 - Consumes: `postgres.AlertPolicy` and `postgres.AlertEvent`.
 - Produces: `alert.Match(policy postgres.AlertPolicy, event postgres.AlertEvent) ([]postgres.AlertDraft, error)`.
 
-- [ ] **Step 1: Write table-driven failing tests**
+- [x] **Step 1: Write table-driven failing tests**
 
 Cover disabled policy, tooling cause, excluded image/db causes, nonmatching labels, below-threshold severity, unknown severity, KEV, fixed event, and overlap deduplication. An event that is both KEV and above threshold produces `new_kev` only; `fixed` produces `fix_available` only when enabled.
 
@@ -262,23 +262,23 @@ func TestMatch(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `go test ./pkg/alert -run TestMatch -count=1`
 
 Expected: FAIL because `pkg/alert` does not exist.
 
-- [ ] **Step 3: Implement matching**
+- [x] **Step 3: Implement matching**
 
 Define `KindNewKEV`, `KindNewFinding`, `KindFixAvailable`, and `KindPostureRegression`. `Match` returns an error when required event identity fields are empty or the cause/event type is unknown. Otherwise it returns nil unless the policy is enabled, the cause is enabled and actionable, and policy labels intersect event labels when policy labels are nonempty. Evaluate fixed first, KEV second, then `data.MeetsThreshold`; return at most one draft for a finding event.
 
-- [ ] **Step 4: Run matcher tests**
+- [x] **Step 4: Run matcher tests**
 
 Run: `go test ./pkg/alert -count=1`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pkg/alert
@@ -296,21 +296,21 @@ git commit -S -m "feat(alerts): add deterministic policy matcher"
 - Produces: `NextAlertEvents(ctx, consumer string, limit int) ([]AlertCandidate, AlertPosition, bool, error)` where `initialized=true` means the cursor was created at the current event tail and no historical rows are returned.
 - Produces: `CommitAlertBatch(ctx, consumer string, drafts []AlertDraft, failures []AlertFailure, end AlertPosition) error`.
 
-- [ ] **Step 1: Write failing integration tests**
+- [x] **Step 1: Write failing integration tests**
 
 Add tests proving cursor initialization skips historical events, a later event is returned once, repeated batch commit produces one alert, cursor updates never move backward, and a second tenant cannot observe the alert through tenant-scoped reads.
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `DATABASE_URL=postgres://devradar:devradar@localhost:5432/devradar?sslmode=disable go test ./pkg/data/postgres -run TestAlertEvaluatorStore -count=1`
 
 Expected: FAIL with missing store methods.
 
-- [ ] **Step 3: Implement cursor initialization and reads**
+- [x] **Step 3: Implement cursor initialization and reads**
 
 `NextAlertEvents` first executes an `INSERT ... SELECT` that initializes the named consumer to the maximum `(occurred_at,id)` event position, using epoch/zero when no events exist and `ON CONFLICT DO NOTHING`. If it inserted the row, return `initialized=true` and no events. Otherwise select the next bounded batch ordered by `(occurred_at,id) ASC`, join SBOM labels/repository/digest, enrichment KEV, and the tenant policy into `AlertCandidate`. Tenants without a policy receive an in-memory disabled default and remain non-alerting. Clamp limit to 100 when outside `1..1000`.
 
-- [ ] **Step 4: Implement atomic effects and monotonic cursor advance**
+- [x] **Step 4: Implement atomic effects and monotonic cursor advance**
 
 `CommitAlertBatch` begins one transaction, inserts every draft with `ON CONFLICT DO NOTHING`, records failures with `ON CONFLICT DO NOTHING`, and advances the cursor only when its current tuple is older:
 
@@ -323,13 +323,13 @@ WHERE consumer=$1
 
 Commit only after all effects succeed. A crash before commit leaves neither effects nor cursor movement; a crash after commit safely re-reads nothing.
 
-- [ ] **Step 5: Run integration tests**
+- [x] **Step 5: Run integration tests**
 
 Run: `DATABASE_URL=postgres://devradar:devradar@localhost:5432/devradar?sslmode=disable go test ./pkg/data/postgres -run TestAlert -count=1`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add pkg/data/postgres/alert.go pkg/data/postgres/alert_test.go
@@ -349,37 +349,37 @@ git commit -S -m "feat(alerts): add cursor-backed alert storage"
 - Produces: `alert.Evaluator{Store Store, Consumer string, BatchSize int}` and `Evaluate(ctx) (alert.Result, error)`.
 - Scan integration uses optional interface assertion so existing scan fakes remain focused.
 
-- [ ] **Step 1: Write evaluator failure/retry tests**
+- [x] **Step 1: Write evaluator failure/retry tests**
 
 Use an in-memory fake store to prove initialization returns zero, matching events create drafts, malformed-event matcher errors become isolated failures, multiple batches drain, cancellation stops, and store errors return with context.
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `go test ./pkg/alert -run TestEvaluator -count=1`
 
 Expected: FAIL because `Evaluator` does not exist.
 
-- [ ] **Step 3: Implement bounded draining**
+- [x] **Step 3: Implement bounded draining**
 
 Use consumer `browser-alerts-v1` and default batch size 100. Loop until the store returns fewer than the requested batch size. Check `ctx.Err()` before each batch. Match every event independently, collect drafts/failures, then call `CommitAlertBatch` with the final event position. Return counts for examined, created drafts, and failures.
 
-- [ ] **Step 4: Add best-effort scan invocation**
+- [x] **Step 4: Add best-effort scan invocation**
 
 After `refreshEnrichment(ctx)`, assert whether `r.store` implements `alert.Store`. If so, invoke the evaluator and log either `alert evaluation failed` or completion counts. Never return its error from `Runner.Execute`.
 
-- [ ] **Step 5: Run package and integration tests**
+- [x] **Step 5: Run package and integration tests**
 
 Run: `go test ./pkg/alert ./pkg/scan ./pkg/data/postgres -count=1`
 
 Expected: PASS (Postgres tests may skip when `DATABASE_URL` is unavailable).
 
-- [ ] **Step 6: Run the foundation quality gate**
+- [x] **Step 6: Run the foundation quality gate**
 
 Run: `go test -race ./pkg/alert ./pkg/scan ./pkg/data/postgres -count=1 && go vet ./pkg/alert ./pkg/scan ./pkg/data/postgres`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add pkg/alert pkg/scan
