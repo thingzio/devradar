@@ -144,6 +144,22 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 	if version == "" {
 		version = refTag
 	}
+
+	// Abuse guard: cap the number of distinct images a tenant may track. A
+	// re-submit of an already-tracked repository is always allowed (it's an update,
+	// not growth); only a brand-new repository past the cap is rejected. See
+	// config.MaxImagesPerTenant.
+	ok, err := s.store.RepoAdmissible(r.Context(), tn.ID, repository, config.MaxImagesPerTenant())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check image quota")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusTooManyRequests, fmt.Sprintf(
+			"image limit reached (%d images per tenant); archive an image or contact support to raise the limit",
+			config.MaxImagesPerTenant()))
+		return
+	}
 	generatedAt := subj.GeneratedAt
 	if req.GeneratedAt != "" {
 		if t, perr := time.Parse(time.RFC3339, req.GeneratedAt); perr == nil {

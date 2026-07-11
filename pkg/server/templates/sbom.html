@@ -2,9 +2,15 @@
 {{template "nav" .}}
 <main class="page-content">
   <p class="crumb"><a href="/dashboard">Dashboard</a> / <a href="/images?repo={{.Repository}}">{{.Short}}</a></p>
-  <h1 class="page-title">{{.Short}} <span class="muted mono">{{.ShortDigest}}</span></h1>
+  <div class="page-head">
+    <h1 class="page-title">{{.Short}} <span class="muted mono">{{.ShortDigest}}</span></h1>
+    <form method="post" action="/sboms/{{.SBOMID}}/archive" data-confirm="Stop tracking this SBOM (digest {{.ShortDigest}})? Findings and history are kept, but it drops from scans and the dashboard.">
+      <button class="btn secondary" type="submit">Archive this version</button>
+    </form>
+  </div>
   <div class="chips">
     {{if .VersionTag}}<span class="tag">{{.VersionTag}}</span>{{end}}
+    {{if .Labels}}{{range .Labels}}<a class="label-chip" href="/dashboard?label={{.}}" title="Filter images by this label">{{.}}</a>{{end}}{{end}}
     <code>{{.Digest}}</code>
   </div>
   <p class="sub">
@@ -70,7 +76,7 @@
           {{if .FixableOnly}}<input type="hidden" name="fixable" value="true">{{end}}
           {{if .ShowSuppressed}}<input type="hidden" name="suppressed" value="true">{{end}}
           <label class="muted" for="sev">Min severity</label>
-          <select id="sev" name="min_severity" onchange="this.form.submit()">
+          <select id="sev" name="min_severity" data-autosubmit>
             {{$cur := .MinSeverity}}
             {{range (list "critical" "high" "medium" "low" "negligible")}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}
           </select>

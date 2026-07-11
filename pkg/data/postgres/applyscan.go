@@ -107,8 +107,78 @@ func (s *Store) ApplyScan(ctx context.Context, sb *SBOM, scanner string, ver Ver
 		}
 	}
 
+	// Refresh the per-SBOM severity rollup inside this transaction so it commits
+	// atomically with the findings above and can never diverge on a crash. It
+	// re-aggregates ALL scanners' rows for this SBOM (not just this scanner's), so
+	// the two scanners of one scan each recompute the same converged value — the
+	// second run is a no-op re-write, and if the second scanner fails the rollup
+	// still reflects the committed state.
+	if err := recomputeSBOMRollup(ctx, tx, sb.ID); err != nil {
+		return err
+	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// RecomputeSBOMRollup rebuilds one SBOM's rollup row outside a scan transaction
+// (its own statement on the pooled connection). ApplyScan maintains the rollup
+// inline; this is the out-of-band repair/backfill entry point — e.g. after a
+// bulk finding change made outside the scan path, or to reconcile a suspected
+// drift. Idempotent and exact.
+func (s *Store) RecomputeSBOMRollup(ctx context.Context, sbomID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin rollup tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := recomputeSBOMRollup(ctx, tx, sbomID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// recomputeSBOMRollup rebuilds one SBOM's row in devradar_sbom_rollup from its
+// current findings. Counts are RAW (no VEX suppression — that is applied at read
+// time) and cross-scanner-deduped: COUNT(DISTINCT finding_id) collapses a CVE
+// found by both grype and trivy to one, which is exactly COUNT(DISTINCT
+// (sbom_id, finding_id)) scoped to this SBOM. Reads ~hundreds of PK-clustered
+// rows; UPSERT keyed on sbom_id. KEV is overlaid from devradar_cve_enrichment
+// (frozen at scan time, like the live read path).
+func recomputeSBOMRollup(ctx context.Context, tx *sql.Tx, sbomID string) error {
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO devradar_sbom_rollup (
+			sbom_id, critical, high, medium, low, negligible, unknown, total,
+			fixable, fix_critical, fix_high, fix_medium, fix_low, kev, updated_at)
+		SELECT
+			$1,
+			COUNT(DISTINCT f.finding_id) FILTER (WHERE f.severity = 'critical'),
+			COUNT(DISTINCT f.finding_id) FILTER (WHERE f.severity = 'high'),
+			COUNT(DISTINCT f.finding_id) FILTER (WHERE f.severity = 'medium'),
+			COUNT(DISTINCT f.finding_id) FILTER (WHERE f.severity = 'low'),
+			COUNT(DISTINCT f.finding_id) FILTER (WHERE f.severity = 'negligible'),
+			COUNT(DISTINCT f.finding_id) FILTER (WHERE f.severity = 'unknown'),
+			COUNT(DISTINCT f.finding_id),
+			COUNT(DISTINCT f.finding_id) FILTER (WHERE f.is_fixed),
+			COUNT(DISTINCT f.finding_id) FILTER (WHERE f.is_fixed AND f.severity = 'critical'),
+			COUNT(DISTINCT f.finding_id) FILTER (WHERE f.is_fixed AND f.severity = 'high'),
+			COUNT(DISTINCT f.finding_id) FILTER (WHERE f.is_fixed AND f.severity = 'medium'),
+			COUNT(DISTINCT f.finding_id) FILTER (WHERE f.is_fixed AND f.severity = 'low'),
+			COUNT(DISTINCT f.exposure) FILTER (WHERE e.kev),
+			now()
+		FROM devradar_finding f
+		LEFT JOIN devradar_cve_enrichment e ON e.cve = f.exposure
+		WHERE f.sbom_id = $1
+		ON CONFLICT (sbom_id) DO UPDATE SET
+			critical = EXCLUDED.critical, high = EXCLUDED.high, medium = EXCLUDED.medium,
+			low = EXCLUDED.low, negligible = EXCLUDED.negligible, unknown = EXCLUDED.unknown,
+			total = EXCLUDED.total, fixable = EXCLUDED.fixable,
+			fix_critical = EXCLUDED.fix_critical, fix_high = EXCLUDED.fix_high,
+			fix_medium = EXCLUDED.fix_medium, fix_low = EXCLUDED.fix_low,
+			kev = EXCLUDED.kev, updated_at = EXCLUDED.updated_at`, sbomID); err != nil {
+		return fmt.Errorf("recompute rollup: %w", err)
 	}
 	return nil
 }

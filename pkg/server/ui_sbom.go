@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/thingzio/devradar/pkg/data"
 	"github.com/thingzio/devradar/pkg/data/postgres"
@@ -56,6 +58,7 @@ type sbomDetailView struct {
 	VersionTag  string
 	ShortDigest string
 	Digest      string
+	Labels      []string
 	Tool        string
 	ToolVersion string
 	GeneratedAt string
@@ -131,6 +134,7 @@ func (s *Server) handleSBOMDetail(w http.ResponseWriter, r *http.Request) {
 		VersionTag:     tag,
 		ShortDigest:    shortDigest(detail.Digest),
 		Digest:         detail.Digest,
+		Labels:         detail.Labels,
 		Tool:           detail.Tool,
 		ToolVersion:    detail.ToolVersion,
 		SubmittedAt:    detail.SubmittedAt.Format("2006-01-02 15:04"),
@@ -194,4 +198,57 @@ func formatEPSS(p *float32) string {
 		return ""
 	}
 	return strconv.Itoa(int(*p*100+0.5)) + "%"
+}
+
+// handleArchiveSBOMUI archives one SBOM (one digest) from the UI — the "stop
+// tracking this version" action on the SBOM detail page. Soft archive (findings
+// retained), tenant-scoped, idempotent. Redirects back to the image page (or the
+// dashboard if the repository can't be resolved) via POST-redirect-GET.
+func (s *Server) handleArchiveSBOMUI(w http.ResponseWriter, r *http.Request) {
+	tn := middleware.TenantFromContext(r.Context())
+	id := r.PathValue("id")
+
+	// Resolve the repository before archiving so we can redirect to the image page.
+	dest := "/dashboard"
+	if detail, err := s.store.GetSBOM(r.Context(), tn.ID, id, data.DefaultMinSeverity); err == nil {
+		if repo, _, _ := sbom.SplitRef(detail.ImageRef); repo != "" {
+			dest = "/images?repo=" + url.QueryEscape(repo)
+		}
+	}
+
+	if err := s.store.ArchiveSBOM(r.Context(), tn.ID, id); err != nil {
+		if errors.Is(err, postgres.ErrNotFound) {
+			http.Error(w, "SBOM not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "failed to archive SBOM", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, dest+addMsg(dest, "sbom_archived"), http.StatusSeeOther)
+}
+
+// handleArchiveRepoUI archives an entire image (every active digest of a
+// repository) from the UI — the "stop tracking this image" action on the image
+// page. Soft archive, tenant-scoped, idempotent. Redirects to the dashboard.
+func (s *Server) handleArchiveRepoUI(w http.ResponseWriter, r *http.Request) {
+	tn := middleware.TenantFromContext(r.Context())
+	repo := r.FormValue("repo")
+	if repo == "" {
+		http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+		return
+	}
+	if _, err := s.store.ArchiveRepo(r.Context(), tn.ID, repo); err != nil {
+		http.Error(w, "failed to archive image", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/dashboard?msg=image_archived", http.StatusSeeOther)
+}
+
+// addMsg appends a ?msg= (or &msg=) flash to a destination that may already carry
+// a query string.
+func addMsg(dest, msg string) string {
+	if strings.Contains(dest, "?") {
+		return "&msg=" + msg
+	}
+	return "?msg=" + msg
 }

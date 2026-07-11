@@ -160,6 +160,17 @@ func AdminUsers() []string {
 	return out
 }
 
+// MaxImagesPerTenant caps how many distinct images (repositories) a tenant may
+// track, an abuse/runaway guard on unbounded per-tenant growth (each image
+// multiplies scan work, findings, and dashboard aggregation). The cap is on
+// NEW repositories only: re-submitting a digest under an already-tracked
+// repository always succeeds, so a tenant already over the limit is never locked
+// out of updating what they have. 0 disables the cap. Tunable via
+// DEVRADAR_MAX_IMAGES_PER_TENANT (default 500).
+func MaxImagesPerTenant() int {
+	return GetEnvAsInt("DEVRADAR_MAX_IMAGES_PER_TENANT", 500)
+}
+
 // ScanMaxAge is the staleness window for scan-job work selection: an SBOM is
 // scanned only if never scanned or last scanned longer ago than this. Paired
 // with a frequent scheduler, it bounds per-SBOM scan frequency (default 12h ⇒

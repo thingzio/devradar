@@ -12,7 +12,11 @@
       "Bash(git commit -qS -m 'feat\\(ui\\): paginate all list views; risk-rank images in SQL *)",
       "Bash(git commit -qS -m 'feat\\(ui\\): SBOM detail page \\(Page 3\\) + paginate findings *)",
       "Bash(git push *)",
-      "Bash(make bump-patch *)"
+      "Bash(make bump-patch *)",
+      "Bash(go build *)",
+      "Bash(go vet *)",
+      "Bash(gofmt -l pkg/)",
+      "Bash(DATABASE_URL=\"postgres://devradar:devradar@localhost:5432/devradar?sslmode=disable\" go test ./...)"
     ]
   }
 }

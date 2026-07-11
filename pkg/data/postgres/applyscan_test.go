@@ -292,3 +292,90 @@ func TestApplyScan_Idempotent(t *testing.T) {
 		t.Errorf("current findings = %d, want 1", findings)
 	}
 }
+
+// TestApplyScan_MaintainsRollup verifies ApplyScan keeps devradar_sbom_rollup in
+// sync (cross-scanner dedup, resolved-finding decrement) and that the rollup
+// fast path and the VEX-aware live path return identical FleetStats — the parity
+// guarantee the dashboard depends on.
+func TestApplyScan_MaintainsRollup(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	tenantID, sb := seedTenantAndSBOM(t, st)
+
+	v := postgres.Versions{DBVersion: "db-1", ScannerVersion: "grype-0.115", CanonicalizerVersion: "passthrough"}
+	// Same CVE-A found by both scanners (must dedup to 1); CVE-B only by grype.
+	grype := []data.Vulnerability{
+		vuln("CVE-A", "openssl", "1.1.1", data.SeverityCritical, 9.8, false),
+		vuln("CVE-B", "zlib", "1.2.11", data.SeverityHigh, 7.5, true),
+	}
+	trivy := []data.Vulnerability{
+		vuln("CVE-A", "openssl", "1.1.1", data.SeverityCritical, 9.8, false),
+	}
+	if err := st.ApplyScan(ctx, sb, "grype", v, grype); err != nil {
+		t.Fatalf("grype scan: %v", err)
+	}
+	if err := st.ApplyScan(ctx, sb, "trivy", v, trivy); err != nil {
+		t.Fatalf("trivy scan: %v", err)
+	}
+
+	// Rollup: 2 distinct findings (CVE-A deduped across scanners, CVE-B), 1
+	// critical, 1 high, 1 fixable.
+	var total, crit, high, fixable int
+	if err := st.DB().QueryRowContext(ctx,
+		`SELECT total, critical, high, fixable FROM devradar_sbom_rollup WHERE sbom_id=$1`,
+		sb.ID).Scan(&total, &crit, &high, &fixable); err != nil {
+		t.Fatalf("read rollup: %v", err)
+	}
+	if total != 2 || crit != 1 || high != 1 || fixable != 1 {
+		t.Errorf("rollup = total:%d crit:%d high:%d fixable:%d, want 2/1/1/1", total, crit, high, fixable)
+	}
+
+	// Fast path (no VEX) — the dashboard's numbers.
+	fsRollup, err := st.FleetStats(ctx, tenantID)
+	if err != nil {
+		t.Fatalf("fleet stats (rollup): %v", err)
+	}
+	if fsRollup.Total != 2 || fsRollup.Critical != 1 || fsRollup.High != 1 {
+		t.Errorf("fleet (rollup) = %+v, want total=2 crit=1 high=1", fsRollup)
+	}
+
+	// Force the live path with a suppressing VEX statement scoped to a different
+	// CVE (so it changes the code path without changing the numbers), then assert
+	// parity with the rollup path.
+	var docID string
+	if err := st.DB().QueryRowContext(ctx, `
+		INSERT INTO devradar_vex_document (tenant_id, document) VALUES ($1, '{}'::jsonb) RETURNING id`,
+		tenantID).Scan(&docID); err != nil {
+		t.Fatalf("seed vex document: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_vex_statement (tenant_id, document_id, product_digest, vulnerability, status)
+		VALUES ($1, $2, 'sha256:unrelated', 'CVE-NONE', 'not_affected')`, tenantID, docID); err != nil {
+		t.Fatalf("seed vex: %v", err)
+	}
+	fsLive, err := st.FleetStats(ctx, tenantID)
+	if err != nil {
+		t.Fatalf("fleet stats (live): %v", err)
+	}
+	if fsLive.Total != fsRollup.Total || fsLive.Critical != fsRollup.Critical ||
+		fsLive.High != fsRollup.High || fsLive.Fixable != fsRollup.Fixable || fsLive.KEV != fsRollup.KEV {
+		t.Errorf("rollup vs live parity mismatch:\n rollup=%+v\n live=%+v", fsRollup, fsLive)
+	}
+
+	// Resolve CVE-A on both scanners → rollup total drops to 1 (CVE-B), 0 critical.
+	if err := st.ApplyScan(ctx, sb, "grype", v, []data.Vulnerability{
+		vuln("CVE-B", "zlib", "1.2.11", data.SeverityHigh, 7.5, true),
+	}); err != nil {
+		t.Fatalf("grype rescan: %v", err)
+	}
+	if err := st.ApplyScan(ctx, sb, "trivy", v, nil); err != nil {
+		t.Fatalf("trivy rescan (empty): %v", err)
+	}
+	if err := st.DB().QueryRowContext(ctx,
+		`SELECT total, critical FROM devradar_sbom_rollup WHERE sbom_id=$1`, sb.ID).Scan(&total, &crit); err != nil {
+		t.Fatalf("read rollup after resolve: %v", err)
+	}
+	if total != 1 || crit != 0 {
+		t.Errorf("rollup after resolve = total:%d crit:%d, want 1/0", total, crit)
+	}
+}

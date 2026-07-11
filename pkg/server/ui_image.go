@@ -46,6 +46,7 @@ type imageDetailView struct {
 	Repository  string
 	Short       string
 	Versions    []string
+	Labels      []string
 	SBOMCount   int
 	DigestCount int
 
@@ -66,11 +67,25 @@ type imageDetailView struct {
 	Failures    []failureRow
 	HasFailures bool
 
-	// License inventory for this image's SBOMs (per-package, policy-evaluated).
+	// License inventory for this image's SBOMs (per-package, policy-evaluated),
+	// filterable / sortable / paged.
 	Packages          []packageRow
-	LicenseViolations int
-	PackageTotal      int // full count (Packages may be capped)
+	LicenseViolations int // repo-wide, independent of the active filter/page
+	PackageTotal      int // count matching the active filters (for the pager)
+	PackageShown      int // rows on this page
 	HasPackages       bool
+	PkgQuery          string // active package-name filter
+	PkgCategory       string // active category filter ("" = all)
+	PkgCategories     []string
+	PkgSort           string
+	PkgDir            string
+	PkgPage           int
+	PkgHasPrev        bool
+	PkgHasNext        bool
+	PkgPrevPage       int
+	PkgNextPage       int
+	PkgRangeLo        int // 1-based index of first row on this page
+	PkgRangeHi        int // 1-based index of last row on this page
 }
 
 // packageRow is one catalogued package with its license classification + policy
@@ -154,37 +169,70 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 	failures, _ := s.store.FailuresByRepo(r.Context(), tn.ID, repo, 50)
 
 	// License inventory for this image, classified + evaluated against the tenant
-	// policy. Best-effort (licenses are additive). Capped (violations-first) so a
-	// large image doesn't render thousands of rows.
-	const pkgTableLimit = 200
+	// policy. Best-effort (licenses are additive). Filterable by name/category,
+	// sortable, and paged (violations-first by default) so a large image (a
+	// Node/Python base can catalog thousands of packages) stays navigable.
+	const pkgPageSize = 50
+	pkgQuery := r.URL.Query().Get("pkg_q")
+	pkgCategory := r.URL.Query().Get("pkg_cat")
+	if pkgCategory != "" && !data.ValidLicenseCategory(pkgCategory) {
+		pkgCategory = ""
+	}
+	pkgSort := r.URL.Query().Get("pkg_sort")
+	pkgDir := r.URL.Query().Get("pkg_dir")
+	pkgPage := clampInt(r.URL.Query().Get("pkg_page"), 1, 1, 1<<20)
 	policy, _ := s.store.GetLicensePolicy(r.Context(), tn.ID)
-	pkgs, pkgTotal, _ := s.store.PackagesByRepo(r.Context(), tn.ID, repo, policy, pkgTableLimit)
+	pkgs, pkgTotal, pkgViolations, _ := s.store.PackagesByRepo(r.Context(), tn.ID, repo, policy,
+		postgres.RepoPackageQuery{
+			NameFilter: pkgQuery, Category: pkgCategory, Sort: pkgSort, Dir: pkgDir,
+			Offset: (pkgPage - 1) * pkgPageSize, Limit: pkgPageSize,
+		})
+	pkgTotalPages := (pkgTotal + pkgPageSize - 1) / pkgPageSize
 
 	v := imageDetailView{
-		Title:          lastPath(repo),
-		SignedIn:       true,
-		Tab:            "images",
-		Email:          tn.Email,
-		AvatarURL:      tn.AvatarURL,
-		Version:        s.opts.Version,
-		MinSeverity:    min,
-		Repository:     repo,
-		Short:          lastPath(repo),
-		Versions:       sum.Versions,
-		SBOMCount:      sum.SBOMCount,
-		DigestCount:    sum.DigestCount,
-		NextCursor:     next,
-		SBOMNextCursor: sbomNext,
-		SBOMSort:       sbomSort,
-		SBOMDir:        sbomDir,
-		EvSort:         evSort,
-		EvDir:          evDir,
-		IncludeUnrated: includeUnrated,
-		SevChart:       stackedTimeSeries(points, 720),
-		HasEvents:      len(events) > 0,
-		HasFailures:    len(failures) > 0,
-		HasPackages:    len(pkgs) > 0,
-		PackageTotal:   pkgTotal,
+		Title:             lastPath(repo),
+		SignedIn:          true,
+		Tab:               "images",
+		Email:             tn.Email,
+		AvatarURL:         tn.AvatarURL,
+		Version:           s.opts.Version,
+		MinSeverity:       min,
+		Repository:        repo,
+		Short:             lastPath(repo),
+		Versions:          sum.Versions,
+		Labels:            sum.Labels,
+		SBOMCount:         sum.SBOMCount,
+		DigestCount:       sum.DigestCount,
+		NextCursor:        next,
+		SBOMNextCursor:    sbomNext,
+		SBOMSort:          sbomSort,
+		SBOMDir:           sbomDir,
+		EvSort:            evSort,
+		EvDir:             evDir,
+		IncludeUnrated:    includeUnrated,
+		SevChart:          stackedTimeSeries(points, 720),
+		HasEvents:         len(events) > 0,
+		HasFailures:       len(failures) > 0,
+		HasPackages:       pkgTotal > 0 || pkgQuery != "" || pkgCategory != "",
+		LicenseViolations: pkgViolations,
+		PackageTotal:      pkgTotal,
+		PackageShown:      len(pkgs),
+		PkgQuery:          pkgQuery,
+		PkgCategory:       pkgCategory,
+		PkgSort:           pkgSort,
+		PkgDir:            pkgDir,
+		PkgPage:           pkgPage,
+		PkgHasPrev:        pkgPage > 1,
+		PkgHasNext:        pkgPage < pkgTotalPages,
+		PkgPrevPage:       pkgPage - 1,
+		PkgNextPage:       pkgPage + 1,
+	}
+	for _, c := range data.ValidLicenseCategories {
+		v.PkgCategories = append(v.PkgCategories, string(c))
+	}
+	if pkgTotal > 0 {
+		v.PkgRangeLo = (pkgPage-1)*pkgPageSize + 1
+		v.PkgRangeHi = v.PkgRangeLo + len(pkgs) - 1
 	}
 
 	for _, f := range failures {
@@ -197,9 +245,6 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, p := range pkgs {
-		if p.Violation {
-			v.LicenseViolations++
-		}
 		v.Packages = append(v.Packages, packageRow{
 			Package:   p.Package,
 			Version:   p.Version,

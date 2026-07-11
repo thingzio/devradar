@@ -37,6 +37,71 @@ var repoImageSortCols = map[string]sortCol{
 	"sboms":      {expr: "sbom_count", cast: "double precision", defDesc: true},
 }
 
+// rollupImgCTE and liveImgCTE are the two interchangeable bodies of the `img`
+// CTE in ListRepoImages. They MUST expose identical output columns/aliases so
+// the shared outer query, keyset, and row scan don't care which was used.
+//
+// rollupImgCTE (fast path) sums devradar_sbom_rollup per repository — no finding
+// scan. SUM over per-SBOM rollup rows equals COUNT(DISTINCT (sb.id, finding_id))
+// because finding_id is unique within a SBOM. COALESCE handles repos whose SBOMs
+// have no rollup row yet (freshly submitted, not scanned) as zeros.
+const rollupImgCTE = `
+	SELECT sb.repository,
+	       COUNT(DISTINCT sb.id)                             AS sbom_count,
+	       COUNT(DISTINCT sb.digest)                         AS digest_count,
+	       COALESCE(array_agg(DISTINCT sb.version) FILTER (WHERE sb.version IS NOT NULL), '{}') AS versions,
+	       MAX(sb.submitted_at)                              AS latest_at,
+	       COALESCE(SUM(r.critical), 0)                      AS crit,
+	       COALESCE(SUM(r.high), 0)                          AS high,
+	       COALESCE(SUM(r.medium), 0)                        AS med,
+	       COALESCE(SUM(r.low), 0)                           AS low,
+	       COALESCE(SUM(r.negligible), 0)                    AS neg,
+	       COALESCE(SUM(r.unknown), 0)                       AS unk,
+	       COALESCE(SUM(r.total), 0)                         AS total,
+	       COALESCE(SUM(r.fixable), 0)                       AS fixable,
+	       (SELECT COUNT(*) FROM devradar_scan_failure sf
+	          JOIN devradar_sbom sb2 ON sb2.id = sf.sbom_id
+	         WHERE sb2.tenant_id = sb.tenant_id AND sb2.repository = sb.repository) AS failures,
+	       COALESCE(SUM(r.critical), 0) * 1000000000::bigint
+	         + COALESCE(SUM(r.high), 0) * 100000::bigint
+	         + COALESCE(SUM(r.total), 0)                     AS risk
+	FROM devradar_sbom sb
+	LEFT JOIN devradar_sbom_rollup r ON r.sbom_id = sb.id
+	WHERE sb.tenant_id = $1 AND sb.status = 'active'
+	  AND ($2 = '' OR sb.repository ILIKE '%' || $2 || '%')
+	  AND ($3 = '' OR $3 = ANY(sb.labels))
+	GROUP BY sb.tenant_id, sb.repository`
+
+// liveImgCTE (VEX fallback) re-aggregates devradar_finding with VEX-suppressed
+// findings excluded. Slower, taken only by tenants with a suppressing statement.
+var liveImgCTE = `
+	SELECT sb.repository,
+	       COUNT(DISTINCT sb.id)                             AS sbom_count,
+	       COUNT(DISTINCT sb.digest)                         AS digest_count,
+	       COALESCE(array_agg(DISTINCT sb.version) FILTER (WHERE sb.version IS NOT NULL), '{}') AS versions,
+	       MAX(sb.submitted_at)                              AS latest_at,
+	       COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.severity = 'critical')   AS crit,
+	       COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.severity = 'high')       AS high,
+	       COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.severity = 'medium')     AS med,
+	       COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.severity = 'low')        AS low,
+	       COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.severity = 'negligible') AS neg,
+	       COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.severity = 'unknown')    AS unk,
+	       COUNT(DISTINCT (sb.id, f.finding_id))                               AS total,
+	       COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.is_fixed)     AS fixable,
+	       (SELECT COUNT(*) FROM devradar_scan_failure sf
+	          JOIN devradar_sbom sb2 ON sb2.id = sf.sbom_id
+	         WHERE sb2.tenant_id = sb.tenant_id AND sb2.repository = sb.repository) AS failures,
+	       COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.severity = 'critical') * 1000000000::bigint
+	         + COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.severity = 'high') * 100000::bigint
+	         + COUNT(DISTINCT (sb.id, f.finding_id))     AS risk
+	FROM devradar_sbom sb
+	LEFT JOIN devradar_finding f ON f.sbom_id = sb.id
+		AND NOT ` + vexSuppressedByDigestCVE + `
+	WHERE sb.tenant_id = $1 AND sb.status = 'active'
+	  AND ($2 = '' OR sb.repository ILIKE '%' || $2 || '%')
+	  AND ($3 = '' OR $3 = ANY(sb.labels))
+	GROUP BY sb.tenant_id, sb.repository`
+
 // ListRepoImages returns a tenant's tracked images grouped by repository,
 // sorted in SQL (default "risk" = critical → high → total). Sorting in SQL (not
 // a Go re-sort) is what makes keyset pagination correct — the DB order is the
@@ -48,6 +113,11 @@ func (s *Store) ListRepoImages(ctx context.Context, tenantID, minSeverity, nameF
 	sort := resolveSort(sortKey, sortDir, repoImageSortCols, "risk")
 	cur, hasCur := decodeSortCursor(cursor)
 
+	hasVEX, err := s.TenantHasSuppressingVEX(ctx, tenantID)
+	if err != nil {
+		return nil, "", err
+	}
+
 	// $1 tenant, $2 name filter, $3 label filter (empty = no filter); keyset follows.
 	args := []any{tenantID, nameFilter, labelFilter}
 	keyset := ""
@@ -58,41 +128,25 @@ func (s *Store) ListRepoImages(ctx context.Context, tenantID, minSeverity, nameF
 	args = append(args, fetch)
 	limitPos := fmt.Sprintf("$%d", len(args))
 
+	// The per-repo counts come either from the pre-computed per-SBOM rollup (fast
+	// path, no VEX) or from a live VEX-aware re-aggregation of devradar_finding.
+	// Both expose the same img-CTE aliases (crit/high/…/total/fixable/risk), so the
+	// outer query, keyset, and scan below are shared. Summing per-SBOM rollup rows
+	// per repo equals COUNT(DISTINCT (sb.id, finding_id)) because finding_id is
+	// unique within a SBOM.
+	imgCTE := rollupImgCTE
+	if hasVEX {
+		imgCTE = liveImgCTE
+	}
+
 	q := fmt.Sprintf(`
-		WITH img AS (
-			SELECT sb.repository,
-			       COUNT(DISTINCT sb.id)                             AS sbom_count,
-			       COUNT(DISTINCT sb.digest)                         AS digest_count,
-			       COALESCE(array_agg(DISTINCT sb.version) FILTER (WHERE sb.version IS NOT NULL), '{}') AS versions,
-			       MAX(sb.submitted_at)                              AS latest_at,
-			       COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.severity = 'critical')   AS crit,
-			       COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.severity = 'high')       AS high,
-			       COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.severity = 'medium')     AS med,
-			       COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.severity = 'low')        AS low,
-			       COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.severity = 'negligible') AS neg,
-			       COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.severity = 'unknown')    AS unk,
-			       COUNT(DISTINCT (sb.id, f.finding_id))                               AS total,
-			       COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.is_fixed)     AS fixable,
-			       (SELECT COUNT(*) FROM devradar_scan_failure sf
-			          JOIN devradar_sbom sb2 ON sb2.id = sf.sbom_id
-			         WHERE sb2.tenant_id = sb.tenant_id AND sb2.repository = sb.repository) AS failures,
-			       COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.severity = 'critical') * 1000000000::bigint
-			         + COUNT(DISTINCT (sb.id, f.finding_id)) FILTER (WHERE f.severity = 'high') * 100000::bigint
-			         + COUNT(DISTINCT (sb.id, f.finding_id))     AS risk
-			FROM devradar_sbom sb
-			LEFT JOIN devradar_finding f ON f.sbom_id = sb.id
-				AND NOT `+vexSuppressedByDigestCVE+`
-			WHERE sb.tenant_id = $1 AND sb.status = 'active'
-			  AND ($2 = '' OR sb.repository ILIKE '%%' || $2 || '%%')
-			  AND ($3 = '' OR $3 = ANY(sb.labels))
-			GROUP BY sb.tenant_id, sb.repository
-		)
+		WITH img AS (%s)
 		SELECT repository, sbom_count, digest_count, versions, latest_at,
 		       crit, high, med, low, neg, unk, total, fixable, failures, %s
 		FROM img
 		%s
 		ORDER BY %s
-		LIMIT %s`, sort.selectVal(), keyset, sort.orderBy("repository"), limitPos)
+		LIMIT %s`, imgCTE, sort.selectVal(), keyset, sort.orderBy("repository"), limitPos)
 
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -193,6 +247,29 @@ func (s *Store) TenantLabels(ctx context.Context, tenantID string) ([]string, er
 	return out, rows.Err()
 }
 
+// RepoAdmissible reports whether a submission for `repository` is allowed under
+// the per-tenant image cap. It returns true when the cap is disabled (max <= 0),
+// when the repository is already tracked (a re-submit/update never counts against
+// the cap), or when the tenant is still below max distinct active repositories.
+// One round-trip: counts active repos and checks membership together.
+func (s *Store) RepoAdmissible(ctx context.Context, tenantID, repository string, max int) (bool, error) {
+	if max <= 0 {
+		return true, nil
+	}
+	var repoCount int
+	var exists bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT repository),
+		       COALESCE(bool_or(repository = $2), false)
+		FROM devradar_sbom
+		WHERE tenant_id = $1 AND status = 'active'`,
+		tenantID, repository).Scan(&repoCount, &exists)
+	if err != nil {
+		return false, fmt.Errorf("repo admissible: %w", err)
+	}
+	return exists || repoCount < max, nil
+}
+
 // FleetStats is the tenant-wide rollup for the dashboard headline. It is
 // deliberately independent of the paginated image list: summing one page would
 // undercount once a tenant has more images than fit on a page.
@@ -221,7 +298,80 @@ type FleetStats struct {
 // FleetStats returns tenant-wide finding totals across all active images,
 // including a count of distinct known-exploited (KEV) CVEs — the strongest
 // "patch now" signal in the fleet.
+//
+// Fast path: when the tenant has no suppressing VEX statement (the common case),
+// the finding totals are summed from the pre-computed devradar_sbom_rollup —
+// hundreds of rows instead of re-aggregating the whole finding set. A tenant
+// that does have suppressing VEX falls back to the live VEX-aware query, which
+// is the reference for correctness (so the two paths agree exactly when no VEX
+// applies).
 func (s *Store) FleetStats(ctx context.Context, tenantID string) (FleetStats, error) {
+	hasVEX, err := s.TenantHasSuppressingVEX(ctx, tenantID)
+	if err != nil {
+		return FleetStats{}, err
+	}
+	if hasVEX {
+		return s.fleetStatsLive(ctx, tenantID)
+	}
+	return s.fleetStatsRollup(ctx, tenantID)
+}
+
+// fleetStatsRollup sums the per-SBOM rollup for the fast (no-VEX) path. The
+// finding totals come from devradar_sbom_rollup; Images/Failures/LastScanAt are
+// the same cheap sub-selects as the live path.
+func (s *Store) fleetStatsRollup(ctx context.Context, tenantID string) (FleetStats, error) {
+	var fs FleetStats
+	var lastScan sql.NullTime
+	err := s.db.QueryRowContext(ctx, `
+		SELECT
+			(SELECT COUNT(DISTINCT repository) FROM devradar_sbom
+			   WHERE tenant_id = $1 AND status = 'active'),
+			COALESCE(SUM(r.total), 0),
+			COALESCE(SUM(r.critical), 0),
+			COALESCE(SUM(r.high), 0),
+			COALESCE(SUM(r.medium), 0),
+			COALESCE(SUM(r.low), 0),
+			COALESCE(SUM(r.fixable), 0),
+			COALESCE(SUM(r.fix_critical), 0),
+			COALESCE(SUM(r.fix_high), 0),
+			COALESCE(SUM(r.fix_medium), 0),
+			COALESCE(SUM(r.fix_low), 0),
+			-- KEV is a DISTINCT-across-fleet count: a known-exploited CVE present in
+			-- several images must count once, so it can't be SUM'd from the per-SBOM
+			-- rollup (that double-counts). Compute it directly; the partial KEV index
+			-- keeps it cheap (few CVEs are KEV-flagged).
+			(SELECT COUNT(DISTINCT f.exposure)
+			   FROM devradar_finding f
+			   JOIN devradar_sbom sk ON sk.id = f.sbom_id
+			   JOIN devradar_cve_enrichment e ON e.cve = f.exposure AND e.kev
+			  WHERE sk.tenant_id = $1 AND sk.status = 'active'),
+			(SELECT COUNT(*) FROM devradar_scan_failure sf
+			   JOIN devradar_sbom s2 ON s2.id = sf.sbom_id
+			  WHERE s2.tenant_id = $1),
+			(SELECT MAX(sr.scanned_at) FROM devradar_scan_run sr
+			   JOIN devradar_sbom s3 ON s3.id = sr.sbom_id
+			  WHERE s3.tenant_id = $1 AND s3.status = 'active')
+		FROM devradar_sbom sb
+		LEFT JOIN devradar_sbom_rollup r ON r.sbom_id = sb.id
+		WHERE sb.tenant_id = $1 AND sb.status = 'active'`,
+		tenantID).Scan(&fs.Images, &fs.Total, &fs.Critical, &fs.High, &fs.Medium, &fs.Low, &fs.Fixable,
+		&fs.FixCritical, &fs.FixHigh, &fs.FixMedium, &fs.FixLow, &fs.KEV, &fs.Failures, &lastScan)
+	if err != nil {
+		return FleetStats{}, fmt.Errorf("fleet stats (rollup): %w", err)
+	}
+	if lastScan.Valid {
+		fs.LastScanAt = &lastScan.Time
+	}
+	return fs, nil
+}
+
+// fleetStatsLive is the VEX-aware fallback: it re-aggregates devradar_finding
+// with VEX-suppressed findings excluded. Slower, but only tenants with a
+// suppressing VEX statement take this path. KEV here excludes suppressed CVEs
+// (it hangs off the same VEX-filtered finding join); the rollup fast path
+// computes an equivalent distinct-KEV count over the unsuppressed set, so the
+// two paths agree for a tenant with no suppressing VEX.
+func (s *Store) fleetStatsLive(ctx context.Context, tenantID string) (FleetStats, error) {
 	var fs FleetStats
 	var lastScan sql.NullTime
 	err := s.db.QueryRowContext(ctx, `
@@ -267,6 +417,7 @@ type RepoSummary struct {
 	SBOMCount   int
 	DigestCount int
 	Versions    []string
+	Labels      []string // distinct grouping labels across the image's active SBOMs
 }
 
 // RepoSummary returns totals for one repository. ErrNotFound if unknown.
@@ -274,10 +425,13 @@ func (s *Store) RepoSummary(ctx context.Context, tenantID, repository string) (R
 	var rs RepoSummary
 	err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(DISTINCT id), COUNT(DISTINCT digest),
-		       COALESCE(array_agg(DISTINCT version) FILTER (WHERE version IS NOT NULL), '{}')
+		       COALESCE(array_agg(DISTINCT version) FILTER (WHERE version IS NOT NULL), '{}'),
+		       COALESCE((SELECT array_agg(DISTINCT l ORDER BY l)
+		                 FROM devradar_sbom s2, unnest(s2.labels) l
+		                 WHERE s2.tenant_id = $1 AND s2.repository = $2 AND s2.status = 'active'), '{}')
 		FROM devradar_sbom
 		WHERE tenant_id = $1 AND repository = $2 AND status = 'active'`,
-		tenantID, repository).Scan(&rs.SBOMCount, &rs.DigestCount, pq.Array(&rs.Versions))
+		tenantID, repository).Scan(&rs.SBOMCount, &rs.DigestCount, pq.Array(&rs.Versions), pq.Array(&rs.Labels))
 	if err != nil {
 		return RepoSummary{}, fmt.Errorf("repo summary: %w", err)
 	}

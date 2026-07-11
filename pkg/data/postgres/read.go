@@ -43,32 +43,60 @@ type Image struct {
 	Failures int `json:"failures,omitempty"`
 }
 
+// listImagesRollupSQL is the fast path: one rollup row per image, no finding
+// aggregation. COALESCE handles a not-yet-scanned SBOM (no rollup row) as zeros.
+const listImagesRollupSQL = `
+	SELECT sb.id, sb.image_ref, sb.digest, sb.format, sb.submitted_at,
+	       COALESCE(r.critical, 0), COALESCE(r.high, 0), COALESCE(r.medium, 0),
+	       COALESCE(r.low, 0), COALESCE(r.negligible, 0), COALESCE(r.unknown, 0),
+	       COALESCE(r.total, 0),
+	       (SELECT COUNT(*) FROM devradar_scan_failure sf WHERE sf.sbom_id = sb.id) AS failures
+	FROM devradar_sbom sb
+	LEFT JOIN devradar_sbom_rollup r ON r.sbom_id = sb.id
+	WHERE sb.tenant_id = $1 AND sb.status = 'active'
+	ORDER BY sb.submitted_at DESC`
+
+// listImagesLiveSQL is the VEX-aware fallback. COUNT(DISTINCT f.finding_id): a
+// CVE found by both grype and trivy shares one finding_id; DISTINCT gives a true
+// per-image count. VEX-suppressed findings are excluded from the join.
+var listImagesLiveSQL = `
+	SELECT sb.id, sb.image_ref, sb.digest, sb.format, sb.submitted_at,
+	       COUNT(DISTINCT f.finding_id) FILTER (WHERE f.severity = 'critical')   AS crit,
+	       COUNT(DISTINCT f.finding_id) FILTER (WHERE f.severity = 'high')       AS high,
+	       COUNT(DISTINCT f.finding_id) FILTER (WHERE f.severity = 'medium')     AS med,
+	       COUNT(DISTINCT f.finding_id) FILTER (WHERE f.severity = 'low')        AS low,
+	       COUNT(DISTINCT f.finding_id) FILTER (WHERE f.severity = 'negligible') AS neg,
+	       COUNT(DISTINCT f.finding_id) FILTER (WHERE f.severity = 'unknown')    AS unk,
+	       COUNT(DISTINCT f.finding_id)                                          AS total,
+	       (SELECT COUNT(*) FROM devradar_scan_failure sf WHERE sf.sbom_id = sb.id) AS failures
+	FROM devradar_sbom sb
+	LEFT JOIN devradar_finding f ON f.sbom_id = sb.id
+		AND NOT ` + vexSuppressedByDigestCVE + `
+	WHERE sb.tenant_id = $1 AND sb.status = 'active'
+	GROUP BY sb.id, sb.image_ref, sb.digest, sb.format, sb.submitted_at
+	ORDER BY sb.submitted_at DESC`
+
 // ListImages returns a tenant's active images. Every tracked image is returned
 // (the list is an inventory — images never disappear); minSeverity trims the
 // per-severity breakdown to levels at or above the threshold (unknown always
 // kept), zeroing the rest. Total still reflects all findings. Tenant-scoped.
 func (s *Store) ListImages(ctx context.Context, tenantID, minSeverity string) ([]Image, error) {
-	// COUNT(DISTINCT f.finding_id): a CVE found by both grype and trivy is two
-	// rows sharing one finding_id; counting rows would double it. finding_id is
-	// the scanner-independent identity, so DISTINCT gives a true per-image count
-	// consistent with FleetStats/ListRepoImages. VEX-suppressed findings are
-	// excluded from the join (matching the SBOM-detail totals in GetSBOM).
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT sb.id, sb.image_ref, sb.digest, sb.format, sb.submitted_at,
-		       COUNT(DISTINCT f.finding_id) FILTER (WHERE f.severity = 'critical')   AS crit,
-		       COUNT(DISTINCT f.finding_id) FILTER (WHERE f.severity = 'high')       AS high,
-		       COUNT(DISTINCT f.finding_id) FILTER (WHERE f.severity = 'medium')     AS med,
-		       COUNT(DISTINCT f.finding_id) FILTER (WHERE f.severity = 'low')        AS low,
-		       COUNT(DISTINCT f.finding_id) FILTER (WHERE f.severity = 'negligible') AS neg,
-		       COUNT(DISTINCT f.finding_id) FILTER (WHERE f.severity = 'unknown')    AS unk,
-		       COUNT(DISTINCT f.finding_id)                                          AS total,
-		       (SELECT COUNT(*) FROM devradar_scan_failure sf WHERE sf.sbom_id = sb.id) AS failures
-		FROM devradar_sbom sb
-		LEFT JOIN devradar_finding f ON f.sbom_id = sb.id
-			AND NOT `+vexSuppressedByDigestCVE+`
-		WHERE sb.tenant_id = $1 AND sb.status = 'active'
-		GROUP BY sb.id, sb.image_ref, sb.digest, sb.format, sb.submitted_at
-		ORDER BY sb.submitted_at DESC`, tenantID)
+	hasVEX, err := s.TenantHasSuppressingVEX(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Counts source: the pre-computed per-SBOM rollup (one row per image, no
+	// finding scan) on the fast path, or a live VEX-aware re-aggregation of
+	// devradar_finding for tenants with a suppressing VEX statement. Both expose
+	// the same crit/high/…/total/failures columns so the scan below is shared.
+	// COUNT(DISTINCT f.finding_id) dedups a CVE found by both grype and trivy;
+	// the rollup already stores that deduped count per SBOM.
+	query := listImagesRollupSQL
+	if hasVEX {
+		query = listImagesLiveSQL
+	}
+	rows, err := s.db.QueryContext(ctx, query, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("list images: %w", err)
 	}
@@ -440,6 +468,7 @@ type SBOMDetail struct {
 	Status      string         `json:"status"`
 	SubmittedAt time.Time      `json:"submitted_at"`
 	GeneratedAt *time.Time     `json:"generated_at,omitempty"`
+	Labels      []string       `json:"labels,omitempty"`
 	Counts      SeverityCounts `json:"counts"`
 }
 
@@ -452,7 +481,7 @@ func (s *Store) GetSBOM(ctx context.Context, tenantID, sbomID, minSeverity strin
 	var gen sql.NullTime
 	err := s.db.QueryRowContext(ctx, `
 		SELECT sb.id, sb.image_ref, sb.digest, sb.format, sb.spec_version, sb.tool, sb.tool_version,
-		       sb.status, sb.submitted_at, sb.generated_at,
+		       sb.status, sb.submitted_at, sb.generated_at, sb.labels,
 		       COUNT(*) FILTER (WHERE f.severity='critical'),
 		       COUNT(*) FILTER (WHERE f.severity='high'),
 		       COUNT(*) FILTER (WHERE f.severity='medium'),
@@ -466,7 +495,7 @@ func (s *Store) GetSBOM(ctx context.Context, tenantID, sbomID, minSeverity strin
 		WHERE sb.id = $1 AND sb.tenant_id = $2
 		GROUP BY sb.id`, sbomID, tenantID).Scan(
 		&d.SBOMID, &d.ImageRef, &d.Digest, &d.Format, &spec, &tool, &toolVer,
-		&d.Status, &d.SubmittedAt, &gen,
+		&d.Status, &d.SubmittedAt, &gen, pq.Array(&d.Labels),
 		&c.Critical, &c.High, &c.Medium, &c.Low, &c.Negligible, &c.Unknown, &c.Total)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -498,6 +527,23 @@ func (s *Store) ArchiveSBOM(ctx context.Context, tenantID, sbomID string) error 
 		return s.assertSBOMOwner(ctx, tenantID, sbomID)
 	}
 	return nil
+}
+
+// ArchiveRepo archives every active SBOM (all digests/versions) of one image
+// (repository) for a tenant — the "stop tracking this image" action. Like
+// ArchiveSBOM it is a soft archive: findings and event history are retained, the
+// image drops out of the scan set and the dashboard. Returns the number of SBOMs
+// archived (0 = unknown/empty image or already fully archived — the caller can
+// treat 0 as idempotent success). Tenant-scoped.
+func (s *Store) ArchiveRepo(ctx context.Context, tenantID, repository string) (int64, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE devradar_sbom SET status='archived'
+		 WHERE tenant_id=$1 AND repository=$2 AND status='active'`, tenantID, repository)
+	if err != nil {
+		return 0, fmt.Errorf("archive repo: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
 }
 
 // ErrNotFound is returned when a tenant-scoped resource doesn't exist or isn't

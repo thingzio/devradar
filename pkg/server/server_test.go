@@ -209,6 +209,42 @@ func TestIngest_AndRead(t *testing.T) {
 	}
 }
 
+// TestIngest_ImageCap verifies the per-tenant image cap: a new repository past
+// the cap is rejected 429, but re-submitting an already-tracked repository still
+// succeeds (an update is not growth).
+func TestIngest_ImageCap(t *testing.T) {
+	t.Setenv("DEVRADAR_MAX_IMAGES_PER_TENANT", "1")
+	srv, st := testServer(t)
+	_, tok := seedTenantToken(t, st)
+	h := srv.Handler()
+
+	submit := func(fixture string) *httptest.ResponseRecorder {
+		raw, err := os.ReadFile("../sbom/testdata/" + fixture)
+		if err != nil {
+			t.Skipf("fixture missing: %v", err)
+		}
+		body, _ := json.Marshal(map[string]string{"sbom": base64.StdEncoding.EncodeToString(raw)})
+		req := httptest.NewRequest(http.MethodPost, "/v1/sboms", strings.NewReader(string(body)))
+		req.Header.Set("Authorization", "Bearer "+tok)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// First image (repo "redis") → allowed.
+	if rc := submit("redis.syft.cdx.json"); rc.Code != http.StatusAccepted {
+		t.Fatalf("first image: status = %d, want 202 (%s)", rc.Code, rc.Body.String())
+	}
+	// Re-submit the SAME image → still allowed (update, not a new repo).
+	if rc := submit("redis.syft.cdx.json"); rc.Code != http.StatusAccepted {
+		t.Errorf("resubmit same image: status = %d, want 202", rc.Code)
+	}
+	// A DIFFERENT image (repo "nginx") past the cap of 1 → rejected 429.
+	if rc := submit("nginx.syft.cdx.json"); rc.Code != http.StatusTooManyRequests {
+		t.Errorf("second distinct image: status = %d, want 429 (%s)", rc.Code, rc.Body.String())
+	}
+}
+
 func TestRead_TenantIsolation(t *testing.T) {
 	srv, st := testServer(t)
 	_, tokA := seedTenantToken(t, st)
@@ -294,6 +330,61 @@ func TestSBOMLifecycle(t *testing.T) {
 	// DELETE unknown → 404.
 	if rc := do(http.MethodDelete, "/v1/sboms/nope"); rc.Code != http.StatusNotFound {
 		t.Errorf("DELETE unknown sbom = %d, want 404", rc.Code)
+	}
+}
+
+// TestUIArchive covers the tenant-facing archive actions: POST /sboms/{id}/archive
+// (one digest) and POST /images/archive (whole repository). Both are session-auth
+// UI routes that redirect (303) and drop the image from the dashboard list.
+func TestUIArchive(t *testing.T) {
+	srv, st := testServer(t)
+	tenantID, tok := seedTenantToken(t, st)
+	cookie := seedSession(t, st, tenantID)
+	h := srv.Handler()
+
+	submit := func(fixture string) string {
+		raw, err := os.ReadFile("../sbom/testdata/" + fixture)
+		if err != nil {
+			t.Skipf("fixture missing: %v", err)
+		}
+		body, _ := json.Marshal(map[string]string{"sbom": base64.StdEncoding.EncodeToString(raw)})
+		req := httptest.NewRequest(http.MethodPost, "/v1/sboms", strings.NewReader(string(body)))
+		req.Header.Set("Authorization", "Bearer "+tok)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		var sub struct {
+			SBOMID string `json:"sbom_id"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &sub)
+		return sub.SBOMID
+	}
+
+	// Archive a single SBOM (digest) via the UI → 303 redirect.
+	redisID := submit("redis.syft.cdx.json")
+	postUI := func(path, form string) *httptest.ResponseRecorder {
+		rq := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form))
+		rq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rq.AddCookie(cookie)
+		rc := httptest.NewRecorder()
+		h.ServeHTTP(rc, rq)
+		return rc
+	}
+	if rc := postUI("/sboms/"+redisID+"/archive", ""); rc.Code != http.StatusSeeOther {
+		t.Errorf("archive sbom UI = %d, want 303", rc.Code)
+	}
+
+	// Archive a whole image (repository) via the UI → 303, and it drops from images.
+	_ = submit("nginx.syft.cdx.json")
+	if rc := postUI("/images/archive", "repo=nginx"); rc.Code != http.StatusSeeOther {
+		t.Errorf("archive repo UI = %d, want 303", rc.Code)
+	}
+	getImages := httptest.NewRequest(http.MethodGet, "/v1/images", nil)
+	getImages.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, getImages)
+	if strings.Contains(rec.Body.String(), `"repository":"nginx"`) ||
+		strings.Contains(rec.Body.String(), `"repository":"redis"`) {
+		t.Errorf("archived images should not appear in /v1/images, got %s", rec.Body.String())
 	}
 }
 

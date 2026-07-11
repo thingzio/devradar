@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/lib/pq"
 	"github.com/thingzio/devradar/pkg/data"
@@ -109,19 +110,35 @@ func (s *Store) ListSBOMPackages(ctx context.Context, tenantID, sbomID string, p
 	return out, nil
 }
 
-// PackagesByRepo returns the deduped license inventory across all of a
-// repository's active SBOMs, classified + policy-evaluated in Go, violations
-// first. The distinct-package identity is (package, version) with licenses
-// merged across the repo's digests, so a dependency common to several versions
-// appears once. Tenant-scoped via the join to devradar_sbom.
+// RepoPackageQuery parameterizes the per-image package inventory listing:
+// optional name substring and category filters, a sort key, and offset paging.
+// Classification (category) and policy verdict are derived in Go, so filtering
+// and sorting on them happen in Go after the (bounded, deduped) fetch.
+type RepoPackageQuery struct {
+	NameFilter string // case-insensitive package-name substring; "" = no filter
+	Category   string // exact obligation category; "" = all
+	Sort       string // package | category | violation (default: violation)
+	Dir        string // asc | desc (default depends on Sort)
+	Offset     int    // rows to skip (page * pageSize)
+	Limit      int    // page size; <= 0 applies a sane default
+}
+
+// PackagesByRepo returns one page of the deduped license inventory across a
+// repository's active SBOMs, classified + policy-evaluated in Go. The
+// distinct-package identity is (package, version) with licenses merged across
+// the repo's digests, so a dependency common to several versions appears once.
+// Tenant-scoped via the join to devradar_sbom.
 //
-// Returns at most limit rows plus the total count, so the UI can bound a large
-// image (a Node/Python base can catalog thousands of packages) and say "showing
-// N of M". Ordering is violations-first, so the cap keeps the rows that matter.
-// A limit <= 0 applies a sane default.
-func (s *Store) PackagesByRepo(ctx context.Context, tenantID, repository string, policy data.LicensePolicy, limit int) (rows []PackageLicenseRow, total int, err error) {
+// The per-repo inventory is bounded (hundreds–low-thousands of packages, not the
+// fleet), so it is fetched once, then filtered/sorted/paged in Go — classification
+// and policy verdict aren't SQL-expressible. Returns the page rows, the total
+// matching the active filters (for the pager), and the repo-wide violation count
+// (independent of filters, so the header stays stable across pages/filters).
+// Default order is violations-first so the rows that matter lead.
+func (s *Store) PackagesByRepo(ctx context.Context, tenantID, repository string, policy data.LicensePolicy, q RepoPackageQuery) (rows []PackageLicenseRow, total, violations int, err error) {
+	limit := q.Limit
 	if limit <= 0 {
-		limit = 200
+		limit = 50
 	}
 	qrows, err := s.db.QueryContext(ctx, `
 		SELECT p.package, p.version,
@@ -133,32 +150,46 @@ func (s *Store) PackagesByRepo(ctx context.Context, tenantID, repository string,
 		GROUP BY p.package, p.version
 		ORDER BY p.package, p.version`, tenantID, repository)
 	if err != nil {
-		return nil, 0, fmt.Errorf("repo packages: %w", err)
+		return nil, 0, 0, fmt.Errorf("repo packages: %w", err)
 	}
 	defer func() { _ = qrows.Close() }()
 
+	nameFilter := strings.ToLower(q.NameFilter)
 	var all []PackageLicenseRow
 	for qrows.Next() {
 		var r PackageLicenseRow
 		if err := qrows.Scan(&r.Package, &r.Version, pq.Array(&r.Licenses)); err != nil {
-			return nil, 0, fmt.Errorf("scan repo package: %w", err)
+			return nil, 0, 0, fmt.Errorf("scan repo package: %w", err)
 		}
-		pkg := data.PackageLicense{Package: r.Package, Version: r.Version, Licenses: r.Licenses}
 		r.Category = string(worstCategory(r.Licenses))
+		pkg := data.PackageLicense{Package: r.Package, Version: r.Version, Licenses: r.Licenses}
 		r.Violation, r.Reason = policy.Evaluate(pkg)
+		if r.Violation {
+			violations++ // repo-wide count, before name/category filters
+		}
+		if nameFilter != "" && !strings.Contains(strings.ToLower(r.Package), nameFilter) {
+			continue
+		}
+		if q.Category != "" && r.Category != q.Category {
+			continue
+		}
 		all = append(all, r)
 	}
 	if err := qrows.Err(); err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
-	// Sort violations-first in Go (policy is evaluated in Go), then cap. total is
-	// the full count so the UI can note how many are hidden.
-	sortViolationsFirst(all)
+
+	sortRepoPackages(all, q.Sort, q.Dir)
 	total = len(all)
+	// Offset paging over the sorted, filtered set.
+	if q.Offset >= len(all) {
+		return nil, total, violations, nil
+	}
+	all = all[q.Offset:]
 	if len(all) > limit {
 		all = all[:limit]
 	}
-	return all, total, nil
+	return all, total, violations, nil
 }
 
 // LicenseCount is one distribution bucket: a license family or category and the
@@ -329,6 +360,39 @@ func worstCategory(licenses []string) data.LicenseCategory {
 		}
 	}
 	return worst
+}
+
+// sortRepoPackages orders the per-image package rows by the requested key, with
+// a package/version tiebreak for a stable keyset. The default (empty sort, or
+// "violation") is violations-first — the compliance-relevant rows lead.
+func sortRepoPackages(rows []PackageLicenseRow, sortKey, dir string) {
+	desc := dir == "desc"
+	switch sortKey {
+	case "package":
+		sort.SliceStable(rows, func(i, j int) bool {
+			if rows[i].Package != rows[j].Package {
+				return less(rows[i].Package < rows[j].Package, desc)
+			}
+			return rows[i].Version < rows[j].Version
+		})
+	case "category":
+		sort.SliceStable(rows, func(i, j int) bool {
+			if rows[i].Category != rows[j].Category {
+				return less(rows[i].Category < rows[j].Category, desc)
+			}
+			return rows[i].Package < rows[j].Package
+		})
+	default: // "violation" or unset → violations-first
+		sortViolationsFirst(rows)
+	}
+}
+
+// less flips an ascending comparison to descending when desc is set.
+func less(asc, desc bool) bool {
+	if desc {
+		return !asc
+	}
+	return asc
 }
 
 // sortViolationsFirst orders rows violations-first, then by package/version, so

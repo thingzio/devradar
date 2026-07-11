@@ -163,6 +163,30 @@ a:hover { text-decoration: underline; }
 }
 .searchbar input:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus-ring); }
 
+/* Page header row: title on the left, a primary action (e.g. Archive) on the right. */
+.page-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.page-head .page-title { margin: 0; }
+
+/* Per-image package filter bar + pager. */
+.pkg-filters { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin: 0.5rem 0; }
+.pkg-filters input[type=search] {
+  flex: 1; min-width: 180px; padding: 0.45rem 0.7rem; font-family: var(--font);
+  background: var(--page-bg); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.pkg-filters input:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus-ring); }
+.pager { display: flex; gap: 0.75rem; align-items: center; justify-content: center; margin-top: 0.75rem; }
+.btn.disabled { opacity: 0.4; pointer-events: none; }
+
+/* Collapsible change log: keep a long history from dominating the page. */
+.changelog > summary {
+  cursor: pointer; display: flex; gap: 0.6rem; align-items: baseline; flex-wrap: wrap;
+  list-style: none; padding: 0.15rem 0;
+}
+.changelog > summary::-webkit-details-marker { display: none; }
+.changelog > summary::before { content: "▸"; color: var(--muted); font-size: 0.8rem; }
+.changelog[open] > summary::before { content: "▾"; }
+.changelog-title { font-size: 1.05rem; font-weight: 600; }
+
 @media (max-width: 640px) {
   .tabs { margin-left: 0.5rem; }
   .tab { padding: 0.4rem 0.5rem; font-size: 0.85rem; }
@@ -384,6 +408,14 @@ table.images td { vertical-align: middle; }
   font-family: var(--font-mono); background: var(--surface-alt); border: 1px solid var(--border);
   border-radius: 4px; padding: 0.05rem 0.4rem; font-size: 0.78rem; color: var(--muted);
 }
+/* Grouping labels: a clickable pill distinct from a mono version .tag. Links to
+   the dashboard filtered by that label. */
+.label-chip {
+  display: inline-block; border-radius: 999px; padding: 0.05rem 0.55rem; font-size: 0.75rem;
+  background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); text-decoration: none;
+}
+.label-chip:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
 .flag { color: var(--warn); font-size: 0.78rem; }
 .fix { color: var(--ok); }
 

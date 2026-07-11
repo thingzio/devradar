@@ -2,11 +2,18 @@
 {{template "nav" .}}
 <main class="page-content">
   <p class="crumb"><a href="/dashboard">← Dashboard</a></p>
-  <h1 class="page-title">{{.Short}}</h1>
+  <div class="page-head">
+    <h1 class="page-title">{{.Short}}</h1>
+    <form method="post" action="/images/archive" data-confirm="Stop tracking {{.Short}} and all its versions? Findings and history are kept, but it drops from scans and the dashboard.">
+      <input type="hidden" name="repo" value="{{.Repository}}">
+      <button class="btn secondary" type="submit">Archive image</button>
+    </form>
+  </div>
   <p class="sub repo-full">{{.Repository}}</p>
 
   <div class="chips">
     {{if .Versions}}{{range .Versions}}<span class="tag">{{.}}</span>{{end}}{{end}}
+    {{if .Labels}}{{range .Labels}}<a class="label-chip" href="/dashboard?label={{.}}" title="Filter images by this label">{{.}}</a>{{end}}{{end}}
     <span class="muted">{{.SBOMCount}} SBOM{{if ne .SBOMCount 1}}s{{end}}</span>
     <span class="muted">·</span>
     <span class="muted">{{.DigestCount}} digest{{if ne .DigestCount 1}}s{{end}}</span>
@@ -17,80 +24,6 @@
     <p class="muted" style="margin-top:0">Finding count by severity across daily scans, oldest to newest. A rising column on an unchanged digest is new CVE data; a step change follows a new digest.</p>
     {{.SevChart}}
   </div>
-
-  <div class="card">
-    <div class="card-head">
-      <h2>Change log</h2>
-      <form class="inline sev" method="get" action="/images">
-        <input type="hidden" name="repo" value="{{.Repository}}">
-        <label class="muted" for="sev">Min severity</label>
-        <select id="sev" name="min_severity" onchange="this.form.submit()">
-          {{$cur := .MinSeverity}}
-          {{range (list "critical" "high" "medium" "low" "negligible")}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}
-        </select>
-        <label class="muted chk" title="Also show findings with no severity rating (unknown)">
-          <input type="checkbox" name="unrated" value="1" {{if .IncludeUnrated}}checked{{end}} onchange="this.form.submit()"> unrated
-        </label>
-      </form>
-    </div>
-    <p class="muted" style="margin-top:0">How this image's vulnerabilities changed over time, across all its digests. History builds as daily scans run.</p>
-
-    {{if .HasEvents}}
-    <table class="events">
-      <thead>
-        {{$eq := printf "repo=%s&min_severity=%s" .Repository .MinSeverity}}
-        <tr>
-          <th>{{sorthp "When" "occurred" "/images" $eq "ev_sort" "ev_dir" .EvSort .EvDir}}</th>
-          <th>Change</th>
-          <th>{{sorthp "Cause" "cause" "/images" $eq "ev_sort" "ev_dir" .EvSort .EvDir}}</th>
-          <th>{{sorthp "Severity" "severity" "/images" $eq "ev_sort" "ev_dir" .EvSort .EvDir}}</th>
-          <th>{{sorthp "CVE" "cve" "/images" $eq "ev_sort" "ev_dir" .EvSort .EvDir}}</th>
-          <th>Package</th>
-          <th>Digest</th>
-        </tr>
-      </thead>
-      <tbody>
-        {{range .Events}}
-        <tr>
-          <td class="nowrap">{{.When}}</td>
-          <td><span class="evt evt-{{.EventType}}">{{.EventType}}</span></td>
-          <td><span class="cause cause-{{.Cause}}" title="{{.CauseLabel}}">{{.CauseLabel}}</span></td>
-          <td><span class="sev-badge sev-b-{{.Severity}}">{{.Severity}}</span></td>
-          <td><a href="https://nvd.nist.gov/vuln/detail/{{.Exposure}}" target="_blank" rel="noopener">{{.Exposure}}</a></td>
-          <td>{{.Package}}</td>
-          <td class="muted"><code>{{.ShortDigest}}</code></td>
-        </tr>
-        {{end}}
-      </tbody>
-    </table>
-    {{if .NextCursor}}
-    <p class="loadmore"><a href="/images?repo={{.Repository}}&min_severity={{.MinSeverity}}{{if .IncludeUnrated}}&unrated=1{{end}}{{if .EvSort}}&ev_sort={{.EvSort}}&ev_dir={{.EvDir}}{{end}}&cursor={{.NextCursor}}">Load more →</a></p>
-    {{end}}
-    {{else}}
-    <p class="muted">No changes at or above the <strong>{{.MinSeverity}}</strong> threshold{{if not .IncludeUnrated}} (unrated findings hidden — tick <em>unrated</em> to include them){{end}}.</p>
-    {{end}}
-  </div>
-
-  {{if .HasFailures}}
-  <div class="card">
-    <div class="card-head"><h2>&#9888; Scan issues</h2></div>
-    <p class="muted" style="margin-top:0">A scanner errored or returned nothing for one of this image's SBOMs. This is why the image shows a "scan issue" flag — the finding counts may be from fewer scanners than configured.</p>
-    <table>
-      <thead><tr><th>When</th><th>Scanner</th><th>Stage</th><th>Detail</th></tr></thead>
-      <tbody>
-        {{range .Failures}}
-        <tr>
-          <td class="nowrap">{{.When}}</td>
-          <td>{{if .Scanner}}{{.Scanner}}{{else}}<span class="muted">—</span>{{end}}</td>
-          <td><code>{{.Stage}}</code></td>
-          <td class="muted">{{.Error}}</td>
-        </tr>
-        {{end}}
-      </tbody>
-    </table>
-    <p class="muted" style="margin-bottom:0; font-size:0.85rem">Common causes: the reference wasn't a container image (a Helm chart or OCI artifact), an SBOM a scanner couldn't parse, or a scanner with no advisories for the image's distro (e.g. Trivy on an EOL release). See the <a href="/submit">submission guide</a>.</p>
-  </div>
-  {{end}}
 
   <div class="card">
     <div class="card-head"><h2>Versions &amp; SBOMs</h2></div>
@@ -131,9 +64,36 @@
       <h2>Packages &amp; licenses</h2>
       {{if .LicenseViolations}}<span class="pill" style="background:color-mix(in srgb, var(--danger) 15%, transparent); color:var(--danger)">{{.LicenseViolations}} policy violation{{if ne .LicenseViolations 1}}s{{end}}</span>{{end}}
     </div>
-    <p class="muted" style="margin-top:0">Every package catalogued in this image's SBOMs, with its license and obligation category. Set a <a href="/licenses">compliance policy</a> to flag denied licenses — violations are listed first.{{if gt .PackageTotal (len .Packages)}} Showing the first {{len .Packages}} of {{.PackageTotal}} packages.{{end}}</p>
+    <p class="muted" style="margin-top:0">Every package catalogued in this image's SBOMs, with its license and obligation category. Set a <a href="/licenses">compliance policy</a> to flag denied licenses — violations are listed first.</p>
+
+    <form class="pkg-filters" method="get" action="/images">
+      <input type="hidden" name="repo" value="{{.Repository}}">
+      <input type="hidden" name="min_severity" value="{{.MinSeverity}}">
+      {{if .PkgSort}}<input type="hidden" name="pkg_sort" value="{{.PkgSort}}"><input type="hidden" name="pkg_dir" value="{{.PkgDir}}">{{end}}
+      <input type="search" name="pkg_q" value="{{.PkgQuery}}" placeholder="Filter by package name…" autocomplete="off">
+      <select name="pkg_cat" data-autosubmit title="Filter by license category">
+        <option value="">all categories</option>
+        {{$pc := .PkgCategory}}{{range .PkgCategories}}<option value="{{.}}" {{if eq . $pc}}selected{{end}}>{{.}}</option>{{end}}
+      </select>
+      <button class="btn secondary" type="submit">Filter</button>
+      {{if or .PkgQuery .PkgCategory}}<a class="btn secondary" href="/images?repo={{.Repository}}&min_severity={{.MinSeverity}}">Clear</a>{{end}}
+    </form>
+
+    {{if .Packages}}
+    <p class="muted" style="margin-top:0.5rem">Showing {{.PkgRangeLo}}–{{.PkgRangeHi}} of {{.PackageTotal}}{{if or .PkgQuery .PkgCategory}} matching{{end}} packages.</p>
     <table class="packages">
-      <thead><tr><th>Package</th><th>Version</th><th class="lic-col">License(s)</th><th>Category</th><th>Policy</th></tr></thead>
+      <thead>
+        {{$pq := printf "repo=%s&min_severity=%s" .Repository .MinSeverity}}
+        {{if .PkgQuery}}{{$pq = printf "%s&pkg_q=%s" $pq .PkgQuery}}{{end}}
+        {{if .PkgCategory}}{{$pq = printf "%s&pkg_cat=%s" $pq .PkgCategory}}{{end}}
+        <tr>
+          <th>{{sorthp "Package" "package" "/images" $pq "pkg_sort" "pkg_dir" .PkgSort .PkgDir}}</th>
+          <th>Version</th>
+          <th class="lic-col">License(s)</th>
+          <th>{{sorthp "Category" "category" "/images" $pq "pkg_sort" "pkg_dir" .PkgSort .PkgDir}}</th>
+          <th>{{sorthp "Policy" "violation" "/images" $pq "pkg_sort" "pkg_dir" .PkgSort .PkgDir}}</th>
+        </tr>
+      </thead>
       <tbody>
         {{range .Packages}}
         <tr{{if .Violation}} class="row-violation"{{end}}>
@@ -146,7 +106,97 @@
         {{end}}
       </tbody>
     </table>
+    {{if or .PkgHasPrev .PkgHasNext}}
+    {{$pg := printf "repo=%s&min_severity=%s" .Repository .MinSeverity}}
+    {{if .PkgQuery}}{{$pg = printf "%s&pkg_q=%s" $pg .PkgQuery}}{{end}}
+    {{if .PkgCategory}}{{$pg = printf "%s&pkg_cat=%s" $pg .PkgCategory}}{{end}}
+    {{if .PkgSort}}{{$pg = printf "%s&pkg_sort=%s&pkg_dir=%s" $pg .PkgSort .PkgDir}}{{end}}
+    <div class="pager">
+      {{if .PkgHasPrev}}<a class="btn secondary" href="/images?{{$pg}}&pkg_page={{.PkgPrevPage}}">← Prev</a>{{else}}<span class="btn secondary disabled">← Prev</span>{{end}}
+      <span class="muted">Page {{.PkgPage}}</span>
+      {{if .PkgHasNext}}<a class="btn secondary" href="/images?{{$pg}}&pkg_page={{.PkgNextPage}}">Next →</a>{{else}}<span class="btn secondary disabled">Next →</span>{{end}}
+    </div>
+    {{end}}
+    {{else}}
+    <p class="muted">No packages{{if or .PkgQuery .PkgCategory}} match the current filter{{end}}.</p>
+    {{end}}
   </div>
   {{end}}
+
+  {{if .HasFailures}}
+  <div class="card">
+    <div class="card-head"><h2>&#9888; Scan issues</h2></div>
+    <p class="muted" style="margin-top:0">A scanner errored or returned nothing for one of this image's SBOMs. This is why the image shows a "scan issue" flag — the finding counts may be from fewer scanners than configured.</p>
+    <table>
+      <thead><tr><th>When</th><th>Scanner</th><th>Stage</th><th>Detail</th></tr></thead>
+      <tbody>
+        {{range .Failures}}
+        <tr>
+          <td class="nowrap">{{.When}}</td>
+          <td>{{if .Scanner}}{{.Scanner}}{{else}}<span class="muted">—</span>{{end}}</td>
+          <td><code>{{.Stage}}</code></td>
+          <td class="muted">{{.Error}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+    <p class="muted" style="margin-bottom:0; font-size:0.85rem">Common causes: the reference wasn't a container image (a Helm chart or OCI artifact), an SBOM a scanner couldn't parse, or a scanner with no advisories for the image's distro (e.g. Trivy on an EOL release). See the <a href="/submit">submission guide</a>.</p>
+  </div>
+  {{end}}
+
+  <div class="card">
+    <details class="changelog" {{if .HasEvents}}open{{end}}>
+      <summary>
+        <span class="changelog-title">Change log</span>
+        <span class="muted">How this image's vulnerabilities changed over time, across all its digests</span>
+      </summary>
+      <form class="inline sev" method="get" action="/images">
+        <input type="hidden" name="repo" value="{{.Repository}}">
+        <label class="muted" for="sev">Min severity</label>
+        <select id="sev" name="min_severity" data-autosubmit>
+          {{$cur := .MinSeverity}}
+          {{range (list "critical" "high" "medium" "low" "negligible")}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}
+        </select>
+        <label class="muted chk" title="Also show findings with no severity rating (unknown)">
+          <input type="checkbox" name="unrated" value="1" {{if .IncludeUnrated}}checked{{end}} data-autosubmit> unrated
+        </label>
+      </form>
+
+      {{if .HasEvents}}
+      <table class="events">
+        <thead>
+          {{$eq := printf "repo=%s&min_severity=%s" .Repository .MinSeverity}}
+          <tr>
+            <th>{{sorthp "When" "occurred" "/images" $eq "ev_sort" "ev_dir" .EvSort .EvDir}}</th>
+            <th>Change</th>
+            <th>{{sorthp "Cause" "cause" "/images" $eq "ev_sort" "ev_dir" .EvSort .EvDir}}</th>
+            <th>{{sorthp "Severity" "severity" "/images" $eq "ev_sort" "ev_dir" .EvSort .EvDir}}</th>
+            <th>{{sorthp "CVE" "cve" "/images" $eq "ev_sort" "ev_dir" .EvSort .EvDir}}</th>
+            <th>Package</th>
+            <th>Digest</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Events}}
+          <tr>
+            <td class="nowrap">{{.When}}</td>
+            <td><span class="evt evt-{{.EventType}}">{{.EventType}}</span></td>
+            <td><span class="cause cause-{{.Cause}}" title="{{.CauseLabel}}">{{.CauseLabel}}</span></td>
+            <td><span class="sev-badge sev-b-{{.Severity}}">{{.Severity}}</span></td>
+            <td><a href="https://nvd.nist.gov/vuln/detail/{{.Exposure}}" target="_blank" rel="noopener">{{.Exposure}}</a></td>
+            <td>{{.Package}}</td>
+            <td class="muted"><code>{{.ShortDigest}}</code></td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{if .NextCursor}}
+      <p class="loadmore"><a href="/images?repo={{.Repository}}&min_severity={{.MinSeverity}}{{if .IncludeUnrated}}&unrated=1{{end}}{{if .EvSort}}&ev_sort={{.EvSort}}&ev_dir={{.EvDir}}{{end}}&cursor={{.NextCursor}}">Load more →</a></p>
+      {{end}}
+      {{else}}
+      <p class="muted">No changes at or above the <strong>{{.MinSeverity}}</strong> threshold{{if not .IncludeUnrated}} (unrated findings hidden — tick <em>unrated</em> to include them){{end}}.</p>
+      {{end}}
+    </details>
+  </div>
 </main>
 {{template "foot" .}}

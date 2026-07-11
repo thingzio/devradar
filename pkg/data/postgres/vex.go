@@ -151,3 +151,22 @@ func (s *Store) ListVEXDocuments(ctx context.Context, tenantID string) ([]VEXDoc
 	}
 	return out, rows.Err()
 }
+
+// TenantHasSuppressingVEX reports whether the tenant has any VEX statement that
+// hides a finding (status not_affected|fixed). It gates the read-time fast path:
+// the per-SBOM rollup stores RAW counts, so a tenant with no suppressing VEX
+// (the overwhelming majority) can read the rollup directly, while a tenant that
+// does have one falls back to the live VEX-aware aggregation. Backed by the
+// partial index idx_devradar_vex_stmt_suppressing, so this is sub-millisecond.
+func (s *Store) TenantHasSuppressingVEX(ctx context.Context, tenantID string) (bool, error) {
+	var has bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM devradar_vex_statement
+			WHERE tenant_id = $1 AND status IN ('not_affected','fixed'))`,
+		tenantID).Scan(&has)
+	if err != nil {
+		return false, fmt.Errorf("tenant has suppressing vex: %w", err)
+	}
+	return has, nil
+}

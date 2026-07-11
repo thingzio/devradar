@@ -46,6 +46,11 @@ func TestListImages_ThresholdTrimsBreakdown(t *testing.T) {
 			t.Fatalf("seed finding %s: %v", sev, err)
 		}
 	}
+	// These tests seed devradar_finding directly (bypassing ApplyScan), so build
+	// the derived rollup the read path reads from.
+	if err := st.RecomputeSBOMRollup(ctx, sbomID); err != nil {
+		t.Fatalf("recompute rollup: %v", err)
+	}
 
 	get := func(min string) postgres.SeverityCounts {
 		imgs, err := st.ListImages(ctx, tenantID, min)
@@ -125,6 +130,9 @@ func TestListImages_DedupsAcrossScanners(t *testing.T) {
 			sbomID, sc); err != nil {
 			t.Fatalf("seed finding %s: %v", sc, err)
 		}
+	}
+	if err := st.RecomputeSBOMRollup(ctx, sbomID); err != nil {
+		t.Fatalf("recompute rollup: %v", err)
 	}
 
 	imgs, err := st.ListImages(ctx, tenantID, "low")
@@ -898,6 +906,11 @@ func TestListRepoImages_RiskOrderAndPaging(t *testing.T) {
 				digest, name+"-f-"+hex.EncodeToString([]byte{byte(i)}), "CVE-"+name+"-"+sev, sev, i%2 == 0); err != nil {
 				t.Fatalf("seed finding: %v", err)
 			}
+		}
+		// Findings are seeded directly here (no ApplyScan), so build the rollup the
+		// read path sums from.
+		if err := st.RecomputeSBOMRollup(ctx, digest); err != nil {
+			t.Fatalf("recompute rollup %s: %v", name, err)
 		}
 	}
 	seedImg("a", "critical")
