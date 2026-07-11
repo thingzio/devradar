@@ -3,7 +3,9 @@ package server
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/thingzio/devradar/pkg/alert"
@@ -35,18 +37,21 @@ type alertsView struct {
 }
 
 type alertDetailView struct {
-	Title       string
-	SignedIn    bool
-	Tab         string
-	Email       string
-	AvatarURL   string
-	Version     string
-	CSRFToken   string
-	Alert       *postgres.Alert
-	AlertTitle  string
-	Description string
-	CauseLabel  string
-	EPSSPercent string
+	Title                 string
+	SignedIn              bool
+	Tab                   string
+	Email                 string
+	AvatarURL             string
+	Version               string
+	CSRFToken             string
+	Alert                 *postgres.Alert
+	AlertTitle            string
+	Description           string
+	CauseLabel            string
+	EPSSPercent           string
+	WorkURL               string
+	PreviousComparisonURL string
+	RecommendationURL     string
 }
 
 func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
@@ -81,9 +86,28 @@ func (s *Server) handleAlertDetail(w http.ResponseWriter, r *http.Request) {
 		Title: alertTitle(item.Kind), SignedIn: true, Tab: "alerts", Email: tn.Email,
 		AvatarURL: tn.AvatarURL, Version: s.opts.Version, CSRFToken: issueCSRF(w), Alert: item,
 		AlertTitle: alertTitle(item.Kind), Description: alertDescription(item.Kind), CauseLabel: alertCause(item.Cause),
+		WorkURL: "/work#work-" + url.PathEscape(item.Exposure),
 	}
 	if item.EPSS != nil {
 		v.EPSSPercent = fmt.Sprintf("%.1f%%", *item.EPSS*100)
+	}
+	comparison, err := s.store.ComparePreviousSBOM(r.Context(), tn.ID, item.SBOMID)
+	if err != nil {
+		slog.Warn("load alert preceding comparison", "tenant_id", tn.ID, "alert_id", item.ID, "sbom_id", item.SBOMID, "error", err)
+	} else if comparison != nil {
+		v.PreviousComparisonURL = "/compare?" + url.Values{
+			"from": {comparison.From.SBOMID},
+			"to":   {comparison.To.SBOMID},
+		}.Encode()
+	}
+	recommendation, err := s.store.RecommendUpgrade(r.Context(), tn.ID, item.SBOMID)
+	if err != nil {
+		slog.Warn("load alert upgrade recommendation", "tenant_id", tn.ID, "alert_id", item.ID, "sbom_id", item.SBOMID, "error", err)
+	} else if recommendation != nil {
+		v.RecommendationURL = "/compare?" + url.Values{
+			"from": {recommendation.Baseline.SBOMID},
+			"to":   {recommendation.Candidate.SBOMID},
+		}.Encode()
 	}
 	render(w, "alert.html", v)
 }

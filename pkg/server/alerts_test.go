@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/thingzio/devradar/pkg/data/postgres"
 )
@@ -143,6 +145,108 @@ func TestAlertPages(t *testing.T) {
 	}
 }
 
+func TestAlertDetailActionLinks(t *testing.T) {
+	srv, st := testServer(t)
+	tenantID, _ := seedTenantToken(t, st)
+	otherTenantID, _ := seedTenantToken(t, st)
+	current := seedLabeledSBOM(t, st, tenantID, "alert-actions")
+	baseTime := time.Now().UTC()
+	setSBOMGeneratedAt(t, st, current.ID, baseTime)
+	previous := seedAlertSBOMGeneration(t, st, current, tenantID, "previous", baseTime.Add(-time.Hour))
+	newer := seedAlertSBOMGeneration(t, st, current, tenantID, "newer", baseTime.Add(time.Hour))
+	foreign := seedAlertSBOMGeneration(t, st, current, otherTenantID, "foreign", baseTime.Add(2*time.Hour))
+
+	const cve = "CVE-2026-3101"
+	seedWorkFinding(t, st, previous, "grype", "previous", "CVE-2026-3100", false)
+	seedWorkFinding(t, st, current, "grype", "finding-"+cve, cve, false)
+	seedWorkFinding(t, st, current, "grype", "current-extra", "CVE-2026-3102", false)
+	seedWorkFinding(t, st, newer, "grype", "newer", "CVE-2026-3103", false)
+	alertID := seedBrowserAlert(t, st, tenantID, current, cve)
+	session := seedSession(t, st, tenantID)
+	otherSession := seedSession(t, st, otherTenantID)
+	h := srv.Handler()
+
+	previousPath := "/compare?" + url.Values{"from": {previous.ID}, "to": {current.ID}}.Encode()
+	recommendationPath := "/compare?" + url.Values{"from": {current.ID}, "to": {newer.ID}}.Encode()
+	req := httptest.NewRequest(http.MethodGet, "/alerts/"+alertID, nil)
+	req.AddCookie(session)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	body := rec.Body.String()
+	for _, want := range []string{
+		"Act on this",
+		`href="/work#work-` + cve + `"`,
+		`href="` + html.EscapeString(previousPath) + `"`,
+		`href="` + html.EscapeString(recommendationPath) + `"`,
+		"Open in work queue",
+		"Compare with preceding tracked digest",
+		"Newer tracked digest with fewer relevant findings",
+	} {
+		if rec.Code != http.StatusOK || !strings.Contains(body, want) {
+			t.Fatalf("GET alert detail = %d, missing %q body=%s", rec.Code, want, body)
+		}
+	}
+	if strings.Contains(body, foreign.ID) || strings.Contains(body, foreign.Digest) {
+		t.Fatalf("alert detail leaked foreign recommendation: %s", body)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/work", nil)
+	req.AddCookie(session)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `id="work-`+cve+`"`) {
+		t.Fatalf("GET work action target = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	for _, path := range []string{previousPath, recommendationPath} {
+		req = httptest.NewRequest(http.MethodGet, path, nil)
+		req.AddCookie(session)
+		rec = httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET linked comparison %s = %d body=%s", path, rec.Code, rec.Body.String())
+		}
+
+		req = httptest.NewRequest(http.MethodGet, path, nil)
+		req.AddCookie(otherSession)
+		rec = httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("cross-tenant comparison %s = %d, want 404", path, rec.Code)
+		}
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/work", nil)
+	req.AddCookie(otherSession)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), `id="work-`+cve+`"`) {
+		t.Fatalf("cross-tenant work queue = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAlertDetailActionLinksDegradeWhenSBOMUnavailable(t *testing.T) {
+	srv, st := testServer(t)
+	tenantID, _ := seedTenantToken(t, st)
+	sb := seedLabeledSBOM(t, st, tenantID, "alert-action-degradation")
+	alertID := seedBrowserAlert(t, st, tenantID, sb, "CVE-2026-3201")
+	if err := st.ArchiveSBOM(context.Background(), tenantID, sb.ID); err != nil {
+		t.Fatal(err)
+	}
+	session := seedSession(t, st, tenantID)
+
+	req := httptest.NewRequest(http.MethodGet, "/alerts/"+alertID, nil)
+	req.AddCookie(session)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(body, "Open in work queue") ||
+		strings.Contains(body, "Compare with preceding tracked digest") ||
+		strings.Contains(body, "Newer tracked digest with fewer relevant findings") {
+		t.Fatalf("degraded alert detail = %d body=%s", rec.Code, body)
+	}
+}
+
 func TestOverviewUnreadAlerts(t *testing.T) {
 	srv, st := testServer(t)
 	tenantID, _ := seedTenantToken(t, st)
@@ -188,6 +292,30 @@ func seedLabeledSBOM(t *testing.T, st *postgres.Store, tenantID, label string) *
 		t.Fatalf("seed labeled sbom: %v", err)
 	}
 	return sb
+}
+
+func seedAlertSBOMGeneration(t *testing.T, st *postgres.Store, source *postgres.SBOM, tenantID, version string, generatedAt time.Time) *postgres.SBOM {
+	t.Helper()
+	sb := *source
+	sb.ID = randomHex(t, 32)
+	sb.TenantID = tenantID
+	sb.ImageRef = source.Repository + ":" + version
+	sb.Version = version
+	sb.Digest = "sha256:" + randomHex(t, 32)
+	sb.ObjectPath = "gs://test/" + sb.ID
+	sb.GeneratedAt = generatedAt
+	if _, _, _, err := st.UpsertSBOM(context.Background(), &sb); err != nil {
+		t.Fatalf("seed alert SBOM generation: %v", err)
+	}
+	return &sb
+}
+
+func setSBOMGeneratedAt(t *testing.T, st *postgres.Store, sbomID string, generatedAt time.Time) {
+	t.Helper()
+	if _, err := st.DB().ExecContext(context.Background(),
+		`UPDATE devradar_sbom SET generated_at=$2 WHERE id=$1`, sbomID, generatedAt); err != nil {
+		t.Fatalf("set SBOM generated_at: %v", err)
+	}
 }
 
 func seedBrowserAlert(t *testing.T, st *postgres.Store, tenantID string, sb *postgres.SBOM, cve string) string {

@@ -6,7 +6,7 @@
 
   <div class="work-list">
     {{range .Items}}
-    <article class="work-item {{if .AllVEXd}}vexed{{end}}">
+    <article id="work-{{.CVE}}" class="work-item {{if .AllVEXd}}vexed{{end}}">
       <div class="work-priority">
         {{if .KEV}}<span class="kev-badge">KEV</span>{{end}}
         <span class="sev-badge sev-b-{{.Severity}}">{{.Severity}}</span>
