@@ -573,6 +573,67 @@ func TestFleetCVEs_BlastRadiusRanking(t *testing.T) {
 	}
 }
 
+func TestFleetCVEs_WorkQueueOrder(t *testing.T) {
+	st, err := postgres.NewFromEnv(context.Background())
+	if err != nil {
+		t.Skipf("skipping (no database): %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+	suffix := hex.EncodeToString(randomBytes(t, 8))
+	var tenantID string
+	if err := st.DB().QueryRowContext(ctx,
+		`INSERT INTO devradar_tenant (email) VALUES ($1) RETURNING id`,
+		"work-"+suffix+"@example.com").Scan(&tenantID); err != nil {
+		t.Fatal(err)
+	}
+	sbomID := "work-" + suffix
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_sbom (id, tenant_id, image_ref, repository, digest, format, object_path)
+		VALUES ($1,$2,'reg/work','reg/work',$3,'cyclonedx','gs://x')`,
+		sbomID, tenantID, "sha256:"+suffix); err != nil {
+		t.Fatal(err)
+	}
+	insert := func(scanner, findingID, cve, severity string, fixed bool, updated time.Time) {
+		if _, err := st.DB().ExecContext(ctx, `
+			INSERT INTO devradar_finding
+			(sbom_id, scanner, finding_id, exposure, package, version, severity, score, is_fixed, updated_at)
+			VALUES ($1,$2,$3,$4,'pkg','1',$5,7,$6,$7)`,
+			sbomID, scanner, findingID, cve, severity, fixed, updated); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
+	fixable := "CVE-" + suffix + "-FIX"
+	critical := "CVE-" + suffix + "-CRIT"
+	insert("grype", "fix-id", fixable, "low", true, now)
+	insert("trivy", "fix-id", fixable, "low", true, now)
+	insert("grype", "crit-id", critical, "critical", false, now.Add(-24*time.Hour))
+
+	items, _, err := st.FleetCVEs(ctx, tenantID, "negligible", postgres.FleetCVEFilter{}, "", "", "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 || items[0].CVE != fixable || items[1].CVE != critical {
+		t.Fatalf("work order = %+v, want fixable before non-fixable critical", items)
+	}
+	if items[0].FindingCount != 1 || items[0].ScannerCount != 2 {
+		t.Fatalf("scanner dedup/agreement = %+v", items[0])
+	}
+	if items[0].FirstSeen.IsZero() {
+		t.Fatal("first seen must be populated")
+	}
+}
+
+func randomBytes(t *testing.T, n int) []byte {
+	t.Helper()
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
 // TestFleetCVEs_VEXAnnotationAndFilters verifies VEX'd CVEs are INCLUDED in the
 // fleet list (not dropped), annotated with status/justification/impact, and that
 // the VEX/justification/KEV/fixable filters work.
