@@ -67,7 +67,7 @@
   <div class="card">
     <div class="card-head"><h2>Danger zone</h2></div>
     <p class="muted">Deleting a tenant cascades to its sessions, tokens, SBOMs, findings, and events. This cannot be undone.</p>
-    <form class="inline" method="post" action="/admin/tenant/{{.T.ID}}/delete" onsubmit="return confirm('Delete {{.T.Email}} and all its data?');">
+    <form class="inline" method="post" action="/admin/tenant/{{.T.ID}}/delete" data-confirm="Delete {{.T.Email}} and all its data?">
       <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
       <button class="btn danger" type="submit">Delete tenant</button>
     </form>

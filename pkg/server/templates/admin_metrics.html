@@ -13,7 +13,7 @@
   <div class="card">
     <form class="row" method="get" action="/admin/metrics">
       <label>Window</label>
-      <select name="days" onchange="this.form.submit()">
+      <select name="days" data-autosubmit>
         {{$cur := .Days}}{{range .DayOptions}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}} day(s)</option>{{end}}
       </select>
       <noscript><button class="btn secondary" type="submit">Apply</button></noscript>

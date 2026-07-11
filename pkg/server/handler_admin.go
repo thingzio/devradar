@@ -40,7 +40,7 @@ func auditLog(action string, tn *tenant.Tenant, path, remote, detail string) {
 		"action", action, "admin", email, "path", path, "remote", remote, "detail", detail)
 }
 
-// adminCSRF mints a CSRF token, sets the cookie scoped to /admin, and returns the
+// adminCSRF mints a CSRF token, sets the double-submit cookie, and returns the
 // token for embedding as a hidden form field. Called by the GET pages that render
 // mutating forms.
 func adminCSRF(w http.ResponseWriter) string {
@@ -49,7 +49,7 @@ func adminCSRF(w http.ResponseWriter) string {
 		slog.Error("admin csrf token", "error", err)
 		return ""
 	}
-	middleware.SetCSRFCookie(w, token, "/admin")
+	middleware.SetCSRFCookie(w, token)
 	return token
 }
 

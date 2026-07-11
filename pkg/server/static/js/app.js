@@ -29,6 +29,30 @@
     });
   });
 
+  // Auto-submit controls. The CSP (script-src 'self', no 'unsafe-inline') blocks
+  // inline onchange/onsubmit attributes, so filter dropdowns and toggle inputs are
+  // wired here instead. Any control with [data-autosubmit] submits its form on
+  // change (min-severity and label filters, the unrated toggle, VEX upload, etc.).
+  document.addEventListener("DOMContentLoaded", function () {
+    document.querySelectorAll("[data-autosubmit]").forEach(function (el) {
+      el.addEventListener("change", function () {
+        if (el.form) el.form.submit();
+      });
+    });
+  });
+
+  // Confirm-before-submit. Forms with [data-confirm="message"] prompt before
+  // submitting (destructive admin actions), replacing inline onsubmit=return confirm().
+  document.addEventListener("DOMContentLoaded", function () {
+    document.querySelectorAll("form[data-confirm]").forEach(function (form) {
+      form.addEventListener("submit", function (e) {
+        if (!window.confirm(form.getAttribute("data-confirm"))) {
+          e.preventDefault();
+        }
+      });
+    });
+  });
+
   // Copy-to-clipboard for code blocks on the submit guide. Each .copyable wraps
   // a <pre> and a <button class="copy-btn">; clicking copies the <pre> text.
   document.addEventListener("DOMContentLoaded", function () {

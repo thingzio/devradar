@@ -38,16 +38,22 @@ func GenerateCSRFToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// SetCSRFCookie writes the CSRF token cookie, scoped to path (e.g. "/admin").
+// SetCSRFCookie writes the CSRF token cookie.
 //
-// HttpOnly is intentionally false — the double-submit pattern needs JavaScript
-// (and the server-rendered hidden field) to echo the cookie back as a form
-// value. SameSite=Strict is the security boundary, not HttpOnly.
-func SetCSRFCookie(w http.ResponseWriter, token, path string) {
+// Path is always "/": under HTTPS the cookie name carries the __Host- prefix,
+// which browsers only accept with Path=/ (and Secure, no Domain). A narrower
+// path (e.g. "/admin") is silently dropped, so the token never reaches the
+// server and every mutating POST fails "missing CSRF token". Validation is a
+// double-submit value compare, not path-scoped, so "/" is safe.
+//
+// HttpOnly is intentionally false — the double-submit pattern needs the
+// server-rendered hidden field to echo the cookie back as a form value.
+// SameSite=Strict is the security boundary, not HttpOnly.
+func SetCSRFCookie(w http.ResponseWriter, token string) {
 	http.SetCookie(w, &http.Cookie{ //nolint:gosec // HttpOnly:false is intentional for double-submit CSRF
 		Name:     CSRFCookieName(),
 		Value:    token,
-		Path:     path,
+		Path:     "/",
 		Secure:   secure,
 		HttpOnly: false,
 		SameSite: http.SameSiteStrictMode,

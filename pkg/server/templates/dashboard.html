@@ -7,7 +7,7 @@
   <form class="searchbar" method="get" action="/dashboard">
     <input type="search" name="q" value="{{.Query}}" placeholder="Filter images by name…" autocomplete="off">
     {{if .Labels}}
-    <select name="label" onchange="this.form.submit()" title="Filter by label">
+    <select name="label" data-autosubmit title="Filter by label">
       <option value="">all labels</option>
       {{$l := .Label}}{{range .Labels}}<option value="{{.}}" {{if eq . $l}}selected{{end}}>{{.}}</option>{{end}}
     </select>
@@ -32,7 +32,7 @@
       <h2>Tracked images</h2>
       <form class="inline sev" method="get" action="/dashboard">
         <label class="muted" for="sev">Min severity</label>
-        <select id="sev" name="min_severity" onchange="this.form.submit()">
+        <select id="sev" name="min_severity" data-autosubmit>
           {{$cur := .MinSeverity}}
           {{range (list "critical" "high" "medium" "low" "negligible")}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}
         </select>
