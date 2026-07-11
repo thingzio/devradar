@@ -40,6 +40,28 @@ func loadAdminProductHealth(ctx context.Context, reader adminProductHealthReader
 	return reader.AdminProductHealth(ctx)
 }
 
+func adminDashboardData(
+	counts *postgres.PlatformCounts,
+	rows []trendRow,
+	productHealth *postgres.AdminProductHealth,
+	productHealthErr error,
+	now time.Time,
+) map[string]any {
+	oldestPendingAge := ""
+	if productHealth != nil && productHealth.EvaluatorBacklog > 0 && !productHealth.OldestPendingAt.IsZero() {
+		oldestPendingAge = humanizeSince(now.Sub(productHealth.OldestPendingAt))
+	}
+	return map[string]any{
+		"Title":                         "Admin — Dashboard",
+		"Counts":                        counts,
+		"TrendRows":                     rows,
+		"ProductHealth":                 productHealth,
+		"ProductHealthUnavailable":      productHealthErr != nil,
+		"ProductHealthOldestPendingAge": oldestPendingAge,
+		"ProductHealthUTCDate":          now.UTC().Format("2006-01-02"),
+	}
+}
+
 // auditLog records an operator action. Log-only (slog.Warn), matching the
 // sibling services — no persisted audit table in v1.
 func auditLog(action string, tn *tenant.Tenant, path, remote, detail string) {
@@ -90,20 +112,9 @@ func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	if productHealthErr != nil {
 		slog.Warn("admin product health unavailable", "error", productHealthErr)
 	}
-	oldestPendingAge := ""
-	if productHealth != nil && productHealth.EvaluatorBacklog > 0 && !productHealth.OldestPendingAt.IsZero() {
-		oldestPendingAge = humanizeSince(time.Since(productHealth.OldestPendingAt))
-	}
 
-	render(w, "admin_dashboard.html", s.adminBase(tn, "dashboard", map[string]any{
-		"Title":                         "Admin — Dashboard",
-		"Counts":                        counts,
-		"TrendRows":                     trendRows(deltas),
-		"ProductHealth":                 productHealth,
-		"ProductHealthUnavailable":      productHealthErr != nil,
-		"ProductHealthOldestPendingAge": oldestPendingAge,
-		"ProductHealthUTCDate":          time.Now().UTC().Format("2006-01-02"),
-	}))
+	render(w, "admin_dashboard.html", s.adminBase(tn, "dashboard",
+		adminDashboardData(counts, trendRows(deltas), productHealth, productHealthErr, time.Now())))
 }
 
 // trendCell is one Day/Week/Month delta cell.

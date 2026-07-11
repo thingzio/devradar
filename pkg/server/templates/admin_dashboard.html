@@ -37,13 +37,13 @@
     {{else}}
     {{with .ProductHealth}}
     <div class="card">
-      <div class="card-head"><h2>Alert adoption</h2></div>
+      <div class="card-head"><h2 role="heading" aria-level="3">Alert adoption</h2></div>
       <div class="stats stats-3">
         <div class="stat"><span class="stat-n">{{.EnabledAlertPolicies}}</span><span class="stat-l">enabled alert policies</span></div>
         <div class="stat"><span class="stat-n">{{.Alerts24h}}</span><span class="stat-l">alerts created · 24h</span></div>
         <div class="stat"><span class="stat-n">{{.UnreadAlerts}}</span><span class="stat-l">currently unread alerts</span></div>
       </div>
-      <div class="card-head"><h2>Evaluator</h2></div>
+      <div class="card-head"><h2 role="heading" aria-level="3">Evaluator</h2></div>
       <div class="stats stats-3">
         {{if .EvaluatorBacklog}}
         <div class="stat"><span class="stat-n danger-n">{{.EvaluatorBacklog}}</span><span class="stat-l">eligible events waiting · oldest {{$.ProductHealthOldestPendingAge}}</span></div>
@@ -55,7 +55,7 @@
     </div>
 
     <div class="card">
-      <div class="card-head"><h2>Posture coverage</h2></div>
+      <div class="card-head"><h2 role="heading" aria-level="3">Posture coverage</h2></div>
       <div class="stats stats-3">
         {{if .ActiveSBOMTenants}}
         <div class="stat"><span class="stat-n">{{.SnapshotTenantsToday}} / {{.ActiveSBOMTenants}}</span><span class="stat-l">posture snapshots today · {{.SnapshotTenantsToday}} / {{.ActiveSBOMTenants}} active tenants · current UTC date {{$.ProductHealthUTCDate}}</span></div>
@@ -63,7 +63,7 @@
         <div class="stat"><span class="stat-n">0</span><span class="stat-l">No active tenants · current UTC date {{$.ProductHealthUTCDate}}</span></div>
         {{end}}
       </div>
-      <div class="card-head"><h2>Actionable exposure</h2></div>
+      <div class="card-head"><h2 role="heading" aria-level="3">Actionable exposure</h2></div>
       <div class="stats stats-3">
         <div class="stat"><span class="stat-n danger-n">{{.CanonicalExposures}}</span><span class="stat-l">canonical active exposures</span></div>
         <div class="stat"><span class="stat-n">{{.CanonicalFixableExposures}}</span><span class="stat-l">canonical active exposures · scanner-reported fix</span></div>
@@ -72,14 +72,14 @@
     </div>
 
     <div class="card">
-      <div class="card-head"><h2>Comparison readiness</h2></div>
+      <div class="card-head"><h2 role="heading" aria-level="3">Comparison readiness</h2></div>
       <div class="stats stats-3">
         <div class="stat"><span class="stat-n">{{.ComparisonReadyRepositories}}</span><span class="stat-l">tenant / repository groups · 2+ active distinct digests</span></div>
       </div>
     </div>
 
     <div class="card">
-      <div class="card-head"><h2>License policy adoption</h2></div>
+      <div class="card-head"><h2 role="heading" aria-level="3">License policy adoption</h2></div>
       <div class="stats stats-3">
         <div class="stat"><span class="stat-n">{{.LicensePoliciesConfigured}}</span><span class="stat-l">tenants with configured policies</span></div>
         <div class="stat"><span class="stat-n">{{.LicensePoliciesEnforcing}}</span><span class="stat-l">tenants with enforcing policies</span></div>
