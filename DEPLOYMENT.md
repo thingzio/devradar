@@ -13,7 +13,7 @@ Two Cloud Run units, both on the shared `thingzio-pg` Postgres and shared VPC:
 | Unit | Kind | Image | Trigger |
 |---|---|---|---|
 | `devradar-saas-serve` | Cloud Run **service** (public) | `devradar-serve` (ko, pure Go) | HTTP |
-| `devradar-saas-scan` | Cloud Run **job** (single task) | `devradar-scan` (Dockerfile, scanners baked in) | Cloud Scheduler, 02:00 UTC daily |
+| `devradar-saas-scan` | Cloud Run **job** (single task) | `devradar-scan` (Dockerfile, scanners baked in) | Cloud Scheduler, every ~15 min (`var.scan_schedule`); per-SBOM 12h staleness window |
 
 DevRadar **references** the shared Cloud SQL instance and `thingz` database — it
 creates neither. It creates only its own DB user (`devradar`), a GCS bucket for

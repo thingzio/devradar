@@ -98,6 +98,6 @@ DevRadar is the third service on the shared platform (`thingzio/infra`) and mirr
 - **Don't swallow failures** — per-SBOM/per-scanner errors go to `devradar_scan_failure`, not just logs.
 - **Tenancy** flows from SBOM → tenant → alert destination (`devradar_tenant.email`); app-level `tenant_id` scoping, see Data Model.
 
-## Language / Tooling (once code exists)
+## Language / Tooling
 
-Go, `pkg/`-only layout. Entry points `cmd/devradar-serve` and `cmd/devradar-scan`. No `go.mod`, Makefile, or CI exists yet — when adding the first code, copy the sibling skeleton (DevTrace is the closest match: app-level tenancy, API tokens), establish `go build ./...` / `go test ./...` / `go vet ./...`, adopt `.settings.yaml` as the version/threshold SoT, and use `ko`+GoReleaser (no Dockerfile).
+Go, `pkg/`-only layout. Entry points `cmd/devradar-serve` and `cmd/devradar-scan`. `go.mod`, `Makefile`, `.settings.yaml` (version/threshold SoT), and GitHub Actions CI (`.github/workflows/`: `test` → reusable `test-on-call` running vet/test-race/lint/coverage against a Postgres service + live scanners; `release`; `deploy`) all exist. Build/test with `go build ./...` / `go test ./...` / `go vet ./...` (or `make test`, which needs a local DB via `make db-up`). Images via `ko`+GoReleaser (no Dockerfile). The layout mirrors the sibling services (DevTrace is the closest match: app-level tenancy, API tokens).

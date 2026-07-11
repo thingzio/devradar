@@ -74,7 +74,39 @@ jobs:
         with:
           go-version: "${{ steps.v.outputs.go }}"
 
+      - name: Formatting (gofmt)
+        run: |
+          unformatted="$(gofmt -l $(git ls-files '*.go' | grep -v '^vendor/'))"
+          if [ -n "$unformatted" ]; then
+            echo "::error::These files are not gofmt-clean:"; echo "$unformatted"
+            exit 1
+          fi
+
       - name: Lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: "${{ steps.v.outputs.golangci }}"
+
+  # Infra + API-contract checks: Terraform formatting/validation and OpenAPI
+  # spec validation. Kept separate from the Go lint job so a Terraform-only or
+  # spec-only change still gets gated without pulling in the Go toolchain.
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform fmt
+        run: terraform -chdir=infra/saas fmt -check -recursive
+
+      - name: Terraform validate
+        run: |
+          terraform -chdir=infra/saas init -backend=false >/dev/null
+          terraform -chdir=infra/saas validate
+
+      - name: OpenAPI validate
+        run: npx --yes @redocly/cli@1.34.2 lint pkg/server/static/openapi.yaml

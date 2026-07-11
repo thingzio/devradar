@@ -137,12 +137,12 @@ The honest summary: for an all-layers SBOM, DevRadar's accuracy is a *generator-
 │  - validate + size-cap the SBOM (untrusted input)            │
 │  - extract subject image ref + digest from SBOM              │
 │  - content-address by sha256(bytes); dedupe                  │
-│  - store bytes in GCS; row in `sboms` (status: active)       │
+│  - store bytes in GCS, THEN activate row (pending→active)    │
 └─────────────────────────┬────────────────────────────────────┘
                           │ (SBOM now in the active set)
 ┌─────────────────────────▼────────────────────────────────────┐
-│  Daily Scan Job (Cloud Run Job, ~02:00 UTC, pure CPU)        │
-│  for each active SBOM:                                        │
+│  Scan Job (Cloud Run Job, ~every 15 min, pure CPU)           │
+│  for each DUE SBOM (never scanned, or last scan > 12h ago):  │
 │    - grype  sbom:<file>   → normalize                        │
 │    - trivy  sbom  <file>  → normalize                        │
 │    - UPSERT current state into `findings`                    │
@@ -158,7 +158,7 @@ The honest summary: for an all-layers SBOM, DevRadar's accuracy is a *generator-
 └──────────────────────────────────────────────────────────────┘
 ```
 
-The scanner binaries are pinned and baked into the Cloud Run Job image; the vulnerability database is refreshed once at job start and then frozen for the run, so every daily run uses a single, less-than-24-hours-old DB version. Scanning an SBOM is pure CPU — no network, no I/O beyond the SBOM file — so ~1,000 SBOMs complete in well under two hours on a single 2‑vCPU job. No fleet required.
+The scan job is triggered frequently by Cloud Scheduler (default every ~15 min, `var.scan_schedule`) rather than once nightly, but each SBOM is only *due* when it has never been scanned or its last scan is older than the staleness window (`DEVRADAR_SCAN_MAX_AGE`, default 12h). So a freshly-submitted SBOM is picked up on the next tick (low latency) while any given SBOM is rescanned at most ~twice a day (bounded load): cron frequency controls latency, the staleness window controls load, independently. Freshness is tracked per scanner, so an SBOM stays due until *every* scanner (grype + trivy) has a recent run. The scanner binaries are pinned and baked into the Cloud Run Job image; the vulnerability database is refreshed once at job start and then frozen for the run, so a run uses a single, less-than-24-hours-old DB version. Scanning an SBOM is pure CPU — no network, no I/O beyond the SBOM file — so the corpus completes well within the job's timeout on a single 2‑vCPU job. No fleet required.
 
 ---
 

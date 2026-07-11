@@ -994,7 +994,7 @@ All GCP, in the shared `thingzio` project (`us-west1`). No VMs, no Cloud Tasks, 
 | Ingest API + minimal UI | Cloud Run service `devradar-saas-serve` | Scales to zero; serves the JSON API and the magic-link token-minting UI |
 | Daily scan | Cloud Run Job `devradar-saas-scan` | ~2 vCPU; pinned scanner binaries baked in, vuln DB refreshed lazily at job start; triggered by Cloud Scheduler |
 | Images | `ko` via GoReleaser (no Dockerfile) | Pushed to Artifact Registry `us-west1-docker.pkg.dev/thingzio/devradar-saas-images/<name>` |
-| Scheduling | Cloud Scheduler | Triggers the scan job ~02:00 UTC |
+| Scheduling | Cloud Scheduler | Triggers the scan job frequently (default every ~15 min, `var.scan_schedule`); per-SBOM freshness is bounded by the `DEVRADAR_SCAN_MAX_AGE` staleness window (default 12h) |
 | SBOM bytes | GCS bucket `devradar-saas-sboms` (DevRadar-owned) | Content-addressed objects; the shared infra's DB-backup bucket is not for app data |
 | Store | Shared Cloud SQL `thingzio-pg`, database `thingz`, user `devradar` | `db-custom-1-3840` — DevRadar does **not** provision the instance |
 | Secrets | Secret Manager | `devradar-saas-database-url`, `SEND_API_KEY` (Resend — magic-link + alerts), `devradar-saas-anthropic-api-key` |
