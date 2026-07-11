@@ -515,6 +515,22 @@ table.images td { vertical-align: middle; }
 .detail-grid dd { min-width: 0; overflow-wrap: anywhere; }
 .detail-grid code { word-break: break-all; }
 
+/* Remediation queue: dense evidence rows, ordered by the visible decision
+   dimensions rather than a hidden score. */
+.work-list { display: flex; flex-direction: column; gap: 0.75rem; margin-top: 1.5rem; }
+.work-item {
+  display: grid; grid-template-columns: 9rem minmax(0, 1fr) auto; gap: 1.25rem;
+  align-items: center; padding: 1rem 1.1rem; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow);
+}
+.work-priority { display: flex; flex-direction: column; align-items: flex-start; gap: 0.4rem; }
+.work-fix { color: var(--ok); font-size: 0.82rem; font-weight: 600; }
+.work-main h2 { font-size: 1rem; margin: 0; }
+.work-main p { color: var(--muted); font-size: 0.85rem; margin-top: 0.2rem; }
+.work-context, .work-repos { display: flex; flex-wrap: wrap; gap: 0.4rem 0.8rem; margin-top: 0.5rem; }
+.work-context { color: var(--muted); font-size: 0.78rem; }
+.work-open { white-space: nowrap; }
+
 /* Event type + cause + severity badges (small pills) */
 .evt, .cause, .sev-badge {
   display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px;
@@ -637,4 +653,7 @@ table.findings td { vertical-align: middle; }
   .alert-meta { grid-column: 2; justify-content: flex-start; flex-wrap: wrap; }
   .detail-grid { grid-template-columns: 1fr; gap: 0.2rem; }
   .detail-grid dd { margin-bottom: 0.6rem; }
+  .work-item { grid-template-columns: 1fr; gap: 0.75rem; }
+  .work-priority { flex-direction: row; align-items: center; flex-wrap: wrap; }
+  .work-open { justify-self: start; }
 }
