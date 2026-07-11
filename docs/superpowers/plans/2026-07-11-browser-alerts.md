@@ -1,6 +1,6 @@
 # Browser Alerts Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Let a tenant opt into alert generation, review unread alerts from Overview, browse alert history, and open a canonical alert detail page.
 
@@ -34,25 +34,25 @@
 - Produces: `GetAlert(ctx, tenantID, alertID string) (*Alert, error)`.
 - Produces: `MarkAlertRead(ctx, tenantID, alertID string) error`.
 
-- [ ] **Step 1: Write failing integration tests**
+- [x] **Step 1: Write failing integration tests**
 
 Use two seeded tenants and direct alert fixtures. Assert policy updates persist only for the owner; list order is `(created_at,id) DESC`; unread filtering excludes `read_at`; `GetAlert` and `MarkAlertRead` return `ErrNotFound` for a different tenant; retrying mark-read is harmless; and pagination returns a cursor without duplicates.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `DATABASE_URL=postgres://devradar:devradar@localhost:5432/devradar?sslmode=disable go test ./pkg/data/postgres -run TestAlertTenantStore -count=1`
 
 Expected: FAIL because the store methods do not exist.
 
-- [ ] **Step 3: Implement policy update**
+- [x] **Step 3: Implement policy update**
 
 Validate `MinSeverity` with `data.ValidMinSeverity`; normalize labels to a non-nil slice; update by `tenant_id`; return `ErrNotFound` when no row is affected. Do not permit callers to change policy ID or tenant ID.
 
-- [ ] **Step 4: Implement alert reads and read state**
+- [x] **Step 4: Implement alert reads and read state**
 
 Select alert facts plus current KEV/EPSS enrichment. Use existing keyset cursor helpers for `(created_at,id)`. `GetAlert` and `MarkAlertRead` include `tenant_id=$1`; map `sql.ErrNoRows` or zero affected rows to `ErrNotFound`.
 
-- [ ] **Step 5: Verify GREEN and commit**
+- [x] **Step 5: Verify GREEN and commit**
 
 Run: `go test -race ./pkg/data/postgres -count=1`
 
@@ -75,25 +75,25 @@ git commit -S -m "feat(alerts): add tenant alert reads and settings"
 - Adds: `POST /settings/alerts`.
 - Extends the `/tokens` view with `AlertPolicy` and `Labels`.
 
-- [ ] **Step 1: Write failing route tests**
+- [x] **Step 1: Write failing route tests**
 
 Assert `/tokens` renders disabled policy defaults, valid CSRF submission enables the policy and selected causes, invalid severity returns 400, submitted labels are restricted to the tenant's known labels, and another tenant's labels cannot be stored.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `go test ./pkg/server -run 'TestAlertSettings|TestTenantMutationsRequireCSRF' -count=1`
 
 Expected: FAIL because the settings route/form are absent.
 
-- [ ] **Step 3: Register and implement settings handler**
+- [x] **Step 3: Register and implement settings handler**
 
 Register `POST /settings/alerts` under `authed(csrf(...))`. Parse checkboxes by exact value `on`, validate severity, intersect submitted labels with `TenantLabels(ctx, tenantID)`, and call `UpdateAlertPolicy`. Redirect to `/tokens?alerts=saved` on success.
 
-- [ ] **Step 4: Render the settings card**
+- [x] **Step 4: Render the settings card**
 
 Extend `handleTokensPage` to call `EnsureAlertPolicy` and `TenantLabels`. Add a “Browser alerts” card before API tokens with a clear opt-in switch, severity selector, KEV/fix/cause checkboxes, optional known-label filters, and copy stating that email/webhooks come later. Button text: “Save alert settings.”
 
-- [ ] **Step 5: Verify GREEN and commit**
+- [x] **Step 5: Verify GREEN and commit**
 
 Run: `go test -race ./pkg/server -run 'TestAlertSettings|TestTenantMutationsRequireCSRF' -count=1`
 
@@ -119,25 +119,25 @@ git commit -S -m "feat(alerts): add tenant browser alert settings"
 - Adds: `GET /alerts/{id}`.
 - Adds: `POST /alerts/{id}/read`.
 
-- [ ] **Step 1: Write failing route/isolation tests**
+- [x] **Step 1: Write failing route/isolation tests**
 
 Seed one alert per tenant. Assert unauthenticated requests redirect, the owner sees list/detail content, a different tenant receives 404, marking read requires CSRF, retrying mark-read redirects successfully, and pagination preserves the cursor.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `go test ./pkg/server -run TestAlertPages -count=1`
 
 Expected: FAIL because alert routes/templates are absent.
 
-- [ ] **Step 3: Implement handlers and view models**
+- [x] **Step 3: Implement handlers and view models**
 
 Map kinds to plain-language titles: “Known exploited vulnerability”, “New vulnerability”, “Fix now available”, and “Posture regression”. Detail copy must say “scanner now reports a fix” for fix alerts. Link to `/cves/{exposure}`, `/sboms/{sbom_id}`, and `/images?repo={repository}`. Return 404 for `postgres.ErrNotFound` and 500 for other errors.
 
-- [ ] **Step 4: Render list/detail and navigation**
+- [x] **Step 4: Render list/detail and navigation**
 
 Add an Alerts nav tab. The list shows unread state, kind, CVE, repository, severity, cause, and time. The detail page is the canonical destination for later email/webhook links and contains an explicit “Mark as read” POST when unread.
 
-- [ ] **Step 5: Verify GREEN and commit**
+- [x] **Step 5: Verify GREEN and commit**
 
 Run: `go test -race ./pkg/server -run TestAlertPages -count=1`
 
@@ -160,25 +160,25 @@ git commit -S -m "feat(alerts): add browser alert pages"
 - Overview displays at most five unread alerts and an “All alerts” link.
 - Alert pages use a kind/cause rail derived from existing severity/accent tokens.
 
-- [ ] **Step 1: Write failing overview test**
+- [x] **Step 1: Write failing overview test**
 
 Seed six unread alerts and assert Overview renders five, links to `/alerts`, identifies unread items, and contains no alert belonging to another tenant.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `go test ./pkg/server -run TestOverviewUnreadAlerts -count=1`
 
 Expected: FAIL because Overview does not load alerts.
 
-- [ ] **Step 3: Add the bounded Overview query and template card**
+- [x] **Step 3: Add the bounded Overview query and template card**
 
 Call `UnreadAlerts(ctx, tenantID, 5)` after core fleet queries. If it fails, log a warning and render the rest of Overview with an “Alerts unavailable” message. Render the alert card before highest-risk images.
 
-- [ ] **Step 4: Add focused CSS**
+- [x] **Step 4: Add focused CSS**
 
 Reuse the current GitHub-derived palette and typography. Add only alert-list layout, unread dot, and a 3px causality rail: red for KEV/regression, green for fix available, accent blue for new findings. Include visible focus styles and a single-column mobile layout. Do not introduce new fonts, gradients, animation, or unrelated restyling.
 
-- [ ] **Step 5: Run browser-slice verification and commit**
+- [x] **Step 5: Run browser-slice verification and commit**
 
 Run: `go test -race ./pkg/server ./pkg/data/postgres -count=1 && go vet ./pkg/server ./pkg/data/postgres`
 
