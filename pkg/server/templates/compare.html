@@ -1,0 +1,36 @@
+{{template "head" .}}
+{{template "nav" .}}
+<main class="page-content">
+  <p class="crumb"><a href="/images?repo={{.Comparison.From.Repository}}">← {{.Comparison.From.Repository}}</a></p>
+  <h1 class="page-title">Digest comparison</h1>
+  <p class="sub">Observed SBOM and vulnerability evidence only. This comparison does not infer runtime deployment, compatibility, reachability, or universal safety.</p>
+
+  <div class="compare-verdict verdict-{{.Comparison.Verdict}}">
+    <strong>{{.Verdict}}</strong>
+    <span>{{.Comparison.From.Version}} <code>{{.Comparison.From.Digest}}</code> → {{.Comparison.To.Version}} <code>{{.Comparison.To.Digest}}</code></span>
+  </div>
+
+  <section class="stats stats-3">
+    <div class="stat"><span class="stat-n">{{.Comparison.From.Counts.Total}} → {{.Comparison.To.Counts.Total}}</span><span class="stat-l">Canonical findings</span></div>
+    <div class="stat"><span class="stat-n danger-n">{{.Comparison.From.Counts.Critical}} → {{.Comparison.To.Counts.Critical}}</span><span class="stat-l">Critical</span></div>
+    <div class="stat"><span class="stat-n kev-n">{{.Comparison.From.Counts.KEV}} → {{.Comparison.To.Counts.KEV}}</span><span class="stat-l">KEV</span></div>
+  </section>
+
+  <div class="compare-grid">
+    <div class="card"><div class="card-head"><h2>Added vulnerabilities</h2><span class="pill">{{len .Added}}</span></div>{{template "compare-findings" .Added}}</div>
+    <div class="card"><div class="card-head"><h2>Resolved vulnerabilities</h2><span class="pill">{{len .Resolved}}</span></div>{{template "compare-findings" .Resolved}}</div>
+    <div class="card"><div class="card-head"><h2>Re-rated</h2><span class="pill">{{len .Rerated}}</span></div>{{template "compare-findings" .Rerated}}</div>
+    <div class="card"><div class="card-head"><h2>Newly fixable</h2><span class="pill">{{len .NewlyFixable}}</span></div>{{template "compare-findings" .NewlyFixable}}</div>
+  </div>
+
+  <div class="compare-grid">
+    <div class="card"><div class="card-head"><h2>Packages added</h2><span class="pill">{{len .PackagesAdded}}</span></div>{{template "compare-packages" .PackagesAdded}}</div>
+    <div class="card"><div class="card-head"><h2>Packages removed</h2><span class="pill">{{len .PackagesRemoved}}</span></div>{{template "compare-packages" .PackagesRemoved}}</div>
+  </div>
+
+  {{if .LicenseChanges}}<div class="card"><div class="card-head"><h2>License changes</h2></div><table><thead><tr><th>Package</th><th>From</th><th>To</th></tr></thead><tbody>{{range .LicenseChanges}}<tr><td>{{.Package}} <span class="muted">{{.Version}}</span></td><td>{{.From}}</td><td>{{.To}}</td></tr>{{end}}</tbody></table></div>{{end}}
+</main>
+{{template "foot" .}}
+
+{{define "compare-findings"}}{{if .}}<table><tbody>{{range .}}<tr><td><a href="/cves/{{.Exposure}}">{{.Exposure}}</a></td><td>{{.Package}} <span class="muted">{{.Version}}</span></td><td><span class="sev-badge sev-b-{{.Severity}}">{{.Severity}}</span>{{if .PreviousSeverity}} <span class="muted">from {{.PreviousSeverity}}</span>{{end}}</td></tr>{{end}}</tbody></table>{{else}}<p class="muted">None.</p>{{end}}{{end}}
+{{define "compare-packages"}}{{if .}}<table><tbody>{{range .}}<tr><td>{{.Package}}</td><td class="muted">{{.Version}}</td><td>{{if .Licenses}}{{.Licenses}}{{else}}No license declared{{end}}</td></tr>{{end}}</tbody></table>{{else}}<p class="muted">None.</p>{{end}}{{end}}

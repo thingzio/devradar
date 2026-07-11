@@ -1,0 +1,104 @@
+package server
+
+import (
+	"errors"
+	"net/http"
+	"strings"
+
+	"github.com/thingzio/devradar/pkg/data/postgres"
+	"github.com/thingzio/devradar/pkg/middleware"
+)
+
+type compareFindingRow struct {
+	Exposure, Package, Version, Severity string
+	PreviousSeverity                     string
+	Fixed                                bool
+}
+
+type comparePackageRow struct {
+	Package, Version, Licenses string
+}
+
+type compareLicenseRow struct {
+	Package, Version, From, To string
+}
+
+type compareView struct {
+	Title                                  string
+	SignedIn                               bool
+	Tab                                    string
+	Email                                  string
+	AvatarURL                              string
+	Version                                string
+	Comparison                             *postgres.SBOMComparison
+	Verdict                                string
+	Added, Resolved, Rerated, NewlyFixable []compareFindingRow
+	PackagesAdded, PackagesRemoved         []comparePackageRow
+	LicenseChanges                         []compareLicenseRow
+}
+
+func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
+	tn := middleware.TenantFromContext(r.Context())
+	fromID, toID := r.URL.Query().Get("from"), r.URL.Query().Get("to")
+	if fromID == "" || toID == "" {
+		http.Error(w, "from and to SBOMs are required", http.StatusBadRequest)
+		return
+	}
+	comparison, err := s.store.CompareSBOMs(r.Context(), tn.ID, fromID, toID)
+	if errors.Is(err, postgres.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if errors.Is(err, postgres.ErrInvalidComparison) {
+		http.Error(w, "SBOMs must be different generations of the same image", http.StatusBadRequest)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to compare SBOMs", http.StatusInternalServerError)
+		return
+	}
+	v := compareView{
+		Title: "Digest comparison", SignedIn: true, Tab: "images", Email: tn.Email,
+		AvatarURL: tn.AvatarURL, Version: s.opts.Version, Comparison: comparison,
+		Verdict: comparisonVerdict(comparison.Verdict),
+	}
+	v.Added = compareFindingRows(comparison.Added)
+	v.Resolved = compareFindingRows(comparison.Resolved)
+	v.Rerated = compareFindingRows(comparison.Rerated)
+	v.NewlyFixable = compareFindingRows(comparison.NewlyFixable)
+	for _, p := range comparison.PackagesAdded {
+		v.PackagesAdded = append(v.PackagesAdded, comparePackageRow{p.Package, p.Version, strings.Join(p.Licenses, ", ")})
+	}
+	for _, p := range comparison.PackagesRemoved {
+		v.PackagesRemoved = append(v.PackagesRemoved, comparePackageRow{p.Package, p.Version, strings.Join(p.Licenses, ", ")})
+	}
+	for _, change := range comparison.LicenseChanges {
+		v.LicenseChanges = append(v.LicenseChanges, compareLicenseRow{
+			Package: change.Package, Version: change.Version,
+			From: strings.Join(change.From, ", "), To: strings.Join(change.To, ", "),
+		})
+	}
+	render(w, "compare.html", v)
+}
+
+func compareFindingRows(items []postgres.ComparisonFinding) []compareFindingRow {
+	out := make([]compareFindingRow, 0, len(items))
+	for _, item := range items {
+		out = append(out, compareFindingRow{
+			Exposure: item.Exposure, Package: item.Package, Version: item.Version,
+			Severity: item.Severity, PreviousSeverity: item.PreviousSeverity, Fixed: item.Fixed,
+		})
+	}
+	return out
+}
+
+func comparisonVerdict(verdict string) string {
+	switch verdict {
+	case postgres.PostureImproves:
+		return "Improves posture"
+	case postgres.PostureRegresses:
+		return "Regresses posture"
+	default:
+		return "No material change"
+	}
+}

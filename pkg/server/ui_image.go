@@ -19,6 +19,8 @@ type sbomRow struct {
 	Tool         string
 	PackageCount int
 	GeneratedAt  string
+	FromDefault  bool
+	ToDefault    bool
 }
 
 // eventRow is one change-log entry, pre-formatted for display.
@@ -52,6 +54,7 @@ type imageDetailView struct {
 	DigestCount int
 
 	SBOMs          []sbomRow
+	CanCompare     bool
 	Events         []eventRow
 	NextCursor     string        // for the change log
 	SBOMNextCursor string        // for the versions/SBOMs list
@@ -266,6 +269,11 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 			PackageCount: sb.PackageCount,
 			GeneratedAt:  sb.EffectiveAt.Format("2006-01-02 15:04"),
 		})
+	}
+	v.CanCompare = len(v.SBOMs) > 1
+	if v.CanCompare {
+		v.SBOMs[0].ToDefault = true
+		v.SBOMs[len(v.SBOMs)-1].FromDefault = true
 	}
 
 	for _, e := range events {
