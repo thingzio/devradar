@@ -3,9 +3,11 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/lib/pq"
+	"github.com/thingzio/devradar/pkg/data"
 )
 
 const defaultAlertBatchSize = 100
@@ -27,6 +29,155 @@ func (s *Store) EnsureAlertPolicy(ctx context.Context, tenantID string) (*AlertP
 		return nil, fmt.Errorf("ensure alert policy: %w", err)
 	}
 	return &p, nil
+}
+
+// UpdateAlertPolicy changes only the policy owned by tenantID. Policy ID and
+// tenant ID from the input are deliberately ignored.
+func (s *Store) UpdateAlertPolicy(ctx context.Context, tenantID string, policy AlertPolicy) error {
+	if !data.ValidMinSeverity(policy.MinSeverity) {
+		return fmt.Errorf("invalid alert minimum severity %q", policy.MinSeverity)
+	}
+	labels := policy.Labels
+	if labels == nil {
+		labels = []string{}
+	}
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE devradar_alert_policy
+		SET enabled=$2, min_severity=$3, alert_kev=$4, alert_fix_available=$5,
+		    include_image=$6, include_db=$7, labels=$8, updated_at=now()
+		WHERE tenant_id=$1`, tenantID, policy.Enabled, policy.MinSeverity,
+		policy.AlertKEV, policy.AlertFixAvailable, policy.IncludeImage,
+		policy.IncludeDB, pq.Array(labels))
+	if err != nil {
+		return fmt.Errorf("update alert policy: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("update alert policy rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+const alertSelect = `
+	SELECT a.id, a.tenant_id, a.policy_id, a.event_id, a.event_occurred_at,
+	       a.alert_kind, a.sbom_id, a.repository, a.digest, a.finding_id,
+	       a.exposure, a.package, a.version, a.severity, a.cause, a.score,
+	       a.read_at, a.created_at, COALESCE(e.kev, false), e.epss_score
+	FROM devradar_alert a
+	LEFT JOIN devradar_cve_enrichment e ON e.cve = a.exposure`
+
+// ListAlerts returns a tenant's alert history newest first.
+func (s *Store) ListAlerts(ctx context.Context, tenantID, cursor string, limit int) (items []Alert, next string, err error) {
+	eff, fetch := clampLimit(limit)
+	cur, hasCur := decodeCursor(cursor)
+	args := []any{tenantID}
+	seek := ""
+	if hasCur {
+		seek = " AND (a.created_at, a.id) < ($2, $3)"
+		args = append(args, cur.TS, cur.ID)
+	}
+	args = append(args, fetch)
+	rows, err := s.db.QueryContext(ctx, alertSelect+fmt.Sprintf(`
+		WHERE a.tenant_id=$1%s
+		ORDER BY a.created_at DESC, a.id DESC
+		LIMIT $%d`, seek, len(args)), args...)
+	if err != nil {
+		return nil, "", fmt.Errorf("list alerts: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var a Alert
+		if err := scanAlert(rows, &a); err != nil {
+			return nil, "", err
+		}
+		items = append(items, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", fmt.Errorf("iterate alerts: %w", err)
+	}
+	if len(items) > eff {
+		items = items[:eff]
+		last := items[eff-1]
+		next = encodeCursor(last.CreatedAt, last.ID)
+	}
+	return items, next, nil
+}
+
+// UnreadAlerts returns a bounded newest-first tenant list for Overview.
+func (s *Store) UnreadAlerts(ctx context.Context, tenantID string, limit int) ([]Alert, error) {
+	if limit <= 0 || limit > maxPageLimit {
+		limit = 5
+	}
+	rows, err := s.db.QueryContext(ctx, alertSelect+`
+		WHERE a.tenant_id=$1 AND a.read_at IS NULL
+		ORDER BY a.created_at DESC, a.id DESC
+		LIMIT $2`, tenantID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list unread alerts: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Alert
+	for rows.Next() {
+		var a Alert
+		if err := scanAlert(rows, &a); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate unread alerts: %w", err)
+	}
+	return out, nil
+}
+
+// GetAlert returns one alert only when it belongs to tenantID.
+func (s *Store) GetAlert(ctx context.Context, tenantID, alertID string) (*Alert, error) {
+	var a Alert
+	err := scanAlert(s.db.QueryRowContext(ctx, alertSelect+`
+		WHERE a.tenant_id=$1 AND a.id=$2`, tenantID, alertID), &a)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+// MarkAlertRead idempotently stamps tenant-level presentation state.
+func (s *Store) MarkAlertRead(ctx context.Context, tenantID, alertID string) error {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE devradar_alert SET read_at=COALESCE(read_at, now())
+		WHERE tenant_id=$1 AND id=$2`, tenantID, alertID)
+	if err != nil {
+		return fmt.Errorf("mark alert read: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("mark alert read rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+type alertScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanAlert(row alertScanner, a *Alert) error {
+	err := row.Scan(&a.ID, &a.TenantID, &a.PolicyID, &a.EventID, &a.EventOccurredAt,
+		&a.Kind, &a.SBOMID, &a.Repository, &a.Digest, &a.FindingID,
+		&a.Exposure, &a.Package, &a.Version, &a.Severity, &a.Cause, &a.Score,
+		&a.ReadAt, &a.CreatedAt, &a.KEV, &a.EPSS)
+	if err != nil {
+		return fmt.Errorf("scan alert: %w", err)
+	}
+	return nil
 }
 
 // NextAlertEvents returns the next stable event batch. A new consumer starts at

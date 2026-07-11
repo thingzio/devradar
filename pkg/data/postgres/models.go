@@ -111,6 +111,8 @@ type Alert struct {
 	Severity        string
 	Cause           string
 	Score           float32
+	KEV             bool
+	EPSS            *float32
 	ReadAt          *time.Time
 	CreatedAt       time.Time
 }

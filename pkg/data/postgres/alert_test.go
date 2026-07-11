@@ -2,6 +2,8 @@ package postgres_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -49,6 +51,123 @@ func TestAlertMigration_DefaultsAndConstraints(t *testing.T) {
 		tenantID, policyID, sb.ID); err == nil {
 		t.Fatal("tooling-caused alert should violate cause check")
 	}
+}
+
+func TestAlertTenantStore_IsolationPaginationAndReadState(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	tenant1, sb1 := seedTenantAndSBOM(t, st)
+	tenant2, sb2 := seedTenantAndSBOM(t, st)
+	p1, err := st.EnsureAlertPolicy(ctx, tenant1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p2, err := st.EnsureAlertPolicy(ctx, tenant2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p1.Enabled = true
+	p1.MinSeverity = data.SeverityHigh
+	p1.IncludeDB = false
+	p1.Labels = []string{"prod"}
+	if err := st.UpdateAlertPolicy(ctx, tenant1, *p1); err != nil {
+		t.Fatalf("update policy: %v", err)
+	}
+	gotPolicy, err := st.EnsureAlertPolicy(ctx, tenant1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !gotPolicy.Enabled || gotPolicy.MinSeverity != data.SeverityHigh || gotPolicy.IncludeDB ||
+		len(gotPolicy.Labels) != 1 || gotPolicy.Labels[0] != "prod" {
+		t.Fatalf("updated policy = %+v", gotPolicy)
+	}
+	unchangedP2, err := st.EnsureAlertPolicy(ctx, tenant2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchangedP2.Enabled || unchangedP2.ID != p2.ID {
+		t.Fatalf("tenant 2 policy changed: %+v", unchangedP2)
+	}
+
+	base := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
+	ids := []string{
+		seedAlertRow(t, st, tenant1, p1.ID, sb1, 101, base, "CVE-2026-0101"),
+		seedAlertRow(t, st, tenant1, p1.ID, sb1, 102, base.Add(time.Minute), "CVE-2026-0102"),
+		seedAlertRow(t, st, tenant1, p1.ID, sb1, 103, base.Add(2*time.Minute), "CVE-2026-0103"),
+	}
+	otherID := seedAlertRow(t, st, tenant2, p2.ID, sb2, 201, base.Add(3*time.Minute), "CVE-2026-0201")
+
+	page1, next, err := st.ListAlerts(ctx, tenant1, "", 2)
+	if err != nil {
+		t.Fatalf("list page 1: %v", err)
+	}
+	if len(page1) != 2 || next == "" || page1[0].Exposure != "CVE-2026-0103" || page1[1].Exposure != "CVE-2026-0102" {
+		t.Fatalf("page 1 = %+v next=%q", page1, next)
+	}
+	page2, next2, err := st.ListAlerts(ctx, tenant1, next, 2)
+	if err != nil {
+		t.Fatalf("list page 2: %v", err)
+	}
+	if len(page2) != 1 || next2 != "" || page2[0].Exposure != "CVE-2026-0101" {
+		t.Fatalf("page 2 = %+v next=%q", page2, next2)
+	}
+
+	if _, err := st.GetAlert(ctx, tenant1, otherID); !errors.Is(err, postgres.ErrNotFound) {
+		t.Fatalf("cross-tenant GetAlert error = %v, want ErrNotFound", err)
+	}
+	if err := st.MarkAlertRead(ctx, tenant1, otherID); !errors.Is(err, postgres.ErrNotFound) {
+		t.Fatalf("cross-tenant MarkAlertRead error = %v, want ErrNotFound", err)
+	}
+	if err := st.MarkAlertRead(ctx, tenant1, ids[2]); err != nil {
+		t.Fatalf("mark read: %v", err)
+	}
+	if err := st.MarkAlertRead(ctx, tenant1, ids[2]); err != nil {
+		t.Fatalf("retry mark read: %v", err)
+	}
+	unread, err := st.UnreadAlerts(ctx, tenant1, 10)
+	if err != nil {
+		t.Fatalf("unread alerts: %v", err)
+	}
+	if len(unread) != 2 {
+		t.Fatalf("unread alerts = %d, want 2", len(unread))
+	}
+	got, err := st.GetAlert(ctx, tenant1, ids[2])
+	if err != nil {
+		t.Fatalf("get alert: %v", err)
+	}
+	if got.ReadAt == nil || got.Exposure != "CVE-2026-0103" {
+		t.Fatalf("alert after read = %+v", got)
+	}
+}
+
+func TestAlertTenantStore_RejectsInvalidSeverity(t *testing.T) {
+	st := testStore(t)
+	tenantID, _ := seedTenantAndSBOM(t, st)
+	p, err := st.EnsureAlertPolicy(context.Background(), tenantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.MinSeverity = "mystery"
+	if err := st.UpdateAlertPolicy(context.Background(), tenantID, *p); err == nil {
+		t.Fatal("invalid severity should fail")
+	}
+}
+
+func seedAlertRow(t *testing.T, st *postgres.Store, tenantID, policyID string, sb *postgres.SBOM, eventID int64, created time.Time, cve string) string {
+	t.Helper()
+	var id string
+	err := st.DB().QueryRowContext(context.Background(), `
+		INSERT INTO devradar_alert
+		(tenant_id, policy_id, event_id, event_occurred_at, alert_kind, sbom_id,
+		 repository, digest, finding_id, exposure, package, version, severity, score, cause, created_at)
+		VALUES ($1,$2,$3,$4,'new_finding',$5,$6,$7,$8,$9,'pkg','1.0','high',8.0,'db',$4)
+		RETURNING id`, tenantID, policyID, eventID, created, sb.ID, sb.Repository, sb.Digest,
+		fmt.Sprintf("finding-%d", eventID), cve).Scan(&id)
+	if err != nil {
+		t.Fatalf("seed alert: %v", err)
+	}
+	return id
 }
 
 func TestAlertMigration_DefaultConsumerCursorExists(t *testing.T) {
