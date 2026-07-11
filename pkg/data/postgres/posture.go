@@ -69,12 +69,12 @@ func (s *Store) SnapshotTenantPosture(ctx context.Context) (retErr error) {
 
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM devradar_repository_posture_snapshot
-		WHERE snapshot_date = CURRENT_DATE`); err != nil {
+		WHERE snapshot_date = (now() AT TIME ZONE 'UTC')::date`); err != nil {
 		return fmt.Errorf("replace repository posture snapshots: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM devradar_tenant_posture_snapshot
-		WHERE snapshot_date = CURRENT_DATE`); err != nil {
+		WHERE snapshot_date = (now() AT TIME ZONE 'UTC')::date`); err != nil {
 		return fmt.Errorf("replace tenant posture snapshots: %w", err)
 	}
 
@@ -120,7 +120,7 @@ func (s *Store) SnapshotTenantPosture(ctx context.Context) (retErr error) {
 		INSERT INTO devradar_repository_posture_snapshot
 			(tenant_id, repository, snapshot_date, images, relevant_findings, critical,
 			 high, medium, low, fixable, kev, captured_at)
-		SELECT a.tenant_id, a.repository, CURRENT_DATE, 1,
+		SELECT a.tenant_id, a.repository, (now() AT TIME ZONE 'UTC')::date, 1,
 		       COALESCE(f.relevant_findings, 0), COALESCE(f.critical, 0),
 		       COALESCE(f.high, 0), COALESCE(f.medium, 0), COALESCE(f.low, 0),
 		       COALESCE(f.fixable, 0), COALESCE(f.kev, 0), now()
@@ -174,7 +174,7 @@ func (s *Store) SnapshotTenantPosture(ctx context.Context) (retErr error) {
 		INSERT INTO devradar_tenant_posture_snapshot
 			(tenant_id, snapshot_date, images, relevant_findings, critical,
 			 high, medium, low, fixable, kev, captured_at)
-		SELECT t.id, CURRENT_DATE,
+		SELECT t.id, (now() AT TIME ZONE 'UTC')::date,
 		       COALESCE(i.images, 0), COALESCE(f.relevant_findings, 0),
 		       COALESCE(f.critical, 0), COALESCE(f.high, 0),
 		       COALESCE(f.medium, 0), COALESCE(f.low, 0),
@@ -218,8 +218,8 @@ func (s *Store) TenantPostureTrend(ctx context.Context, tenantID string, days in
 		       medium, low, fixable, kev, captured_at
 		FROM devradar_tenant_posture_snapshot
 		WHERE tenant_id = $1
-		  AND snapshot_date >= CURRENT_DATE - ($2::int - 1)
-		  AND snapshot_date <= CURRENT_DATE
+		  AND snapshot_date >= (now() AT TIME ZONE 'UTC')::date - ($2::int - 1)
+		  AND snapshot_date <= (now() AT TIME ZONE 'UTC')::date
 		ORDER BY snapshot_date ASC`, tenantID, days)
 	if err != nil {
 		return nil, fmt.Errorf("list tenant posture trend: %w", err)
@@ -252,8 +252,8 @@ func (s *Store) RepositoryPostureTrend(ctx context.Context, tenantID, repository
 		       medium, low, fixable, kev, captured_at
 		FROM devradar_repository_posture_snapshot
 		WHERE tenant_id = $1 AND repository = $2
-		  AND snapshot_date >= CURRENT_DATE - ($3::int - 1)
-		  AND snapshot_date <= CURRENT_DATE
+		  AND snapshot_date >= (now() AT TIME ZONE 'UTC')::date - ($3::int - 1)
+		  AND snapshot_date <= (now() AT TIME ZONE 'UTC')::date
 		ORDER BY snapshot_date ASC`, tenantID, repository, days)
 	if err != nil {
 		return nil, fmt.Errorf("list repository posture trend: %w", err)
@@ -284,8 +284,8 @@ func (s *Store) RepositoryPostureOptions(ctx context.Context, tenantID string) (
 		SELECT repository, MIN(snapshot_date)
 		FROM devradar_repository_posture_snapshot
 		WHERE tenant_id = $1 AND repository <> ''
-		  AND snapshot_date >= CURRENT_DATE - ($2::int - 1)
-		  AND snapshot_date <= CURRENT_DATE
+		  AND snapshot_date >= (now() AT TIME ZONE 'UTC')::date - ($2::int - 1)
+		  AND snapshot_date <= (now() AT TIME ZONE 'UTC')::date
 		GROUP BY repository
 		ORDER BY repository`, tenantID, maxPostureTrendDays)
 	if err != nil {
@@ -325,7 +325,7 @@ func (s *Store) TenantPostureCoverageStart(ctx context.Context, tenantID string)
 		SELECT MIN(snapshot_date)
 		FROM devradar_tenant_posture_snapshot
 		WHERE tenant_id = $1
-		  AND snapshot_date <= CURRENT_DATE`, tenantID).Scan(&start); err != nil {
+		  AND snapshot_date <= (now() AT TIME ZONE 'UTC')::date`, tenantID).Scan(&start); err != nil {
 		return nil, fmt.Errorf("get tenant posture coverage start: %w", err)
 	}
 	if !start.Valid {

@@ -419,6 +419,86 @@ func TestSnapshotTenantPosture_RepositorySnapshotsReplaceTodayAndRespectVEX(t *t
 	}
 }
 
+func TestPostureDatesUseUTCUnderNonUTCSession(t *testing.T) {
+	st := testStore(t)
+	st.DB().SetMaxOpenConns(1)
+	st.DB().SetMaxIdleConns(1)
+	ctx := context.Background()
+
+	timezone := "Etc/GMT+12"
+	if time.Now().UTC().Hour() >= 12 {
+		timezone = "Etc/GMT-14"
+	}
+	var configuredTimezone string
+	if err := st.DB().QueryRowContext(ctx,
+		`SELECT set_config('TimeZone', $1, false)`, timezone).Scan(&configuredTimezone); err != nil {
+		t.Fatalf("set session timezone: %v", err)
+	}
+	var sessionDate, utcDate time.Time
+	if err := st.DB().QueryRowContext(ctx, `
+		SELECT CURRENT_DATE, (now() AT TIME ZONE 'UTC')::date`).Scan(&sessionDate, &utcDate); err != nil {
+		t.Fatalf("read session and UTC dates: %v", err)
+	}
+	if sessionDate.Equal(utcDate) {
+		t.Fatalf("test timezone %q did not shift the session date from UTC", configuredTimezone)
+	}
+
+	tenantID, sb := seedTenantAndSBOM(t, st)
+	repository := "registry.test/utc-current-" + randID(t)[:8]
+	if _, err := st.DB().ExecContext(ctx,
+		`UPDATE devradar_sbom SET repository=$2 WHERE id=$1`, sb.ID, repository); err != nil {
+		t.Fatalf("set repository: %v", err)
+	}
+	if err := st.SnapshotTenantPosture(ctx); err != nil {
+		t.Fatalf("snapshot posture: %v", err)
+	}
+
+	var tenantDate, repositoryDate time.Time
+	if err := st.DB().QueryRowContext(ctx, `
+		SELECT t.snapshot_date, r.snapshot_date
+		FROM devradar_tenant_posture_snapshot t
+		JOIN devradar_repository_posture_snapshot r
+		  ON r.tenant_id=t.tenant_id
+		WHERE t.tenant_id=$1 AND r.repository=$2`, tenantID, repository).
+		Scan(&tenantDate, &repositoryDate); err != nil {
+		t.Fatalf("read posture snapshot keys: %v", err)
+	}
+	if !tenantDate.Equal(utcDate) || !repositoryDate.Equal(utcDate) {
+		t.Fatalf("snapshot dates = tenant:%s repository:%s, want UTC %s",
+			tenantDate.Format(time.DateOnly), repositoryDate.Format(time.DateOnly), utcDate.Format(time.DateOnly))
+	}
+
+	tenantTrend, err := st.TenantPostureTrend(ctx, tenantID, 1)
+	if err != nil || len(tenantTrend) != 1 || !tenantTrend[0].Date.Equal(utcDate) {
+		t.Fatalf("UTC tenant trend = %+v error=%v", tenantTrend, err)
+	}
+	repositoryTrend, err := st.RepositoryPostureTrend(ctx, tenantID, repository, 1)
+	if err != nil || len(repositoryTrend) != 1 || !repositoryTrend[0].Date.Equal(utcDate) {
+		t.Fatalf("UTC repository trend = %+v error=%v", repositoryTrend, err)
+	}
+
+	boundaryRepository := "registry.test/utc-boundary-" + randID(t)[:8]
+	boundaryDate := utcDate.AddDate(0, 0, -364)
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_repository_posture_snapshot
+			(tenant_id, repository, snapshot_date, images, relevant_findings)
+		VALUES ($1,$2,$3,1,0)`, tenantID, boundaryRepository, boundaryDate); err != nil {
+		t.Fatalf("insert UTC boundary snapshot: %v", err)
+	}
+	options, err := st.RepositoryPostureOptions(ctx, tenantID)
+	if err != nil {
+		t.Fatalf("list UTC repository options: %v", err)
+	}
+	coverage := make(map[string]time.Time, len(options))
+	for _, option := range options {
+		coverage[option.Repository] = option.CoverageStart
+	}
+	if !coverage[repository].Equal(utcDate) || !coverage[boundaryRepository].Equal(boundaryDate) {
+		t.Fatalf("UTC repository options = %+v, want current %s and boundary %s",
+			options, utcDate.Format(time.DateOnly), boundaryDate.Format(time.DateOnly))
+	}
+}
+
 func TestRepositoryPostureTrend_BoundsObservedPointsAndOptions(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
