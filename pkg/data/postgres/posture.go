@@ -3,11 +3,15 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"time"
 )
 
-const maxPostureTrendDays = 365
+const (
+	maxPostureTrendDays          = 365
+	postureSnapshotUnlockTimeout = 5 * time.Second
+)
 
 // TenantPosturePoint is one exact daily snapshot of a tenant's active fleet.
 // Total is the scanner-deduplicated relevant finding count.
@@ -35,21 +39,33 @@ type RepositoryPostureOption struct {
 // SnapshotTenantPosture replaces today's repository and tenant snapshots.
 // Findings reported by multiple scanners are collapsed by (sbom_id,
 // finding_id), with the worst reported severity and the union of fix/KEV facts.
-// All writes share one transaction so fleet and repository posture cannot
-// diverge on a partial failure.
-func (s *Store) SnapshotTenantPosture(ctx context.Context) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+// All writes share one repeatable-read transaction so fleet and repository
+// posture cannot diverge on a partial failure or concurrent source update.
+func (s *Store) SnapshotTenantPosture(ctx context.Context) (retErr error) {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire tenant posture connection: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	// Acquire the session lock before beginning the repeatable-read transaction,
+	// so a waiting caller establishes its database snapshot only after the prior
+	// projection has committed.
+	if _, err := conn.ExecContext(ctx, `
+		SELECT pg_advisory_lock(hashtext('devradar'), hashtext('posture-snapshot'))`); err != nil {
+		return fmt.Errorf("lock posture snapshots: %w", err)
+	}
+	defer func() {
+		if err := unlockPostureSnapshots(conn); err != nil && retErr == nil {
+			retErr = err
+		}
+	}()
+
+	tx, err := conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
 	if err != nil {
 		return fmt.Errorf("begin tenant posture snapshot: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-
-	// Snapshotting is platform-wide. Overlapping scan jobs must not interleave
-	// their delete-and-replace transactions and race on the daily primary keys.
-	if _, err := tx.ExecContext(ctx, `
-		SELECT pg_advisory_xact_lock(hashtext('devradar'), hashtext('posture-snapshot'))`); err != nil {
-		return fmt.Errorf("lock posture snapshots: %w", err)
-	}
 
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM devradar_repository_posture_snapshot
@@ -177,6 +193,21 @@ func (s *Store) SnapshotTenantPosture(ctx context.Context) error {
 	return nil
 }
 
+func unlockPostureSnapshots(conn *sql.Conn) error {
+	ctx, cancel := context.WithTimeout(context.Background(), postureSnapshotUnlockTimeout)
+	defer cancel()
+	var unlocked bool
+	if err := conn.QueryRowContext(ctx, `
+		SELECT pg_advisory_unlock(hashtext('devradar'), hashtext('posture-snapshot'))`).Scan(&unlocked); err != nil {
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		return fmt.Errorf("unlock posture snapshots: %w", err)
+	}
+	if !unlocked {
+		return fmt.Errorf("unlock posture snapshots: lock not held")
+	}
+	return nil
+}
+
 // TenantPostureTrend returns up to days of one tenant's snapshots in
 // chronological order. The requested window is bounded to 1..365 days.
 func (s *Store) TenantPostureTrend(ctx context.Context, tenantID string, days int) ([]TenantPosturePoint, error) {
@@ -253,9 +284,10 @@ func (s *Store) RepositoryPostureOptions(ctx context.Context, tenantID string) (
 		SELECT repository, MIN(snapshot_date)
 		FROM devradar_repository_posture_snapshot
 		WHERE tenant_id = $1 AND repository <> ''
+		  AND snapshot_date >= CURRENT_DATE - ($2::int - 1)
 		  AND snapshot_date <= CURRENT_DATE
 		GROUP BY repository
-		ORDER BY repository`, tenantID)
+		ORDER BY repository`, tenantID, maxPostureTrendDays)
 	if err != nil {
 		return nil, fmt.Errorf("list repository posture options: %w", err)
 	}

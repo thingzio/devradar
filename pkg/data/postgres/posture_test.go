@@ -3,6 +3,7 @@ package postgres_test
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -425,6 +426,8 @@ func TestRepositoryPostureTrend_BoundsObservedPointsAndOptions(t *testing.T) {
 	otherTenantID, _ := seedTenantAndSBOM(t, st)
 	repositoryA := "registry.test/a-" + randID(t)[:8]
 	repositoryB := "registry.test/b-" + randID(t)[:8]
+	repositoryOutsideWindow := "registry.test/old-" + randID(t)[:8]
+	foreignRepository := "registry.test/foreign-" + randID(t)[:8]
 	if _, err := st.DB().ExecContext(ctx, `
 		INSERT INTO devradar_repository_posture_snapshot
 			(tenant_id,repository,snapshot_date,images,relevant_findings)
@@ -434,8 +437,10 @@ func TestRepositoryPostureTrend_BoundsObservedPointsAndOptions(t *testing.T) {
 			($1,$2,CURRENT_DATE - 2,1,2),
 			($1,$2,CURRENT_DATE,1,0),
 			($1,$3,CURRENT_DATE - 20,1,20),
-			($4,$2,CURRENT_DATE,1,999)`,
-		tenantID, repositoryA, repositoryB, otherTenantID); err != nil {
+			($4,$2,CURRENT_DATE,1,999),
+			($1,$5,CURRENT_DATE - 365,1,365),
+			($4,$6,CURRENT_DATE,1,999)`,
+		tenantID, repositoryA, repositoryB, otherTenantID, repositoryOutsideWindow, foreignRepository); err != nil {
 		t.Fatal(err)
 	}
 
@@ -465,7 +470,7 @@ func TestRepositoryPostureTrend_BoundsObservedPointsAndOptions(t *testing.T) {
 	}
 	var coverageA, coverageB string
 	if err := st.DB().QueryRowContext(ctx, `
-		SELECT to_char(CURRENT_DATE - 365,'YYYY-MM-DD'),
+		SELECT to_char(CURRENT_DATE - 364,'YYYY-MM-DD'),
 		       to_char(CURRENT_DATE - 20,'YYYY-MM-DD')`).Scan(&coverageA, &coverageB); err != nil {
 		t.Fatal(err)
 	}
@@ -584,5 +589,108 @@ func TestSnapshotTenantPosture_ConcurrentRetries(t *testing.T) {
 		if err != nil {
 			t.Fatalf("concurrent posture snapshot: %v", err)
 		}
+	}
+}
+
+func TestSnapshotTenantPosture_UsesOneSourceSnapshotAcrossProjections(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	tenantID, sb := seedTenantAndSBOM(t, st)
+	repository := "registry.test/interleaved-" + randID(t)[:8]
+	if _, err := st.DB().ExecContext(ctx,
+		`UPDATE devradar_sbom SET repository=$2 WHERE id=$1`, sb.ID, repository); err != nil {
+		t.Fatal(err)
+	}
+	sb.Repository = repository
+
+	lockKey, err := strconv.ParseInt(randID(t)[:15], 16, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	suffix := randID(t)
+	functionName := "block_repository_snapshot_" + suffix
+	triggerName := "block_repository_snapshot_" + suffix
+	if _, err := st.DB().ExecContext(ctx, fmt.Sprintf(`
+		CREATE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF NEW.tenant_id = '%s'::uuid THEN
+				PERFORM pg_advisory_xact_lock(%d);
+			END IF;
+			RETURN NEW;
+		END $$;
+		CREATE TRIGGER %s AFTER INSERT ON devradar_repository_posture_snapshot
+		FOR EACH ROW EXECUTE FUNCTION %s()`, functionName, tenantID, lockKey, triggerName, functionName)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = st.DB().ExecContext(context.Background(), fmt.Sprintf(
+			`DROP TRIGGER IF EXISTS %s ON devradar_repository_posture_snapshot; DROP FUNCTION IF EXISTS %s()`,
+			triggerName, functionName))
+	})
+
+	blocker, err := st.DB().Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = blocker.Close() })
+	if _, err := blocker.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, lockKey); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = blocker.ExecContext(context.Background(), `SELECT pg_advisory_unlock($1)`, lockKey)
+	})
+	var blockerPID int
+	if err := blocker.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&blockerPID); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshotErr := make(chan error, 1)
+	go func() { snapshotErr <- st.SnapshotTenantPosture(ctx) }()
+
+	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	for {
+		var snapshotBlocked bool
+		if err := st.DB().QueryRowContext(waitCtx, `
+			SELECT EXISTS (
+				SELECT 1 FROM pg_stat_activity
+				WHERE $1 = ANY(pg_blocking_pids(pid))
+			)`, blockerPID).Scan(&snapshotBlocked); err != nil {
+			t.Fatal(err)
+		}
+		if snapshotBlocked {
+			break
+		}
+		select {
+		case <-waitCtx.Done():
+			t.Fatal(waitCtx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	if err := st.ArchiveSBOM(ctx, tenantID, sb.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := blocker.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, lockKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-snapshotErr; err != nil {
+		t.Fatal(err)
+	}
+
+	repositoryTrend, err := st.RepositoryPostureTrend(ctx, tenantID, repository, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fleetTrend, err := st.TenantPostureTrend(ctx, tenantID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repositoryTrend) != 1 || len(fleetTrend) != 1 {
+		t.Fatalf("repository trend=%+v fleet trend=%+v", repositoryTrend, fleetTrend)
+	}
+	if repositoryTrend[0].Images != fleetTrend[0].Images || repositoryTrend[0].Total != fleetTrend[0].Total {
+		t.Fatalf("repository/fleet snapshots diverged across interleaved archive: repository=%+v fleet=%+v",
+			repositoryTrend[0], fleetTrend[0])
 	}
 }
