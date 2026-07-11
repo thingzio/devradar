@@ -18,11 +18,11 @@
 
   <div class="card">
     <div class="card-head"><h2>Open findings by severity</h2></div>
-    <p>
-      <span class="sev sev-critical">{{index .FindingsBySev "critical"}} critical</span> ·
-      <span class="sev sev-high">{{index .FindingsBySev "high"}} high</span> ·
-      <span class="sev sev-medium">{{index .FindingsBySev "medium"}} medium</span> ·
-      <span class="sev sev-low">{{index .FindingsBySev "low"}} low</span> ·
+    <p class="sev-pills">
+      <span class="sev-pill sev-critical">{{index .FindingsBySev "critical"}} critical</span>
+      <span class="sev-pill sev-high">{{index .FindingsBySev "high"}} high</span>
+      <span class="sev-pill sev-medium">{{index .FindingsBySev "medium"}} medium</span>
+      <span class="sev-pill sev-low">{{index .FindingsBySev "low"}} low</span>
       <span class="muted">{{index .FindingsBySev "negligible"}} negligible · {{index .FindingsBySev "unknown"}} unknown</span>
     </p>
   </div>

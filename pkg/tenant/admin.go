@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"slices"
+	"time"
 )
 
 // Plans is the allowlist of valid tenant plans. DevRadar has no billing package;
@@ -47,6 +48,75 @@ func AdminListTenants(ctx context.Context, db *sql.DB, query string, limit, offs
 			return nil, 0, fmt.Errorf("scan tenant: %w", err)
 		}
 		out = append(out, t)
+	}
+	return out, total, rows.Err()
+}
+
+// AdminTenantRow is a tenant enriched with the two operator-list metrics that
+// aren't on the tenant record itself: the last sign-in (most recent session
+// created) and the number of images (distinct active repositories) tracked.
+type AdminTenantRow struct {
+	*Tenant
+	LastLoginAt *time.Time // most recent session created_at; nil if never signed in
+	ImageCount  int        // distinct active repositories
+}
+
+// AdminListTenantsWithStats is AdminListTenants plus per-tenant last-login and
+// image-count metrics, for the operator tenant list. The metrics are computed
+// with correlated aggregates over the (small) tenant page, so cost scales with
+// the page size, not the fleet. Ordering and search match AdminListTenants.
+func AdminListTenantsWithStats(ctx context.Context, db *sql.DB, query string, limit, offset int) ([]*AdminTenantRow, int, error) {
+	where, args := "", []any{}
+	if query != "" {
+		where = `WHERE t.email ILIKE $1`
+		args = append(args, "%"+query+"%")
+	}
+
+	var total int
+	countWhere := ""
+	if query != "" {
+		countWhere = `WHERE email ILIKE $1`
+	}
+	if err := db.QueryRowContext(ctx,
+		`SELECT count(*) FROM devradar_tenant `+countWhere, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count tenants: %w", err)
+	}
+
+	args = append(args, limit, offset)
+	rows, err := db.QueryContext(ctx, `
+		SELECT `+prefixedTenantColumns("t")+`,
+		       (SELECT max(created_at) FROM devradar_session s WHERE s.tenant_id = t.id) AS last_login,
+		       (SELECT count(DISTINCT repository) FROM devradar_sbom sb
+		         WHERE sb.tenant_id = t.id AND sb.status = 'active') AS image_count
+		FROM devradar_tenant t `+where+
+		fmt.Sprintf(` ORDER BY t.created_at DESC LIMIT $%d OFFSET $%d`, len(args)-1, len(args)), args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list tenants with stats: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []*AdminTenantRow
+	for rows.Next() {
+		var r AdminTenantRow
+		var t Tenant
+		var verified, tos, lastLogin sql.NullTime
+		var avatar sql.NullString
+		if err := rows.Scan(&t.ID, &t.Email, &verified, &t.Plan, &t.Status, &t.MinSeverity,
+			&avatar, &tos, &t.CreatedAt, &t.UpdatedAt, &lastLogin, &r.ImageCount); err != nil {
+			return nil, 0, fmt.Errorf("scan tenant row: %w", err)
+		}
+		if verified.Valid {
+			t.EmailVerifiedAt = &verified.Time
+		}
+		t.AvatarURL = avatar.String
+		if tos.Valid {
+			t.TOSAcceptedAt = &tos.Time
+		}
+		if lastLogin.Valid {
+			r.LastLoginAt = &lastLogin.Time
+		}
+		r.Tenant = &t
+		out = append(out, &r)
 	}
 	return out, total, rows.Err()
 }

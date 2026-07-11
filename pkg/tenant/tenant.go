@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -60,6 +61,18 @@ func scanTenant(s scanner) (*Tenant, error) {
 
 const tenantColumns = `id, email, email_verified_at, plan, status, min_severity,
 	avatar_url, tos_accepted_at, created_at, updated_at`
+
+// prefixedTenantColumns returns tenantColumns with each column qualified by a
+// table alias, for queries that join devradar_tenant to other tables. The scan
+// order matches scanTenant.
+func prefixedTenantColumns(alias string) string {
+	cols := []string{"id", "email", "email_verified_at", "plan", "status", "min_severity",
+		"avatar_url", "tos_accepted_at", "created_at", "updated_at"}
+	for i, c := range cols {
+		cols[i] = alias + "." + c
+	}
+	return strings.Join(cols, ", ")
+}
 
 // UpsertTenantByEmail creates the tenant for email if absent (else returns the
 // existing one) and marks the email verified — called when a magic-link is

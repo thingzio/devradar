@@ -41,6 +41,37 @@ func TestAdminListTenants_SearchAndPage(t *testing.T) {
 	}
 }
 
+// TestAdminListTenantsWithStats covers the enriched operator list: a brand-new
+// tenant has never logged in (nil LastLoginAt) and tracks zero images.
+func TestAdminListTenantsWithStats(t *testing.T) {
+	st := adminTestDB(t)
+	ctx := context.Background()
+	db := st.DB()
+
+	uniq := "zzstats-" + randEmail()
+	if _, err := tenant.UpsertTenantByEmail(ctx, db, uniq); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	rows, total, err := tenant.AdminListTenantsWithStats(ctx, db, uniq, 10, 0)
+	if err != nil {
+		t.Fatalf("list with stats: %v", err)
+	}
+	if total != 1 || len(rows) != 1 {
+		t.Fatalf("search %q: got %d rows (total %d), want 1", uniq, len(rows), total)
+	}
+	r := rows[0]
+	if r.Email != uniq {
+		t.Errorf("email = %q, want %q", r.Email, uniq)
+	}
+	if r.LastLoginAt != nil {
+		t.Errorf("LastLoginAt = %v, want nil (never signed in)", r.LastLoginAt)
+	}
+	if r.ImageCount != 0 {
+		t.Errorf("ImageCount = %d, want 0 (no SBOMs)", r.ImageCount)
+	}
+}
+
 // TestDeleteTenant_Cascades verifies deleting a tenant removes it (and, by the
 // schema's ON DELETE CASCADE, its children — asserted here via a token).
 func TestDeleteTenant_Cascades(t *testing.T) {

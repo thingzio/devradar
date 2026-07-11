@@ -200,7 +200,7 @@ func (s *Server) handleAdminTenants(w http.ResponseWriter, r *http.Request) {
 	page := clampInt(r.URL.Query().Get("page"), 1, 1<<20)
 	offset := (page - 1) * adminPageSize
 
-	tenants, total, err := tenant.AdminListTenants(r.Context(), s.store.DB(), query, adminPageSize, offset)
+	tenants, total, err := tenant.AdminListTenantsWithStats(r.Context(), s.store.DB(), query, adminPageSize, offset)
 	if err != nil {
 		slog.Error("admin list tenants", "error", err)
 		http.Error(w, "failed to list tenants", http.StatusInternalServerError)

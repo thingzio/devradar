@@ -214,8 +214,11 @@ h1 .accent { color: var(--accent); }
 .card-head .sev { display: flex; align-items: center; gap: 0.5rem; }
 
 /* Forms */
-form.row { display: flex; gap: 0.5rem; margin-top: 1.25rem; }
+form.row { display: flex; gap: 0.5rem; margin-top: 1.25rem; align-items: center; }
 form.inline { display: inline; }
+/* Label-led control rows (admin tenant Plan/Status/Min severity): a fixed label
+   column so the selects and Save buttons line up down the stack. */
+form.row > label { width: 7rem; flex-shrink: 0; color: var(--muted); }
 input[type=email], input[type=text] {
   flex: 1; padding: 0.6rem 0.75rem;
   background: var(--page-bg); color: var(--text);
@@ -426,6 +429,15 @@ table.images td { vertical-align: middle; }
 .sev-high     { background: var(--sev-high); }
 .sev-medium   { background: var(--sev-medium); }
 .sev-low      { background: var(--sev-low); }
+
+/* Admin "open findings by severity" highlight pills: padded, slightly smaller
+   number, so the count breathes inside its colored chip. */
+.sev-pills { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.sev-pill {
+  display: inline-block; padding: 0.2rem 0.6rem; border-radius: var(--radius);
+  font-size: 0.85rem; font-weight: 500; color: #fff;
+}
+.sev-pill.sev-medium { color: #1f2328; } /* amber needs dark text for contrast */
 
 /* ── Inline SVG charts (server-rendered, no JS) ───────────────────────────────── */
 .chart { display: block; margin: 0.5rem 0 0.25rem; max-width: 100%; }

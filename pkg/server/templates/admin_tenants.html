@@ -10,7 +10,7 @@
       <button class="btn secondary" type="submit">Search</button>
     </form>
     <table>
-      <thead><tr><th>Email</th><th>Plan</th><th>Status</th><th>Min severity</th><th>Created</th></tr></thead>
+      <thead><tr><th>Email</th><th>Plan</th><th>Status</th><th>Min severity</th><th class="num">Images</th><th>Last login</th><th>Created</th></tr></thead>
       <tbody>
         {{range .Tenants}}
         <tr>
@@ -18,10 +18,12 @@
           <td>{{.Plan}}</td>
           <td>{{if eq .Status "suspended"}}<span class="pill danger">suspended</span>{{else}}<span class="pill">active</span>{{end}}</td>
           <td class="muted">{{if .MinSeverity}}{{.MinSeverity}}{{else}}(default){{end}}</td>
+          <td class="num">{{.ImageCount}}</td>
+          <td class="muted">{{if .LastLoginAt}}{{.LastLoginAt.Format "2006-01-02 15:04"}}{{else}}never{{end}}</td>
           <td class="muted">{{.CreatedAt.Format "2006-01-02"}}</td>
         </tr>
         {{else}}
-        <tr><td colspan="5" class="muted">No tenants match.</td></tr>
+        <tr><td colspan="7" class="muted">No tenants match.</td></tr>
         {{end}}
       </tbody>
     </table>
