@@ -21,7 +21,9 @@ import (
 )
 
 // maxSBOMBytes caps the decoded (and decompressed) SBOM size — untrusted input.
-const maxSBOMBytes = 20 << 20 // 20 MiB
+// Shared with the blob-read path (config.MaxSBOMBytes) so ingest and every
+// later read enforce one invariant.
+const maxSBOMBytes = config.MaxSBOMBytes
 
 // sbomStatusPending is the transient ingest state of a row whose bytes have not
 // yet been stored (see the pending→active lifecycle in handleSubmitSBOM).

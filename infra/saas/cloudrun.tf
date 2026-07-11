@@ -116,9 +116,11 @@ resource "google_cloud_run_v2_service" "serve" {
         mount_path = "/cloudsql"
       }
 
+      # Readiness gate: /ready pings Postgres, so an instance is not routed
+      # traffic until its DB is reachable (liveness /health stays dependency-free).
       startup_probe {
         http_get {
-          path = "/health"
+          path = "/ready"
         }
         initial_delay_seconds = 2
         period_seconds        = 3

@@ -12,6 +12,13 @@ import (
 	"time"
 )
 
+// MaxSBOMBytes caps the size of an SBOM anywhere it crosses a trust boundary:
+// the decoded/decompressed ingest body AND every read back from blob storage.
+// It is a single shared invariant so a corrupt, manually-replaced, or legacy
+// object can never expand past what ingest would have accepted and exhaust
+// scanner memory. 20 MiB comfortably fits real all-layers SBOMs.
+const MaxSBOMBytes = 20 << 20
+
 // GetEnv returns the value of key, or fallback if unset or empty.
 func GetEnv(key, fallback string) string {
 	if v, ok := os.LookupEnv(key); ok && v != "" {
@@ -132,6 +139,16 @@ func GitHubOAuthRedirectURL() string {
 // DebugEnabled reports whether debug-level logging is on (DEVRADAR_DEBUG).
 func DebugEnabled() bool {
 	return GetEnvBool("DEVRADAR_DEBUG")
+}
+
+// DevMode reports whether the service is running in development mode
+// (DEVRADAR_DEV_MODE, or implied by DEVRADAR_LOCAL_SBOMS which only makes sense
+// locally). Dev mode relaxes production guardrails — notably it permits logging
+// magic-link sign-in URLs when no email sender is configured. In production
+// (DevMode false) an unconfigured sender is a fatal startup error, so sign-in
+// links are never written to logs where they could be replayed.
+func DevMode() bool {
+	return GetEnvBool("DEVRADAR_DEV_MODE") || GetEnvBool("DEVRADAR_LOCAL_SBOMS")
 }
 
 // EnrichEnabled reports whether the scan job refreshes CVE risk enrichment

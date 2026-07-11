@@ -75,13 +75,36 @@ func (s *Store) Migrate(ctx context.Context) error {
 		}
 
 		slog.Info("applying migration", "version", version, "file", name)
-		if _, err := conn.ExecContext(ctx, string(data)); err != nil {
-			return fmt.Errorf("apply migration %q: %w", name, err)
+		// Apply the migration and record its version in ONE transaction on the
+		// advisory-locked connection. Postgres DDL is transactional, so a crash
+		// between the two statements can no longer leave a migration applied but
+		// unrecorded (which would re-run it next boot and make idempotency an
+		// undocumented permanent requirement). Either both land or neither does.
+		if err := applyOne(ctx, conn, name, version, string(data)); err != nil {
+			return err
 		}
-		if _, err := conn.ExecContext(ctx,
-			"INSERT INTO "+schemaVersionTable+" (version) VALUES ($1) ON CONFLICT DO NOTHING", version); err != nil {
-			return fmt.Errorf("record migration %d: %w", version, err)
-		}
+	}
+	return nil
+}
+
+// applyOne runs one migration's SQL and records its version atomically, in a
+// single transaction on the given (advisory-locked) connection.
+func applyOne(ctx context.Context, conn *sql.Conn, name string, version int, ddl string) error {
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin migration %q: %w", name, err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after Commit
+
+	if _, err := tx.ExecContext(ctx, ddl); err != nil {
+		return fmt.Errorf("apply migration %q: %w", name, err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		"INSERT INTO "+schemaVersionTable+" (version) VALUES ($1) ON CONFLICT DO NOTHING", version); err != nil {
+		return fmt.Errorf("record migration %d: %w", version, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration %q: %w", name, err)
 	}
 	return nil
 }

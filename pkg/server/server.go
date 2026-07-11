@@ -77,12 +77,18 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	defer func() { _ = blobs.Close() }()
 
-	// Magic-link email sender. Without SEND_API_KEY the link is logged, not sent.
+	// Magic-link email sender. Without a real SEND_API_KEY the link would be
+	// logged instead of sent — acceptable locally, but in production that writes
+	// replayable sign-in URLs to the logs, so refuse to start unless dev mode is
+	// explicitly enabled.
 	var email drnet.Sender
 	if key := config.SendAPIKey(); key != "" {
 		email = drnet.ResendSender{APIKey: key, From: config.EmailFrom()}
+	} else if config.DevMode() {
+		slog.Warn("dev mode: SEND_API_KEY not set; magic-link URLs will be logged, not emailed")
 	} else {
-		slog.Warn("SEND_API_KEY not set; magic-link URLs will be logged, not emailed")
+		return fmt.Errorf("SEND_API_KEY is not configured and DEVRADAR_DEV_MODE is not set: " +
+			"refusing to start in production with magic links logged instead of emailed")
 	}
 
 	// GitHub OAuth sign-in. Optional: without both client id and secret the UI
@@ -103,10 +109,27 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	db := s.store.DB()
 
-	// Health (unauthenticated; Cloud Run startup probe).
+	// Liveness (unauthenticated): cheap "the process is up" check. Never touches
+	// dependencies, so a slow/broken DB can't wedge the liveness signal and cause
+	// needless restarts.
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
+	})
+
+	// Readiness (unauthenticated): verifies the process can actually serve — it
+	// pings Postgres with a short timeout. This is the Cloud Run startup probe
+	// target, so an instance is not routed traffic until its DB is reachable.
+	mux.HandleFunc("GET /ready", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := db.PingContext(ctx); err != nil {
+			slog.Warn("readiness check failed", "error", err)
+			http.Error(w, "not ready", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ready"))
 	})
 
 	// Ingest + read API — API-token auth.

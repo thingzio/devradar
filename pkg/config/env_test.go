@@ -60,6 +60,26 @@ func TestSendAPIKey_PlaceholderTreatedAsUnset(t *testing.T) {
 	}
 }
 
+func TestDevMode(t *testing.T) {
+	// Off by default.
+	t.Setenv("DEVRADAR_DEV_MODE", "")
+	t.Setenv("DEVRADAR_LOCAL_SBOMS", "")
+	if DevMode() {
+		t.Error("DevMode should be false with nothing set")
+	}
+	// Explicit flag.
+	t.Setenv("DEVRADAR_DEV_MODE", "true")
+	if !DevMode() {
+		t.Error("DEVRADAR_DEV_MODE=true should enable dev mode")
+	}
+	// Implied by local SBOM store.
+	t.Setenv("DEVRADAR_DEV_MODE", "")
+	t.Setenv("DEVRADAR_LOCAL_SBOMS", "1")
+	if !DevMode() {
+		t.Error("DEVRADAR_LOCAL_SBOMS should imply dev mode")
+	}
+}
+
 func TestDefaults(t *testing.T) {
 	if DatabaseURL() == "" {
 		t.Error("DatabaseURL should have a default")

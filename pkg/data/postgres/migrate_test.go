@@ -47,3 +47,43 @@ func TestEnsureEventPartitions_CreatesAheadAndIdempotent(t *testing.T) {
 		t.Error("2031_08 should not have been created (beyond the ahead window)")
 	}
 }
+
+// TestMigrate_Idempotent verifies re-running Migrate applies nothing new and
+// leaves exactly one recorded version per migration file. With migration+record
+// now atomic, a re-run is a clean no-op — no duplicate version rows, no
+// re-applied DDL.
+func TestMigrate_Idempotent(t *testing.T) {
+	st := testStore(t) // New() already ran Migrate once on connect
+	ctx := context.Background()
+
+	rowsBefore := func() int {
+		var n int
+		if err := st.DB().QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM devradar_schema_version`).Scan(&n); err != nil {
+			t.Fatalf("count versions: %v", err)
+		}
+		return n
+	}
+	before := rowsBefore()
+
+	// Re-run: must be a no-op (every version already recorded).
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("re-run migrate: %v", err)
+	}
+	after := rowsBefore()
+	if after != before {
+		t.Errorf("schema_version rows changed on re-run: before=%d after=%d", before, after)
+	}
+
+	// No duplicate versions (the atomic apply+record guarantees one row each).
+	var dupes int
+	if err := st.DB().QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM (
+			SELECT version FROM devradar_schema_version GROUP BY version HAVING COUNT(*) > 1
+		) d`).Scan(&dupes); err != nil {
+		t.Fatalf("check dupes: %v", err)
+	}
+	if dupes != 0 {
+		t.Errorf("found %d duplicated migration versions", dupes)
+	}
+}

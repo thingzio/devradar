@@ -55,7 +55,8 @@ func New(ctx context.Context) (*Client, error) {
 // Close releases the underlying client.
 func (c *Client) Close() error { return c.sc.Close() }
 
-// Fetch reads the object at a gs://bucket/key URI.
+// Fetch reads the object at a gs://bucket/key URI, bounded to config.MaxSBOMBytes
+// so a corrupt or manually-replaced object can't exhaust scanner memory.
 func (c *Client) Fetch(ctx context.Context, objectPath string) ([]byte, error) {
 	bucket, key, err := parseGSURI(objectPath)
 	if err != nil {
@@ -66,9 +67,26 @@ func (c *Client) Fetch(ctx context.Context, objectPath string) ([]byte, error) {
 		return nil, fmt.Errorf("open %s: %w", objectPath, err)
 	}
 	defer func() { _ = r.Close() }()
-	b, err := io.ReadAll(r)
+	b, err := readBounded(r)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", objectPath, err)
+	}
+	return b, nil
+}
+
+// readBounded reads at most config.MaxSBOMBytes from r, returning an error if
+// the source exceeds the cap. It reads one byte past the limit to distinguish
+// "exactly at the cap" (ok) from "over the cap" (rejected). This is the same
+// bounded-read invariant ingest applies to untrusted HTTP bodies, enforced here
+// at the storage trust boundary for objects that may predate the cap or have
+// been replaced out of band.
+func readBounded(r io.Reader) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(r, config.MaxSBOMBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > config.MaxSBOMBytes {
+		return nil, fmt.Errorf("object exceeds %d-byte SBOM limit", config.MaxSBOMBytes)
 	}
 	return b, nil
 }
@@ -118,9 +136,16 @@ func (l LocalStore) Put(_ context.Context, objectPath string, data []byte) error
 	return os.WriteFile(p, data, 0o600)
 }
 
-// Fetch reads back what Put wrote.
+// Fetch reads back what Put wrote, bounded to config.MaxSBOMBytes (same
+// invariant as the GCS path) so a manually-replaced local file can't blow up
+// the scanner.
 func (l LocalStore) Fetch(_ context.Context, objectPath string) ([]byte, error) {
-	return os.ReadFile(l.pathFor(objectPath))
+	f, err := os.Open(l.pathFor(objectPath))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return readBounded(f)
 }
 
 // Close is a no-op; LocalStore holds no resources. Present so LocalStore
