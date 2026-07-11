@@ -12,6 +12,79 @@ import (
 	"github.com/thingzio/devradar/pkg/data/postgres"
 )
 
+func TestComparisonReadyRepositoryCount_DistinctActiveDigestsAndTenantIsolation(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	tenantID, first := seedTenantAndSBOM(t, st)
+	readyRepository := "registry.test/comparison-ready-" + randID(t)[:8]
+	if _, err := st.DB().ExecContext(ctx,
+		`UPDATE devradar_sbom SET repository=$2 WHERE id=$1`, first.ID, readyRepository); err != nil {
+		t.Fatal(err)
+	}
+
+	duplicateDigest := *first
+	duplicateDigest.ID = randID(t) + randID(t)
+	duplicateDigest.Repository = readyRepository
+	duplicateDigest.Format = "spdx"
+	duplicateDigest.ObjectPath += "/spdx"
+	if _, _, _, err := st.UpsertSBOM(ctx, &duplicateDigest); err != nil {
+		t.Fatalf("seed duplicate digest: %v", err)
+	}
+	secondDigest := comparisonSBOM(t, tenantID, readyRepository, "v2", time.Now().UTC())
+	if _, _, _, err := st.UpsertSBOM(ctx, secondDigest); err != nil {
+		t.Fatalf("seed second digest: %v", err)
+	}
+
+	singleRepository := "registry.test/comparison-single-" + randID(t)[:8]
+	single := comparisonSBOM(t, tenantID, singleRepository, "v1", time.Now().UTC())
+	if _, _, _, err := st.UpsertSBOM(ctx, single); err != nil {
+		t.Fatalf("seed single-digest repository: %v", err)
+	}
+	archived := comparisonSBOM(t, tenantID, singleRepository, "archived", time.Now().UTC())
+	archived.Status = "archived"
+	if _, _, _, err := st.UpsertSBOM(ctx, archived); err != nil {
+		t.Fatalf("seed archived digest: %v", err)
+	}
+
+	foreignTenantID, foreignFirst := seedTenantAndSBOM(t, st)
+	foreignRepository := "registry.test/comparison-foreign-" + randID(t)[:8]
+	if _, err := st.DB().ExecContext(ctx,
+		`UPDATE devradar_sbom SET repository=$2 WHERE id=$1`, foreignFirst.ID, foreignRepository); err != nil {
+		t.Fatal(err)
+	}
+	foreignSecond := comparisonSBOM(t, foreignTenantID, foreignRepository, "v2", time.Now().UTC())
+	if _, _, _, err := st.UpsertSBOM(ctx, foreignSecond); err != nil {
+		t.Fatalf("seed foreign second digest: %v", err)
+	}
+
+	var emptyTenantID string
+	if err := st.DB().QueryRowContext(ctx,
+		`INSERT INTO devradar_tenant (email) VALUES ($1) RETURNING id`,
+		"empty-"+randID(t)[:8]+"@example.com").Scan(&emptyTenantID); err != nil {
+		t.Fatalf("seed empty tenant: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name     string
+		tenantID string
+		want     int
+	}{
+		{name: "tenant", tenantID: tenantID, want: 1},
+		{name: "foreign tenant", tenantID: foreignTenantID, want: 1},
+		{name: "empty tenant", tenantID: emptyTenantID, want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := st.ComparisonReadyRepositoryCount(ctx, tc.tenantID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("comparison-ready repository count = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCompareSBOMs_ExcludesVEXSuppressedFindings(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()

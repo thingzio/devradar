@@ -74,6 +74,23 @@ type comparisonFindingState struct {
 	KEV bool
 }
 
+func (s *Store) ComparisonReadyRepositoryCount(ctx context.Context, tenantID string) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM (
+			SELECT repository
+			FROM devradar_sbom
+			WHERE tenant_id=$1 AND status='active'
+			GROUP BY repository
+			HAVING count(DISTINCT digest) >= 2
+		) ready`, tenantID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count comparison-ready repositories: %w", err)
+	}
+	return count, nil
+}
+
 // CompareSBOMs compares immutable evidence for two tenant-owned SBOMs in the
 // same repository. Scanner twins are collapsed by finding_id.
 func (s *Store) CompareSBOMs(ctx context.Context, tenantID, fromID, toID string) (*SBOMComparison, error) {
