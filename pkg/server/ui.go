@@ -170,7 +170,7 @@ func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	render(w, "landing.html", map[string]any{
-		"Title":       "Sign in",
+		"Title":       "Continuous SBOM security posture",
 		"SignedIn":    false,
 		"Error":       r.URL.Query().Get("error"),
 		"Sent":        r.URL.Query().Get("sent") == "1",
