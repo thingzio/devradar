@@ -79,9 +79,9 @@ func TestAdminMetricQueries(t *testing.T) {
 			aligner:  `aggregation.perSeriesAligner=ALIGN_MEAN`,
 		},
 		{
-			metric:   `cloudsql.googleapis.com/database/network/connections`,
+			metric:   `cloudsql.googleapis.com/database/postgresql/num_backends_by_state`,
 			resource: `resource.type="cloudsql_database"`,
-			identity: `resource.labels.database_id="project-test:sql-test"`,
+			identity: `resource.labels.database_id="project-test:sql-test" AND metric.labels.state="active"`,
 			aligner:  `aggregation.perSeriesAligner=ALIGN_MAX`,
 		},
 		{

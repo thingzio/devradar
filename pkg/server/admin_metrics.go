@@ -236,7 +236,7 @@ func adminMetricQueries(cfg *adminMetricsConfig) []metricQuery {
 		},
 		{
 			label:  "database: active connections",
-			filter: fmt.Sprintf(`resource.type="cloudsql_database" AND resource.labels.database_id="%s" AND metric.type="cloudsql.googleapis.com/database/network/connections"`, databaseID),
+			filter: fmt.Sprintf(`resource.type="cloudsql_database" AND resource.labels.database_id="%s" AND metric.labels.state="active" AND metric.type="cloudsql.googleapis.com/database/postgresql/num_backends_by_state"`, databaseID),
 			params: align + "&aggregation.perSeriesAligner=ALIGN_MAX",
 		},
 		{
