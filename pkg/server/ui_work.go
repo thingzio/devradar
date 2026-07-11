@@ -44,8 +44,13 @@ func (s *Server) handleWorkQueue(w http.ResponseWriter, r *http.Request) {
 	}
 	v := workView{
 		Title: "What should I fix?", SignedIn: true, Tab: "work", Email: tn.Email,
-		AvatarURL: tn.AvatarURL, Version: s.opts.Version, NextCursor: next,
+		AvatarURL: tn.AvatarURL, Version: s.opts.Version, NextCursor: next, Items: workRows(items),
 	}
+	render(w, "work.html", v)
+}
+
+func workRows(items []postgres.FleetCVE) []workRow {
+	rows := make([]workRow, 0, len(items))
 	for _, item := range items {
 		agreement := "Single-scanner signal"
 		if item.ScannerCount > 1 {
@@ -55,11 +60,11 @@ func (s *Server) handleWorkQueue(w http.ResponseWriter, r *http.Request) {
 		if !item.FirstSeen.IsZero() {
 			age = "first seen " + humanizeSince(time.Since(item.FirstSeen))
 		}
-		v.Items = append(v.Items, workRow{
+		rows = append(rows, workRow{
 			CVE: item.CVE, Severity: item.WorstSev, KEV: item.KEV, Fixable: item.Fixable,
 			EPSS: formatEPSS(item.EPSS), ImageCount: item.ImageCount, FindingCount: item.FindingCount,
 			Age: age, Agreement: agreement, Repositories: item.Repositories, AllVEXd: item.AllVEXd,
 		})
 	}
-	render(w, "work.html", v)
+	return rows
 }

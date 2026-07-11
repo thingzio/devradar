@@ -1,19 +1,39 @@
 package server
 
 import (
+	"fmt"
 	"html/template"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
+	"github.com/thingzio/devradar/pkg/data/postgres"
 	"github.com/thingzio/devradar/pkg/middleware"
 )
 
 // cvePattern recognizes a CVE id so the unified search can route CVE lookups to
 // the CVE view and everything else to an image search.
 var cvePattern = regexp.MustCompile(`(?i)^CVE-\d{4}-\d{4,}$`)
+
+type overviewTrendSignal struct {
+	Empty       bool
+	HasData     bool
+	HasPrevious bool
+	Date        string
+	Total       int
+	Delta       int
+	Comparison  string
+	Change      string
+}
+
+type overviewLicenseSignal struct {
+	Configured bool
+	Violations int
+	Packages   int
+}
 
 type overviewView struct {
 	Title     string
@@ -35,9 +55,17 @@ type overviewView struct {
 	SevChart   template.HTML // inline SVG: fleet severity composition (donut)
 	RemedChart template.HTML // inline SVG: fixable-now vs open, per severity
 	// Top-risk images teaser.
-	TopImages         []imageRow
-	Alerts            []alertRow
-	AlertsUnavailable bool
+	TopImages             []imageRow
+	Alerts                []alertRow
+	AlertsUnavailable     bool
+	WorkItems             []workRow
+	WorkUnavailable       bool
+	Trend                 overviewTrendSignal
+	TrendUnavailable      bool
+	License               overviewLicenseSignal
+	LicenseUnavailable    bool
+	ComparisonReady       int
+	ComparisonUnavailable bool
 }
 
 // handleOverview is the signed-in landing tab: fleet headline stats, a unified
@@ -63,7 +91,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		Title: "Overview", SignedIn: true, Tab: "overview", Email: tn.Email, AvatarURL: tn.AvatarURL, Version: s.opts.Version,
 		ImageCount: fs.Images, TotalCount: fs.Total, CriticalCT: fs.Critical, HighCT: fs.High,
 		KEVCount: fs.KEV, FixablePct: pct(fs.Fixable, fs.Total), FailureCT: fs.Failures,
-		HasData:    fs.Total > 0,
+		HasData:    fs.Images > 0,
 		ScanStatus: scanStatus(fs.LastScanAt),
 	}
 	v.SevChart = donutChart([]slice{
@@ -96,7 +124,79 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 			v.Alerts = append(v.Alerts, makeAlertRow(item))
 		}
 	}
+
+	work, _, err := s.store.FleetCVEs(r.Context(), tn.ID, min,
+		postgres.FleetCVEFilter{}, "risk", "desc", "", 3)
+	if err != nil {
+		slog.Warn("load overview work", "tenant_id", tn.ID, "error", err)
+		v.WorkUnavailable = true
+	} else {
+		v.WorkItems = workRows(work)
+	}
+
+	points, err := s.store.TenantPostureTrend(r.Context(), tn.ID, 30)
+	if err != nil {
+		slog.Warn("load overview trend", "tenant_id", tn.ID, "error", err)
+		v.TrendUnavailable = true
+	} else {
+		v.Trend = overviewTrend(points)
+	}
+
+	policy, err := s.store.GetLicensePolicy(r.Context(), tn.ID)
+	if err != nil {
+		slog.Warn("load overview license policy", "tenant_id", tn.ID, "error", err)
+		v.LicenseUnavailable = true
+	} else {
+		v.License.Configured = !policy.IsEmpty()
+		stats, err := s.store.FleetLicenseStats(r.Context(), tn.ID, policy)
+		if err != nil {
+			slog.Warn("load overview license stats", "tenant_id", tn.ID, "error", err)
+			v.LicenseUnavailable = true
+		} else {
+			v.License.Violations = stats.Violations
+			v.License.Packages = stats.Packages
+		}
+	}
+
+	v.ComparisonReady, err = s.store.ComparisonReadyRepositoryCount(r.Context(), tn.ID)
+	if err != nil {
+		slog.Warn("load overview comparison readiness", "tenant_id", tn.ID, "error", err)
+		v.ComparisonUnavailable = true
+	}
 	render(w, "overview.html", v)
+}
+
+func overviewTrend(points []postgres.TenantPosturePoint) overviewTrendSignal {
+	if len(points) == 0 {
+		return overviewTrendSignal{Empty: true}
+	}
+	current := points[len(points)-1]
+	out := overviewTrendSignal{
+		HasData: true,
+		Date:    current.Date.Format(time.DateOnly),
+		Total:   current.Total,
+	}
+	if len(points) == 1 {
+		out.Comparison = "No prior snapshot"
+		return out
+	}
+	previous := points[len(points)-2]
+	out.HasPrevious = true
+	out.Delta = current.Total - previous.Total
+	switch {
+	case out.Delta > 0:
+		out.Change = fmt.Sprintf("%d more findings", out.Delta)
+	case out.Delta < 0:
+		out.Change = fmt.Sprintf("%d fewer findings", -out.Delta)
+	default:
+		out.Change = "No change"
+	}
+	if previous.Date.AddDate(0, 0, 1).Equal(current.Date) {
+		out.Comparison = "Day-over-day change"
+	} else {
+		out.Comparison = "Change since " + previous.Date.Format(time.DateOnly)
+	}
+	return out
 }
 
 // handleSearch routes a unified query: a CVE id jumps to that CVE's detail page;

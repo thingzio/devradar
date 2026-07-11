@@ -467,6 +467,42 @@ table.images td { vertical-align: middle; }
 .chart-row .chart-col { flex: 1 1 0; min-width: 0; margin-bottom: 0; }
 @media (max-width: 820px) { .chart-row { flex-direction: column; } }
 
+/* Overview launchpad: a broad evidence ledger paired with a compact signal
+   rail, so the next remediation choice dominates without duplicating tabs. */
+.overview-section-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem;
+  margin: 1.5rem 0 0.75rem;
+}
+.overview-section-head h2 { font-size: 1.15rem; }
+.overview-action-grid {
+  display: grid; grid-template-columns: minmax(0, 2fr) minmax(15rem, 0.8fr);
+  gap: 1rem; align-items: start; margin-bottom: 1rem;
+}
+.overview-action-grid .card { margin-bottom: 0; }
+.overview-work-preview { min-width: 0; }
+.overview-work-list { display: flex; flex-direction: column; margin-top: 0.5rem; }
+.overview-work-item {
+  display: grid; grid-template-columns: 8.5rem minmax(0, 1fr) auto; gap: 1rem;
+  align-items: center; padding: 0.9rem 0; border-bottom: 1px solid var(--border);
+}
+.overview-work-item:last-child { border-bottom: 0; padding-bottom: 0; }
+.overview-work-item.vexed { opacity: 0.68; }
+.overview-work-priority { display: flex; flex-direction: column; align-items: flex-start; gap: 0.35rem; font-size: 0.78rem; }
+.overview-work-main { min-width: 0; }
+.overview-work-main h3 { font-size: 1rem; margin: 0; }
+.overview-work-main p { color: var(--muted); font-size: 0.84rem; margin-top: 0.15rem; }
+.overview-work-open { white-space: nowrap; }
+.overview-signal-stack { display: flex; flex-direction: column; gap: 0.75rem; }
+.overview-signal-stack .overview-signal { padding: 0.9rem 1rem; }
+.overview-signal-stack .card-head { margin-bottom: 0.35rem; }
+.overview-signal-stack .card-head h2 { font-size: 0.95rem; }
+.overview-signal-stack p { margin: 0.2rem 0; }
+.overview-signal-value { font-size: 1.45rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2; }
+.overview-signal-value span { color: var(--muted); font-size: 0.8rem; font-weight: 500; letter-spacing: 0; }
+.overview-signal-detail { font-weight: 600; }
+.overview-signal-links { display: flex; flex-wrap: wrap; gap: 0.4rem 0.8rem; }
+@media (max-width: 820px) { .overview-action-grid { grid-template-columns: 1fr; } }
+
 /* Fleet trends: observed points remain the focus; exact values stay available
    in the horizontally scrollable table on narrow screens. */
 .trend-window { display: flex; align-items: center; gap: 0.55rem; }
@@ -735,5 +771,8 @@ table.findings td { vertical-align: middle; }
   .work-item { grid-template-columns: 1fr; gap: 0.75rem; }
   .work-priority { flex-direction: row; align-items: center; flex-wrap: wrap; }
   .work-open { justify-self: start; }
+  .overview-work-item { grid-template-columns: 1fr; gap: 0.5rem; }
+  .overview-work-priority { flex-direction: row; align-items: center; flex-wrap: wrap; }
+  .overview-work-open { justify-self: start; }
   .compare-grid { grid-template-columns: 1fr; }
 }
