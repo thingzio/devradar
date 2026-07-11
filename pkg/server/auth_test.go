@@ -167,10 +167,12 @@ func TestSetMinSeverity_ValidAndInvalid(t *testing.T) {
 	ctx := context.Background()
 
 	post := func(val string) int {
+		csrfCookie, token := csrfFor(t, h, cookie, "/tokens")
 		req := httptest.NewRequest(http.MethodPost, "/settings/min-severity",
-			strings.NewReader("min_severity="+val))
+			strings.NewReader("min_severity="+val+"&csrf_token="+token))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		req.AddCookie(cookie)
+		req.AddCookie(csrfCookie)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		return rec.Code

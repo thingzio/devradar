@@ -16,6 +16,7 @@
     <div class="card-head"><h2>API tokens</h2></div>
     <p class="muted">For submitting SBOMs from CI.</p>
     <form class="row" method="post" action="/tokens">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
       <input type="text" name="name" placeholder="Token name (e.g. ci-prod)" maxlength="80">
       <button class="btn" type="submit">Create token</button>
     </form>
@@ -28,7 +29,7 @@
           <td>{{.Name}}</td>
           <td>{{.CreatedAt.Format "2006-01-02"}}</td>
           <td>{{if .LastUsed}}{{.LastUsed.Format "2006-01-02"}}{{else}}<span class="muted">never</span>{{end}}</td>
-          <td><form class="inline" method="post" action="/tokens/{{.ID}}/revoke"><button class="btn danger" type="submit">Revoke</button></form></td>
+          <td><form class="inline" method="post" action="/tokens/{{.ID}}/revoke"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><button class="btn danger" type="submit">Revoke</button></form></td>
         </tr>
         {{else}}
         <tr><td colspan="4" class="muted">No tokens yet.</td></tr>
@@ -41,6 +42,7 @@
     <div class="card-head"><h2>Severity threshold</h2></div>
     <p class="muted">Default minimum severity for the read API and dashboard. Unrated (<code>unknown</code>) findings are always shown.</p>
     <form class="row" method="post" action="/settings/min-severity">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
       <select name="min_severity">
         {{$cur := .MinSeverity}}
         {{range .Severities}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}

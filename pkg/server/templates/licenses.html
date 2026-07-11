@@ -40,6 +40,7 @@
     <div class="card-head"><h2>Compliance policy</h2>{{if .PolicyActive}}<span class="pill">active</span>{{end}}</div>
     <p class="muted">Deny license categories to flag non-compliant packages. Policy is opt-in — with nothing denied, this view is descriptive only. Evaluation is live: changing the policy re-flags packages instantly.</p>
     <form method="post" action="/settings/license-policy">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
       <fieldset class="license-cats">
         {{range .Categories}}
         <label class="license-cat">

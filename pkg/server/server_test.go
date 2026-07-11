@@ -47,6 +47,41 @@ func testServer(t *testing.T) (*server.Server, *postgres.Store) {
 	return srv, st
 }
 
+// csrfFor performs a GET of path with the session cookie, extracts the CSRF
+// cookie the page set, and scrapes the hidden csrf_token value out of the
+// rendered HTML — the exact pair a browser would submit. Returns the cookie and
+// the form token so a follow-up POST can pass ValidateCSRF.
+func csrfFor(t *testing.T, h http.Handler, session *http.Cookie, path string) (*http.Cookie, string) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.AddCookie(session)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	var csrfCookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == middleware.CSRFCookieName() {
+			csrfCookie = c
+		}
+	}
+	if csrfCookie == nil {
+		t.Fatalf("no CSRF cookie set by GET %s (status %d)", path, rec.Code)
+	}
+	// Scrape value="..." from the first csrf_token hidden input.
+	body := rec.Body.String()
+	marker := `name="csrf_token" value="`
+	i := strings.Index(body, marker)
+	if i < 0 {
+		t.Fatalf("no csrf_token field in GET %s", path)
+	}
+	rest := body[i+len(marker):]
+	j := strings.IndexByte(rest, '"')
+	if j < 0 {
+		t.Fatalf("malformed csrf_token field in GET %s", path)
+	}
+	return csrfCookie, rest[:j]
+}
+
 func seedTenantToken(t *testing.T, st *postgres.Store) (tenantID, token string) {
 	t.Helper()
 	ctx := context.Background()
@@ -361,21 +396,29 @@ func TestUIArchive(t *testing.T) {
 
 	// Archive a single SBOM (digest) via the UI → 303 redirect.
 	redisID := submit("redis.syft.cdx.json")
-	postUI := func(path, form string) *httptest.ResponseRecorder {
-		rq := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form))
+	// postUI submits a CSRF-protected tenant form: fetch the token from getPath,
+	// then POST with the matching cookie + hidden field.
+	postUI := func(getPath, postPath, form string) *httptest.ResponseRecorder {
+		csrfCookie, token := csrfFor(t, h, cookie, getPath)
+		if form != "" {
+			form += "&"
+		}
+		form += "csrf_token=" + token
+		rq := httptest.NewRequest(http.MethodPost, postPath, strings.NewReader(form))
 		rq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		rq.AddCookie(cookie)
+		rq.AddCookie(csrfCookie)
 		rc := httptest.NewRecorder()
 		h.ServeHTTP(rc, rq)
 		return rc
 	}
-	if rc := postUI("/sboms/"+redisID+"/archive", ""); rc.Code != http.StatusSeeOther {
+	if rc := postUI("/sboms/"+redisID, "/sboms/"+redisID+"/archive", ""); rc.Code != http.StatusSeeOther {
 		t.Errorf("archive sbom UI = %d, want 303", rc.Code)
 	}
 
 	// Archive a whole image (repository) via the UI → 303, and it drops from images.
 	_ = submit("nginx.syft.cdx.json")
-	if rc := postUI("/images/archive", "repo=nginx"); rc.Code != http.StatusSeeOther {
+	if rc := postUI("/images?repo=nginx", "/images/archive", "repo=nginx"); rc.Code != http.StatusSeeOther {
 		t.Errorf("archive repo UI = %d, want 303", rc.Code)
 	}
 	getImages := httptest.NewRequest(http.MethodGet, "/v1/images", nil)
@@ -715,12 +758,17 @@ func TestVEX_UIUpload(t *testing.T) {
 		t.Fatalf("seed finding: %v", err)
 	}
 
-	// Build a multipart upload with the VEX doc.
+	// Obtain a CSRF token from the CVEs page (the multipart upload validates it
+	// via middleware.CheckCSRF after parsing the form).
+	csrfCookie, token := csrfFor(t, h, cookie, "/cves")
+
+	// Build a multipart upload with the CSRF field first, then the VEX doc.
 	doc := `{"@context":"https://openvex.dev/ns","author":"a","statements":[
 		{"vulnerability":"CVE-UI-1","products":[{"@id":"` + digest + `"}],
 		 "status":"not_affected","justification":"component_not_present"}]}`
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("csrf_token", token)
 	fw, _ := mw.CreateFormFile("vex", "vex.json")
 	_, _ = fw.Write([]byte(doc))
 	_ = mw.Close()
@@ -728,6 +776,7 @@ func TestVEX_UIUpload(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/vex/upload", &buf)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	req.AddCookie(cookie)
+	req.AddCookie(csrfCookie)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusSeeOther {

@@ -71,6 +71,7 @@ func sortHeader(label, key, base, qs, sortParam, dirParam, activeSort, activeDir
 const (
 	sessionTTL    = 7 * 24 * time.Hour
 	loginTokenTTL = 15 * time.Minute
+	tokenFlashTTL = 2 * time.Minute // one-time API-token display window
 	loginPath     = "/"
 )
 
@@ -99,23 +100,27 @@ func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /openapi.yaml", s.handleOpenAPISpec)
 
 	authed := middleware.RequireAuth(db, loginPath)
+	csrf := middleware.ValidateCSRF
 	mux.Handle("GET /overview", authed(http.HandlerFunc(s.handleOverview)))
 	mux.Handle("GET /search", authed(http.HandlerFunc(s.handleSearch)))
 	mux.Handle("GET /dashboard", authed(http.HandlerFunc(s.handleDashboard)))
 	mux.Handle("GET /images", authed(http.HandlerFunc(s.handleImageDetail)))
 	mux.Handle("GET /sboms/{id}", authed(http.HandlerFunc(s.handleSBOMDetail)))
-	mux.Handle("POST /sboms/{id}/archive", authed(http.HandlerFunc(s.handleArchiveSBOMUI)))
-	mux.Handle("POST /images/archive", authed(http.HandlerFunc(s.handleArchiveRepoUI)))
+	mux.Handle("POST /sboms/{id}/archive", authed(csrf(http.HandlerFunc(s.handleArchiveSBOMUI))))
+	mux.Handle("POST /images/archive", authed(csrf(http.HandlerFunc(s.handleArchiveRepoUI))))
 	mux.Handle("GET /cves", authed(http.HandlerFunc(s.handleCVEList)))
 	mux.Handle("GET /cves/{cve}", authed(http.HandlerFunc(s.handleCVEDetail)))
 	mux.Handle("GET /licenses", authed(http.HandlerFunc(s.handleLicensesPage)))
-	mux.Handle("POST /settings/license-policy", authed(http.HandlerFunc(s.handleSetLicensePolicy)))
+	mux.Handle("POST /settings/license-policy", authed(csrf(http.HandlerFunc(s.handleSetLicensePolicy))))
 	mux.Handle("GET /submit", authed(http.HandlerFunc(s.handleSubmitGuide)))
+	// VEX upload is a multipart file POST: it cannot use the ValidateCSRF wrapper
+	// (which caps the body at 4KB), so the handler parses its own form and calls
+	// middleware.CheckCSRF after ParseMultipartForm.
 	mux.Handle("POST /vex/upload", authed(http.HandlerFunc(s.handleUploadVEX)))
 	mux.Handle("GET /tokens", authed(http.HandlerFunc(s.handleTokensPage)))
-	mux.Handle("POST /tokens", authed(http.HandlerFunc(s.handleCreateToken)))
-	mux.Handle("POST /tokens/{id}/revoke", authed(http.HandlerFunc(s.handleRevokeToken)))
-	mux.Handle("POST /settings/min-severity", authed(http.HandlerFunc(s.handleSetMinSeverity)))
+	mux.Handle("POST /tokens", authed(csrf(http.HandlerFunc(s.handleCreateToken))))
+	mux.Handle("POST /tokens/{id}/revoke", authed(csrf(http.HandlerFunc(s.handleRevokeToken))))
+	mux.Handle("POST /settings/min-severity", authed(csrf(http.HandlerFunc(s.handleSetMinSeverity))))
 
 	s.registerAdmin(mux, db)
 }
@@ -355,13 +360,21 @@ func (s *Server) handleTokensPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to list tokens", http.StatusInternalServerError)
 		return
 	}
+	// Read-and-delete the one-time token flash (set by handleCreateToken). Shown
+	// exactly once, never carried in the URL. A failure to read is non-fatal — the
+	// page still renders, just without the banner.
+	newToken, err := tenant.ConsumeTokenFlash(r.Context(), s.store.DB(), tn.ID)
+	if err != nil {
+		slog.Error("consume token flash", "error", err)
+	}
 	render(w, "tokens.html", map[string]any{
 		"Title":       "Tokens & settings",
 		"SignedIn":    true,
 		"Email":       tn.Email,
 		"AvatarURL":   tn.AvatarURL,
 		"Tokens":      tokens,
-		"NewToken":    r.URL.Query().Get("new"), // shown once after creation
+		"NewToken":    newToken, // shown once after creation
+		"CSRFToken":   issueCSRF(w),
 		"MinSeverity": tenantMinSeverity(tn),
 		"Severities":  []string{"critical", "high", "medium", "low", "negligible"},
 		"Version":     s.opts.Version,
@@ -379,7 +392,15 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to create token", http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/tokens?new="+raw, http.StatusSeeOther)
+	// Stash the raw token server-side for one-time display and redirect to a clean
+	// URL — never put the secret in the query string (browser history, Referer,
+	// logs). The /tokens page reads-and-deletes it once.
+	if err := tenant.StashTokenFlash(r.Context(), s.store.DB(), tn.ID, raw, tokenFlashTTL); err != nil {
+		slog.Error("stash token flash", "error", err)
+		http.Error(w, "failed to create token", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/tokens", http.StatusSeeOther)
 }
 
 func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {

@@ -42,6 +42,7 @@ type imageDetailView struct {
 	AvatarURL   string
 	Version     string
 	MinSeverity string
+	CSRFToken   string // double-submit token for the archive form
 
 	Repository  string
 	Short       string
@@ -197,6 +198,7 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 		AvatarURL:         tn.AvatarURL,
 		Version:           s.opts.Version,
 		MinSeverity:       min,
+		CSRFToken:         issueCSRF(w),
 		Repository:        repo,
 		Short:             lastPath(repo),
 		Versions:          sum.Versions,

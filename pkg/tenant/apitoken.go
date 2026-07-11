@@ -85,6 +85,42 @@ func ListAPITokens(ctx context.Context, db *sql.DB, tenantID string) ([]APIToken
 	return out, rows.Err()
 }
 
+// StashTokenFlash stores a freshly-minted raw token for one-time display,
+// keyed to the tenant with a short TTL. It replaces any prior unread flash for
+// the tenant (a new token supersedes an old unshown one). The raw token is
+// never written anywhere else — this row is deleted the moment it is read
+// (ConsumeTokenFlash). ttl bounds how long an unread flash may linger.
+func StashTokenFlash(ctx context.Context, db *sql.DB, tenantID, rawToken string, ttl time.Duration) error {
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO devradar_token_flash (tenant_id, value, expires_at)
+		VALUES ($1, $2, now() + $3::interval)
+		ON CONFLICT (tenant_id) DO UPDATE
+		SET value = EXCLUDED.value, expires_at = EXCLUDED.expires_at`,
+		tenantID, rawToken, ttl.String()); err != nil {
+		return fmt.Errorf("stash token flash: %w", err)
+	}
+	return nil
+}
+
+// ConsumeTokenFlash returns and deletes a tenant's one-time token flash, if any
+// unexpired one exists (delete-and-return, so it is shown at most once). Returns
+// an empty string with no error when there is nothing to show — the common case
+// on an ordinary /tokens visit.
+func ConsumeTokenFlash(ctx context.Context, db *sql.DB, tenantID string) (string, error) {
+	var raw string
+	err := db.QueryRowContext(ctx, `
+		DELETE FROM devradar_token_flash
+		WHERE tenant_id = $1 AND expires_at > now()
+		RETURNING value`, tenantID).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("consume token flash: %w", err)
+	}
+	return raw, nil
+}
+
 // RevokeAPIToken deletes a token owned by the tenant. Ownership is enforced in
 // the WHERE clause so one tenant can never revoke another's token.
 func RevokeAPIToken(ctx context.Context, db *sql.DB, tenantID, tokenID string) error {

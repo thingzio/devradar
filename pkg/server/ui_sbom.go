@@ -50,6 +50,7 @@ type sbomDetailView struct {
 	AvatarURL   string
 	Version     string
 	MinSeverity string
+	CSRFToken   string // double-submit token for the archive form
 
 	SBOMID      string
 	Repository  string
@@ -127,6 +128,7 @@ func (s *Server) handleSBOMDetail(w http.ResponseWriter, r *http.Request) {
 		AvatarURL:      tn.AvatarURL,
 		Version:        s.opts.Version,
 		MinSeverity:    min,
+		CSRFToken:      issueCSRF(w),
 		SBOMID:         detail.SBOMID,
 		Repository:     repo,
 		Short:          lastPath(repo),

@@ -72,6 +72,11 @@ func CSRFTokenFromRequest(r *http.Request) string {
 // ValidateCSRF rejects mutating requests whose csrf_token form field does not
 // match the CSRF cookie (double-submit cookie pattern). GET/HEAD/OPTIONS pass
 // through unchanged.
+//
+// It caps the body at 4096 bytes before parsing the form, so it is suitable
+// only for small urlencoded forms. A handler that must read a large body itself
+// (e.g. a multipart file upload) should NOT be wrapped in this middleware —
+// after parsing its own form it should call CheckCSRF(r) directly.
 func ValidateCSRF(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -79,25 +84,29 @@ func ValidateCSRF(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-
-		cookieToken := CSRFTokenFromRequest(r)
 		// Bound the body before parsing the form. Handlers may set their own
 		// stricter limit; this is a safe ceiling for the token check.
 		r.Body = http.MaxBytesReader(w, r.Body, 4096)
-		formToken := r.FormValue(csrfFormField)
-
-		if cookieToken == "" || formToken == "" {
-			slog.Warn("csrf: missing token",
-				"path", r.URL.Path, "remote", r.RemoteAddr,
-				"has_cookie", cookieToken != "", "has_form", formToken != "")
-			http.Error(w, "Forbidden: missing CSRF token", http.StatusForbidden)
-			return
-		}
-		if subtle.ConstantTimeCompare([]byte(cookieToken), []byte(formToken)) != 1 {
-			slog.Warn("csrf: token mismatch", "path", r.URL.Path, "remote", r.RemoteAddr)
-			http.Error(w, "Forbidden: invalid CSRF token", http.StatusForbidden)
+		if !CheckCSRF(r) {
+			slog.Warn("csrf: rejected", "path", r.URL.Path, "remote", r.RemoteAddr)
+			http.Error(w, "Forbidden: invalid or missing CSRF token", http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// CheckCSRF reports whether the request carries a valid double-submit CSRF
+// token: a non-empty csrf_token form value that matches the CSRF cookie in
+// constant time. It reads the form value via r.FormValue, so a handler that has
+// already parsed a multipart form (file upload) can call it directly instead of
+// wrapping the route in ValidateCSRF (which would truncate the upload body).
+// Returns false if either token is missing or they differ.
+func CheckCSRF(r *http.Request) bool {
+	cookieToken := CSRFTokenFromRequest(r)
+	formToken := r.FormValue(csrfFormField)
+	if cookieToken == "" || formToken == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(cookieToken), []byte(formToken)) == 1
 }

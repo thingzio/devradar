@@ -45,6 +45,7 @@ type cveListView struct {
 	Email       string
 	AvatarURL   string
 	Version     string
+	CSRFToken   string // double-submit token for the VEX-upload form
 	MinSeverity string
 	Sort        string
 	Dir         string
@@ -86,6 +87,7 @@ func (s *Server) handleCVEList(w http.ResponseWriter, r *http.Request) {
 	}
 	v := cveListView{
 		Title: "CVEs", SignedIn: true, Tab: "cves", Email: tn.Email, AvatarURL: tn.AvatarURL, Version: s.opts.Version,
+		CSRFToken:   issueCSRF(w),
 		MinSeverity: min, Sort: q.Get("sort"), Dir: q.Get("dir"), NextCursor: next, HasData: len(cves) > 0,
 		FVex: filter.VEXState, FJust: filter.Justification, FKEV: filter.KEVOnly, FFixable: filter.FixableOnly,
 		Justifications: justifications,
@@ -173,6 +175,13 @@ func (s *Server) handleUploadVEX(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxVEXBytes+4096) // headroom for multipart framing
 	if err := r.ParseMultipartForm(maxVEXBytes + 1024); err != nil {
 		http.Redirect(w, r, "/cves?upload_err="+url.QueryEscape("file too large or unreadable"), http.StatusSeeOther)
+		return
+	}
+	// CSRF: this multipart route can't use the ValidateCSRF middleware (its 4KB
+	// body cap would truncate the upload), so validate the double-submit token
+	// against the parsed form here, after ParseMultipartForm.
+	if !middleware.CheckCSRF(r) {
+		http.Error(w, "Forbidden: invalid or missing CSRF token", http.StatusForbidden)
 		return
 	}
 	file, _, err := r.FormFile("vex")

@@ -41,13 +41,13 @@ func auditLog(action string, tn *tenant.Tenant, path, remote, detail string) {
 		"action", action, "admin", email, "path", path, "remote", remote, "detail", detail)
 }
 
-// adminCSRF mints a CSRF token, sets the double-submit cookie, and returns the
-// token for embedding as a hidden form field. Called by the GET pages that render
-// mutating forms.
-func adminCSRF(w http.ResponseWriter) string {
+// issueCSRF mints a CSRF token, sets the double-submit cookie, and returns the
+// token for embedding as a hidden form field. Called by every GET page (admin
+// and tenant) that renders a mutating form.
+func issueCSRF(w http.ResponseWriter) string {
 	token, err := middleware.GenerateCSRFToken()
 	if err != nil {
-		slog.Error("admin csrf token", "error", err)
+		slog.Error("csrf token", "error", err)
 		return ""
 	}
 	middleware.SetCSRFCookie(w, token)
@@ -170,7 +170,7 @@ func (s *Server) handleAdminScans(w http.ResponseWriter, r *http.Request) {
 
 	render(w, "admin_scans.html", s.adminBase(tn, "scans", map[string]any{
 		"Title":     "Admin — Scans",
-		"CSRFToken": adminCSRF(w),
+		"CSRFToken": issueCSRF(w),
 		"Runs":      runs,
 		"Freshness": freshness,
 		"Backlog":   backlog,
@@ -211,7 +211,7 @@ func (s *Server) handleAdminTenants(w http.ResponseWriter, r *http.Request) {
 
 	render(w, "admin_tenants.html", s.adminBase(tn, "tenants", map[string]any{
 		"Title":      "Admin — Tenants",
-		"CSRFToken":  adminCSRF(w),
+		"CSRFToken":  issueCSRF(w),
 		"Tenants":    tenants,
 		"Query":      query,
 		"Page":       page,
@@ -253,7 +253,7 @@ func (s *Server) handleAdminTenantDetail(w http.ResponseWriter, r *http.Request)
 
 	render(w, "admin_tenant.html", s.adminBase(tn, "tenants", map[string]any{
 		"Title":      "Admin — " + target.Email,
-		"CSRFToken":  adminCSRF(w),
+		"CSRFToken":  issueCSRF(w),
 		"T":          target,
 		"Summary":    summary,
 		"Tokens":     tokens,

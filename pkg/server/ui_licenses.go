@@ -18,6 +18,7 @@ type licensesView struct {
 	Email     string
 	AvatarURL string
 	Version   string
+	CSRFToken string // double-submit token for the policy form
 	HasData   bool
 	// Headline stats.
 	PackageCount int
@@ -68,6 +69,7 @@ func (s *Server) handleLicensesPage(w http.ResponseWriter, r *http.Request) {
 
 	v := licensesView{
 		Title: "Licenses", SignedIn: true, Tab: "licenses", Email: tn.Email, AvatarURL: tn.AvatarURL, Version: s.opts.Version,
+		CSRFToken:    issueCSRF(w),
 		HasData:      stats.Packages > 0,
 		PackageCount: stats.Packages,
 		Unlicensed:   stats.Unlicensed,
