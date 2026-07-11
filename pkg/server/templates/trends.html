@@ -1,0 +1,64 @@
+{{template "head" .}}
+{{template "nav" .}}
+<main class="page-content">
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">Fleet posture trends</h1>
+      <p class="sub">Recorded vulnerability debt across active tracked images. VEX-suppressed findings are excluded.</p>
+    </div>
+    <form class="trend-window" method="get" action="/trends">
+      <label for="trend-days">Window</label>
+      <select id="trend-days" name="days" data-autosubmit>
+        {{range .DayOptions}}<option value="{{.Value}}" {{if .Selected}}selected{{end}}>Last {{.Value}} days</option>{{end}}
+      </select>
+      <noscript><button class="btn secondary" type="submit">Apply</button></noscript>
+    </form>
+  </div>
+
+  {{if .HasData}}
+  <p class="trend-coverage">
+    Coverage began <time datetime="{{.CoverageStart}}">{{.CoverageStart}}</time>.
+    First snapshot in selected window <time datetime="{{.WindowFirstDate}}">{{.WindowFirstDate}}</time>.
+    Last snapshot in selected window <time datetime="{{.WindowLastDate}}">{{.WindowLastDate}}</time>.
+    Showing {{.SnapshotCount}} recorded {{if eq .SnapshotCount 1}}snapshot{{else}}snapshots{{end}}; missing days are not filled.
+  </p>
+  <section class="stats stats-5" aria-label="Latest recorded vulnerability debt">
+    {{range .Stats}}
+    <div class="stat trend-stat">
+      <span class="stat-n trend-value{{if .Tone}} {{.Tone}}{{end}}">{{.Value}}</span>
+      <span class="stat-l">{{.Label}}</span>
+      {{if $.HasPrevious}}<span class="trend-delta {{.DeltaClass}}">{{.DeltaText}}</span>{{end}}
+    </div>
+    {{end}}
+  </section>
+  {{if .HasPrevious}}<p class="trend-comparison">{{.ComparisonLabel}} against the preceding recorded snapshot.</p>
+  {{else}}<p class="trend-comparison">No prior snapshot is available for comparison.</p>{{end}}
+
+  <div class="card">
+    <div class="card-head"><h2>Relevant finding debt</h2><span class="pill">{{.SnapshotCount}} recorded</span></div>
+    <p class="muted trend-note">Only observed daily snapshots are plotted. Lines connect observations; gaps are not backfilled.</p>
+    {{.Chart}}
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2 id="posture-history-title">Snapshot history</h2></div>
+    <div class="trend-table-wrap" tabindex="0" role="region" aria-labelledby="posture-history-title">
+      <table class="trend-table">
+        <thead><tr><th>Date</th><th class="num">Images</th><th class="num">Findings</th><th class="num">Critical</th><th class="num">High</th><th class="num">Medium</th><th class="num">Low</th><th class="num">Fixable</th><th class="num">KEV</th></tr></thead>
+        <tbody>{{range .Rows}}<tr class="trend-row" data-snapshot-date="{{.Date}}"><td><time datetime="{{.Date}}">{{.Date}}</time></td><td class="num">{{.Images}}</td><td class="num"><strong>{{.Total}}</strong></td><td class="num">{{.Critical}}</td><td class="num">{{.High}}</td><td class="num">{{.Medium}}</td><td class="num">{{.Low}}</td><td class="num">{{.Fixable}}</td><td class="num">{{.KEV}}</td></tr>{{end}}</tbody>
+      </table>
+    </div>
+  </div>
+  {{else if .HasLifetimeData}}
+  <div class="card">
+    <div class="card-head"><h2>No snapshots in this {{.Days}}-day window</h2></div>
+    <p class="muted">Coverage began <time datetime="{{.CoverageStart}}">{{.CoverageStart}}</time>. This view only includes recorded snapshots inside the selected window; missing dates are not filled.</p>
+  </div>
+  {{else}}
+  <div class="card">
+    <div class="card-head"><h2>No posture snapshots yet</h2></div>
+    <p class="muted">Trend coverage begins with the first completed daily snapshot. DevRadar does not reconstruct earlier history from current findings.</p>
+  </div>
+  {{end}}
+</main>
+{{template "foot" .}}

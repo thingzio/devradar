@@ -40,7 +40,7 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 	"signed": signed,     // format a delta int as "+N" / "-N" / "0"
 }).ParseFS(templateFS, "templates/*.html"))
 
-// signed renders a delta as a leading-sign string for the admin trend row.
+// signed renders a delta as a leading-sign string for trend views.
 func signed(n int) string {
 	if n > 0 {
 		return fmt.Sprintf("+%d", n)
@@ -109,6 +109,7 @@ func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
 	mux.Handle("GET /overview", authed(http.HandlerFunc(s.handleOverview)))
 	mux.Handle("GET /search", authed(http.HandlerFunc(s.handleSearch)))
 	mux.Handle("GET /dashboard", authed(http.HandlerFunc(s.handleDashboard)))
+	mux.Handle("GET /trends", authed(http.HandlerFunc(s.handleTrends)))
 	mux.Handle("GET /images", authed(http.HandlerFunc(s.handleImageDetail)))
 	mux.Handle("GET /compare", authed(http.HandlerFunc(s.handleCompare)))
 	mux.Handle("GET /sboms/{id}", authed(http.HandlerFunc(s.handleSBOMDetail)))

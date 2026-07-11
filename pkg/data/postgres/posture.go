@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 )
@@ -139,4 +140,21 @@ func (s *Store) TenantPostureTrend(ctx context.Context, tenantID string, days in
 		return nil, fmt.Errorf("iterate tenant posture trend: %w", err)
 	}
 	return points, nil
+}
+
+// TenantPostureCoverageStart returns the date of a tenant's first recorded
+// posture snapshot. A tenant without historical snapshots returns nil, nil.
+func (s *Store) TenantPostureCoverageStart(ctx context.Context, tenantID string) (*time.Time, error) {
+	var start sql.NullTime
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT MIN(snapshot_date)
+		FROM devradar_tenant_posture_snapshot
+		WHERE tenant_id = $1
+		  AND snapshot_date <= CURRENT_DATE`, tenantID).Scan(&start); err != nil {
+		return nil, fmt.Errorf("get tenant posture coverage start: %w", err)
+	}
+	if !start.Valid {
+		return nil, nil
+	}
+	return &start.Time, nil
 }

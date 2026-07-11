@@ -3,6 +3,7 @@ package postgres_test
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestSnapshotTenantPosture_DeduplicatesAndIsolates(t *testing.T) {
@@ -170,5 +171,97 @@ func TestTenantPostureTrend_ExcludesFutureSnapshots(t *testing.T) {
 	}
 	if len(trend) != 1 || trend[0].Images != 1 {
 		t.Fatalf("trend includes future snapshot: %+v", trend)
+	}
+}
+
+func TestTenantPostureTrend_BoundsOrdersAndIsolates(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	tenantID, _ := seedTenantAndSBOM(t, st)
+	otherTenantID, _ := seedTenantAndSBOM(t, st)
+
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_tenant_posture_snapshot
+			(tenant_id, snapshot_date, images, relevant_findings)
+		VALUES
+			($1, CURRENT_DATE - 365, 1, 365),
+			($1, CURRENT_DATE - 364, 1, 364),
+			($1, CURRENT_DATE - 2, 1, 2),
+			($1, CURRENT_DATE - 1, 1, 1),
+			($1, CURRENT_DATE, 1, 0),
+			($2, CURRENT_DATE, 9, 999)`, tenantID, otherTenantID); err != nil {
+		t.Fatal(err)
+	}
+
+	oneDay, err := st.TenantPostureTrend(ctx, tenantID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(oneDay) != 1 || oneDay[0].Total != 0 {
+		t.Fatalf("zero-day request was not clamped to one day: %+v", oneDay)
+	}
+
+	maximum, err := st.TenantPostureTrend(ctx, tenantID, 999)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTotals := []int{364, 2, 1, 0}
+	if len(maximum) != len(wantTotals) {
+		t.Fatalf("maximum bounded trend length = %d, want %d: %+v", len(maximum), len(wantTotals), maximum)
+	}
+	for i, want := range wantTotals {
+		if maximum[i].Total != want {
+			t.Fatalf("trend[%d].Total = %d, want %d: %+v", i, maximum[i].Total, want, maximum)
+		}
+		if i > 0 && !maximum[i-1].Date.Before(maximum[i].Date) {
+			t.Fatalf("trend is not chronological: %+v", maximum)
+		}
+	}
+
+	other, err := st.TenantPostureTrend(ctx, otherTenantID, 365)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(other) != 1 || other[0].Total != 999 {
+		t.Fatalf("other tenant trend = %+v", other)
+	}
+}
+
+func TestTenantPostureCoverageStart_IsolatesAndReturnsNilWithoutSnapshots(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	tenantID, _ := seedTenantAndSBOM(t, st)
+	otherTenantID, _ := seedTenantAndSBOM(t, st)
+	emptyTenantID, _ := seedTenantAndSBOM(t, st)
+
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_tenant_posture_snapshot
+			(tenant_id, snapshot_date, images, relevant_findings)
+		VALUES
+			($1, CURRENT_DATE - 400, 1, 40),
+			($1, CURRENT_DATE - 5, 1, 5),
+			($2, CURRENT_DATE - 600, 1, 60),
+			($3, CURRENT_DATE + 1, 1, 99)`, tenantID, otherTenantID, emptyTenantID); err != nil {
+		t.Fatal(err)
+	}
+	var want string
+	if err := st.DB().QueryRowContext(ctx, `SELECT to_char(CURRENT_DATE - 400, 'YYYY-MM-DD')`).Scan(&want); err != nil {
+		t.Fatal(err)
+	}
+
+	start, err := st.TenantPostureCoverageStart(ctx, tenantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if start == nil || start.Format(time.DateOnly) != want {
+		t.Fatalf("tenant coverage start = %v, want %s", start, want)
+	}
+
+	empty, err := st.TenantPostureCoverageStart(ctx, emptyTenantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty != nil {
+		t.Fatalf("empty tenant coverage start = %v, want nil", empty)
 	}
 }
