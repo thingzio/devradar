@@ -30,6 +30,11 @@ func TestComparisonReadyRepositoryCount_DistinctActiveDigestsAndTenantIsolation(
 	if _, _, _, err := st.UpsertSBOM(ctx, &duplicateDigest); err != nil {
 		t.Fatalf("seed duplicate digest: %v", err)
 	}
+	if got, err := st.ComparisonReadyRepositoryCount(ctx, tenantID); err != nil {
+		t.Fatal(err)
+	} else if got != 0 {
+		t.Fatalf("duplicate-only comparison-ready repository count = %d, want 0", got)
+	}
 	secondDigest := comparisonSBOM(t, tenantID, readyRepository, "v2", time.Now().UTC())
 	if _, _, _, err := st.UpsertSBOM(ctx, secondDigest); err != nil {
 		t.Fatalf("seed second digest: %v", err)
