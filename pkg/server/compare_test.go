@@ -151,6 +151,41 @@ func TestComparePage_UpgradeGuidanceDoesNotLeakForeignOrOlderGenerations(t *test
 	}
 }
 
+func TestComparePage_ArchivedEvidenceSurvivesRecommendationFailure(t *testing.T) {
+	srv, st := testServer(t)
+	tenantID, _ := seedTenantToken(t, st)
+	from := seedLabeledSBOM(t, st, tenantID, "compare-archived")
+	from.Version = "v1"
+	to := *from
+	to.ID = randomHex(t, 32)
+	to.Digest = "sha256:" + randomHex(t, 32)
+	to.Version = "v2"
+	if _, _, _, err := st.UpsertSBOM(context.Background(), &to); err != nil {
+		t.Fatal(err)
+	}
+	seedWorkFinding(t, st, from, "grype", "archived-route-old", "CVE-2026-7301", false)
+	seedWorkFinding(t, st, &to, "grype", "archived-route-new", "CVE-2026-7302", false)
+	if _, err := st.DB().ExecContext(context.Background(),
+		`UPDATE devradar_sbom SET status='archived' WHERE id IN ($1,$2)`, from.ID, to.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	path := "/compare?" + url.Values{"from": {from.ID}, "to": {to.ID}}.Encode()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.AddCookie(seedSession(t, st, tenantID))
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(body, "Digest comparison") ||
+		!strings.Contains(body, "CVE-2026-7301") || !strings.Contains(body, "CVE-2026-7302") ||
+		!strings.Contains(body, "KEV → critical → high → medium → low → total") {
+		t.Fatalf("archived comparison page = %d body=%s", rec.Code, body)
+	}
+	if strings.Contains(body, "newer tracked digest with fewer relevant findings") {
+		t.Fatalf("archived comparison rendered active-only recommendation: %s", body)
+	}
+}
+
 func randomHex(t *testing.T, bytes int) string {
 	t.Helper()
 	b := make([]byte, bytes)

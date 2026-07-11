@@ -204,7 +204,7 @@ func (s *Store) CompareSBOMs(ctx context.Context, tenantID, fromID, toID string)
 // comparison verdict strictly improves. Generation order uses the SBOM's
 // effective timestamp and SBOM ID as a deterministic tie-break.
 func (s *Store) RecommendUpgrade(ctx context.Context, tenantID, baselineID string) (*UpgradeRecommendation, error) {
-	if _, err := s.comparisonSide(ctx, tenantID, baselineID); err != nil {
+	if _, err := s.activeComparisonSide(ctx, tenantID, baselineID); err != nil {
 		return nil, err
 	}
 	var candidateID string
@@ -284,13 +284,28 @@ func (s *Store) comparisonSide(ctx context.Context, tenantID, sbomID string) (Co
 	var side ComparisonSide
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, repository, COALESCE(version,''), digest
-		FROM devradar_sbom WHERE tenant_id=$1 AND id=$2 AND status='active'`, tenantID, sbomID).
+		FROM devradar_sbom WHERE tenant_id=$1 AND id=$2`, tenantID, sbomID).
 		Scan(&side.SBOMID, &side.Repository, &side.Version, &side.Digest)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ComparisonSide{}, ErrNotFound
 	}
 	if err != nil {
 		return ComparisonSide{}, fmt.Errorf("load comparison SBOM: %w", err)
+	}
+	return side, nil
+}
+
+func (s *Store) activeComparisonSide(ctx context.Context, tenantID, sbomID string) (ComparisonSide, error) {
+	var side ComparisonSide
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, repository, COALESCE(version,''), digest
+		FROM devradar_sbom WHERE tenant_id=$1 AND id=$2 AND status='active'`, tenantID, sbomID).
+		Scan(&side.SBOMID, &side.Repository, &side.Version, &side.Digest)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ComparisonSide{}, ErrNotFound
+	}
+	if err != nil {
+		return ComparisonSide{}, fmt.Errorf("load active comparison SBOM: %w", err)
 	}
 	return side, nil
 }
@@ -304,7 +319,7 @@ func (s *Store) comparisonFindings(ctx context.Context, tenantID, sbomID string)
 		JOIN devradar_sbom sb ON sb.id=f.sbom_id
 		LEFT JOIN devradar_cve_enrichment e ON e.cve=f.exposure
 		%s
-		WHERE sb.tenant_id=$1 AND sb.id=$2 AND sb.status='active'
+		WHERE sb.tenant_id=$1 AND sb.id=$2
 		  AND NOT %s
 		GROUP BY f.finding_id`, severityRankSQLCol("f.severity"), vexStatusJoin, vexSuppressedExpr), tenantID, sbomID)
 	if err != nil {
@@ -328,7 +343,7 @@ func (s *Store) comparisonPackages(ctx context.Context, tenantID, sbomID string)
 		SELECT p.package, p.version, p.licenses
 		FROM devradar_sbom_package p
 		JOIN devradar_sbom sb ON sb.id=p.sbom_id
-		WHERE sb.tenant_id=$1 AND sb.id=$2 AND sb.status='active'
+		WHERE sb.tenant_id=$1 AND sb.id=$2
 		ORDER BY p.package, p.version`, tenantID, sbomID)
 	if err != nil {
 		return nil, fmt.Errorf("load comparison packages: %w", err)

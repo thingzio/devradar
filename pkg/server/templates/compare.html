@@ -8,6 +8,7 @@
   <div class="compare-verdict verdict-{{.Comparison.Verdict}}">
     <strong>{{.Verdict}}</strong>
     <span>{{.Comparison.From.Version}} <code>{{.Comparison.From.Digest}}</code> → {{.Comparison.To.Version}} <code>{{.Comparison.To.Digest}}</code></span>
+    <span>Verdict precedence: KEV → critical → high → medium → low → total.</span>
   </div>
 
   {{with .Recommendation}}

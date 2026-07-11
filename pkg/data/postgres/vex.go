@@ -39,18 +39,16 @@ const (
 	// which a WHERE treats as false and would wrongly drop every un-VEX'd finding.
 	vexSuppressedExpr = `COALESCE(vex.vex_status IN ('not_affected','fixed'), false)`
 
-	// vexSuppressedByDigestCVE is an EXISTS predicate for aggregate queries that
-	// join finding `f` + sbom `sb` but don't need the exact status value — true if
-	// any VEX statement suppresses this (digest, cve). Used as a join condition so
-	// suppressed findings drop out of counts while the image row remains. (v1
-	// aggregate simplification: "any suppressing statement" rather than
-	// latest-wins; the per-finding view uses proper latest-wins.)
-	vexSuppressedByDigestCVE = `EXISTS (
-		SELECT 1 FROM devradar_vex_statement vs
+	// vexSuppressedByDigestCVE resolves the latest matching statement for aggregate
+	// queries that expose finding `f` and SBOM `sb`, matching vexStatusJoin semantics.
+	vexSuppressedByDigestCVE = `COALESCE((
+		SELECT vs.status IN ('not_affected','fixed')
+		FROM devradar_vex_statement vs
 		WHERE vs.tenant_id = sb.tenant_id
 		  AND vs.vulnerability = f.exposure
 		  AND (vs.product_digest = sb.digest OR vs.product_repo = ` + vexRepoKeyExpr + `)
-		  AND vs.status IN ('not_affected','fixed'))`
+		ORDER BY vs.created_at DESC
+		LIMIT 1), false)`
 )
 
 // SaveVEXDocument persists a parsed OpenVEX document and its statements for a

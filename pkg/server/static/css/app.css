@@ -583,6 +583,7 @@ table.images td { vertical-align: middle; }
   align-items: center; padding: 1rem 1.1rem; background: var(--surface);
   border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow);
 }
+.work-item.vexed { opacity: 0.65; }
 .work-priority { display: flex; flex-direction: column; align-items: flex-start; gap: 0.4rem; }
 .work-fix { color: var(--ok); font-size: 0.82rem; font-weight: 600; }
 .work-main h2 { font-size: 1rem; margin: 0; }

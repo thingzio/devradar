@@ -358,6 +358,34 @@ func TestCompareSBOMs(t *testing.T) {
 	_ = otherTenant
 }
 
+func TestCompareSBOMs_AllowsArchivedEvidenceButRecommendationRequiresActiveBaseline(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	tenantID, from := seedTenantAndSBOM(t, st)
+	to := comparisonSBOM(t, tenantID, from.Repository, "archived-v2", time.Now().UTC())
+	if _, _, _, err := st.UpsertSBOM(ctx, to); err != nil {
+		t.Fatal(err)
+	}
+	insertComparisonFinding(t, st, from.ID, "grype", "archived-old", "CVE-2026-6301", "high", false)
+	insertComparisonFinding(t, st, to.ID, "grype", "archived-new", "CVE-2026-6302", "critical", false)
+	if _, err := st.DB().ExecContext(ctx,
+		`UPDATE devradar_sbom SET status='archived' WHERE id IN ($1,$2)`, from.ID, to.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	comparison, err := st.CompareSBOMs(ctx, tenantID, from.ID, to.ID)
+	if err != nil {
+		t.Fatalf("compare archived evidence: %v", err)
+	}
+	if comparison.From.SBOMID != from.ID || comparison.To.SBOMID != to.ID ||
+		len(comparison.Resolved) != 1 || len(comparison.Added) != 1 {
+		t.Fatalf("archived comparison = %+v", comparison)
+	}
+	if _, err := st.RecommendUpgrade(ctx, tenantID, to.ID); !errors.Is(err, postgres.ErrNotFound) {
+		t.Fatalf("archived recommendation baseline error = %v, want ErrNotFound", err)
+	}
+}
+
 func insertComparisonFinding(t *testing.T, st *postgres.Store, sbomID, scanner, findingID, cve, severity string, fixed bool) {
 	t.Helper()
 	if _, err := st.DB().ExecContext(context.Background(), `

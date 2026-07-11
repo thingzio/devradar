@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -52,6 +54,10 @@ type compareView struct {
 	Recommendation                         *compareRecommendationView
 }
 
+type compareRecommendationReader interface {
+	RecommendUpgrade(context.Context, string, string) (*postgres.UpgradeRecommendation, error)
+}
+
 func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
 	tn := middleware.TenantFromContext(r.Context())
 	fromID, toID := r.URL.Query().Get("from"), r.URL.Query().Get("to")
@@ -99,10 +105,16 @@ func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
 			From: strings.Join(regression.From, ", "), To: strings.Join(regression.To, ", "), Reason: regression.Reason,
 		})
 	}
-	recommendation, err := s.store.RecommendUpgrade(r.Context(), tn.ID, toID)
+	if err := applyCompareRecommendation(r.Context(), s.store, tn.ID, toID, &v); err != nil {
+		slog.Warn("load comparison upgrade guidance", "tenant_id", tn.ID, "sbom_id", toID, "error", err)
+	}
+	render(w, "compare.html", v)
+}
+
+func applyCompareRecommendation(ctx context.Context, reader compareRecommendationReader, tenantID, baselineID string, v *compareView) error {
+	recommendation, err := reader.RecommendUpgrade(ctx, tenantID, baselineID)
 	if err != nil {
-		http.Error(w, "failed to load upgrade guidance", http.StatusInternalServerError)
-		return
+		return err
 	}
 	if recommendation != nil {
 		v.Recommendation = &compareRecommendationView{
@@ -114,7 +126,7 @@ func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
 			CandidateVersion: recommendation.Candidate.Version, CandidateDigest: recommendation.Candidate.Digest,
 		}
 	}
-	render(w, "compare.html", v)
+	return nil
 }
 
 func compareFindingRows(items []postgres.ComparisonFinding) []compareFindingRow {

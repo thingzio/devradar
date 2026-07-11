@@ -20,6 +20,7 @@ type workRow struct {
 	Age          string
 	Agreement    string
 	Repositories []string
+	Suppressed   bool
 	AllVEXd      bool
 }
 
@@ -63,7 +64,8 @@ func workRows(items []postgres.FleetCVE) []workRow {
 		rows = append(rows, workRow{
 			CVE: item.CVE, Severity: item.WorstSev, KEV: item.KEV, Fixable: item.Fixable,
 			EPSS: formatEPSS(item.EPSS), ImageCount: item.ImageCount, FindingCount: item.FindingCount,
-			Age: age, Agreement: agreement, Repositories: item.Repositories, AllVEXd: item.AllVEXd,
+			Age: age, Agreement: agreement, Repositories: item.Repositories,
+			Suppressed: item.Suppressed, AllVEXd: item.AllVEXd,
 		})
 	}
 	return rows

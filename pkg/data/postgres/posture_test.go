@@ -151,6 +151,65 @@ func TestSnapshotTenantPosture_ExcludesVEXSuppressedFindings(t *testing.T) {
 	}
 }
 
+func TestSnapshotTenantPosture_LatestVEXStatementRestoresExposure(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	tenantID, sb := seedTenantAndSBOM(t, st)
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_finding
+		(sbom_id, scanner, finding_id, exposure, package, version, severity, score, is_fixed)
+		VALUES ($1,'grype','latest-vex','CVE-2026-8112','pkg','1','critical',9.8,true)`, sb.ID); err != nil {
+		t.Fatal(err)
+	}
+	var documentID string
+	if err := st.DB().QueryRowContext(ctx, `
+		INSERT INTO devradar_vex_document (tenant_id, document)
+		VALUES ($1, '{}'::jsonb) RETURNING id`, tenantID).Scan(&documentID); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().UTC().Add(-time.Hour)
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_vex_statement
+		(tenant_id, document_id, product_digest, vulnerability, status, created_at)
+		VALUES ($1,$2,$3,'CVE-2026-8112','not_affected',$4)`, tenantID, documentID, sb.Digest, base); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := st.SnapshotTenantPosture(ctx); err != nil {
+		t.Fatal(err)
+	}
+	before, err := st.AdminProductHealth(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trend, err := st.TenantPostureTrend(ctx, tenantID, 30)
+	if err != nil || len(trend) != 1 || trend[0].Total != 0 {
+		t.Fatalf("suppressed trend = %+v error=%v", trend, err)
+	}
+
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_vex_statement
+		(tenant_id, document_id, product_digest, vulnerability, status, created_at)
+		VALUES ($1,$2,$3,'CVE-2026-8112','affected',$4)`, tenantID, documentID, sb.Digest, base.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SnapshotTenantPosture(ctx); err != nil {
+		t.Fatal(err)
+	}
+	after, err := st.AdminProductHealth(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trend, err = st.TenantPostureTrend(ctx, tenantID, 30)
+	if err != nil || len(trend) != 1 || trend[0].Total != 1 || trend[0].Critical != 1 || trend[0].Fixable != 1 {
+		t.Fatalf("restored trend = %+v error=%v", trend, err)
+	}
+	if after.CanonicalExposures != before.CanonicalExposures+1 ||
+		after.CanonicalFixableExposures != before.CanonicalFixableExposures+1 {
+		t.Fatalf("admin exposure was not restored: before=%+v after=%+v", before, after)
+	}
+}
+
 func TestTenantPostureTrend_ExcludesFutureSnapshots(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()

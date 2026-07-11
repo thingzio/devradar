@@ -17,6 +17,7 @@
         <p>{{if .KEV}}Known exploited{{else}}Not currently in CISA KEV{{end}} · {{if .EPSS}}EPSS {{.EPSS}}{{else}}No EPSS score{{end}} · affects {{.ImageCount}} image{{if ne .ImageCount 1}}s{{end}}</p>
         <div class="work-context">
           <span>{{.Agreement}}</span><span>{{.FindingCount}} canonical finding{{if ne .FindingCount 1}}s{{end}}</span><span>{{.Age}}</span>
+          {{if .AllVEXd}}<span>VEX suppresses all tracked occurrences</span>{{else if .Suppressed}}<span>VEX suppresses some tracked occurrences</span>{{end}}
         </div>
         {{if .Repositories}}<div class="work-repos">{{range .Repositories}}<a class="label-chip" href="/images?repo={{.}}">{{.}}</a>{{end}}</div>{{end}}
       </div>
