@@ -133,7 +133,7 @@ func validateURL(key string) error {
 // NOT refuse to start — making it fatal turned a not-yet-provisioned secret into a
 // deploy-blocking startup-probe failure (the container won't boot), which is worse
 // than the plaintext window it was trying to prevent. Provisioning the key is
-// tracked in INFRA.md; until then this degrades loudly, not fatally.
+// tracked in ROADMAP.md; until then this degrades loudly, not fatally.
 func validateTokenFlashKey() error {
 	v := strings.TrimSpace(os.Getenv("DEVRADAR_TOKEN_FLASH_KEY"))
 	if v == "" {

@@ -3,8 +3,8 @@
 How to deploy DevRadar to the shared Thingz GCP platform (`thingzio`) and how to
 ship updates afterward.
 
-> Design context: [README.md](README.md) · [IMPLEMENTATION.md](IMPLEMENTATION.md)
-> _Last updated: 2026-07-11._
+> Design context: [README.md](README.md) · [DEVELOPMENT.md](DEVELOPMENT.md) · [ROADMAP.md](ROADMAP.md)
+> _Last updated: 2026-07-12._
 
 ## What gets deployed
 
@@ -27,8 +27,8 @@ SBOM bytes, secrets, service accounts, and the two Cloud Run resources.
   the shared instance. (The first `terraform apply` is run by hand — see below.)
 - The shared infra (`thingzio/infra`) already applied: VPC `thingzio-vpc`,
   subnet `thingzio-subnet`, Cloud SQL `thingzio-pg`, database `thingz`.
-- A **Resend** API key (transactional email — magic-link sign-in, later alerts).
-- Optionally an **Anthropic** API key (OpenVEX stubbing / future narratives).
+- A **Resend** API key for magic-link sign-in.
+- Optionally an **Anthropic** API key for admin metrics analysis.
 
 All shared identifiers are baked as variable defaults in `infra/saas/variables.tf`
 (`project_id=thingzio`, `region=us-west1`, `db_instance_name=thingzio-pg`,
@@ -93,7 +93,7 @@ for table in $(psql "$PRE_URL" -Atqc \
 done
 ```
 
-Recreate only the migrated clone, then apply migrations 19 through 26 through
+Recreate only the migrated clone, then apply migrations 19 through 29 through
 the real advisory-locked Go migration runner. `TestMigrate_Idempotent` opens the
 store (which applies pending migrations) and calls `Migrate` again, proving the
 second pass is a no-op.
@@ -113,13 +113,13 @@ DATABASE_URL="$TEST_URL" go test ./pkg/data/postgres \
 ```
 
 Validate the migrated contract and compare every baseline table count. The
-version query must report `26 | 1 | 26 | true`; all count pairs must match.
+version query must report `29 | 1 | 29 | true`; all count pairs must match.
 
 ```bash
 psql "$TEST_URL" -v ON_ERROR_STOP=1 -c \
   "SELECT count(*), min(version), max(version),
           array_agg(version ORDER BY version) =
-            ARRAY(SELECT generate_series(1,26)) AS contiguous
+            ARRAY(SELECT generate_series(1,29)) AS contiguous
    FROM devradar_schema_version"
 
 psql "$TEST_URL" -v ON_ERROR_STOP=1 -c \
@@ -167,7 +167,7 @@ make serve DEV_DB="$TEST_URL"
 ```
 
 **No-release gate:** do not tag, push, deploy, enable a production feature, or
-run production Terraform until all migrations are contiguous through 26, the
+run production Terraform until all migrations are contiguous through 29, the
 idempotent rerun is clean, baseline business-table counts match, query plans are
 reviewed, `make qualify` and `go build ./...` pass, and the owner validates the
 complete local workflow. A failed check returns to the preserved baseline via
@@ -210,7 +210,7 @@ real values out-of-band; `ignore_changes` keeps them from being reverted:
 printf '%s' 'YOUR_RESEND_KEY' | \
   gcloud secrets versions add devradar-saas-send-api-key --data-file=- --project thingzio
 
-# Anthropic key — only if using OpenVEX stubbing / narratives
+# Anthropic key — only for optional admin metrics analysis
 printf '%s' 'YOUR_ANTHROPIC_KEY' | \
   gcloud secrets versions add devradar-saas-anthropic-api-key --data-file=- --project thingzio
 ```
@@ -314,10 +314,10 @@ make tf-plan && make tf-apply
 The scanner binaries are pinned in **two places that must stay in sync**:
 `.settings.yaml` (`scanners.{grype,trivy,syft}`) and the `ARG` defaults in
 `Dockerfile.scan`. Update both, then cut a release — the new scan image carries
-the new scanners. (The vulnerability *databases* are not pinned; the job refreshes
-them at start.) Expect a one-time wave of `tooling`-caused finding events after a
-scanner upgrade — these are recorded but never alerted on (see IMPLEMENTATION.md
-"Cause classification").
+the new scanners. (The vulnerability *databases* are not pinned; a tick with due
+work refreshes them before scanning.) Expect a one-time wave of `tooling`-caused
+finding events after a scanner upgrade — these are recorded but never alerted on
+(see DEVELOPMENT.md "Reproducibility and causality").
 
 ### Rotate a secret
 
@@ -356,6 +356,5 @@ gcloud run services update devradar-saas-serve --region us-west1   # pick up "la
 - **Two images, two build paths:** serve is ko (pure Go); scan is a Dockerfile
   (needs grype/trivy/syft at runtime). Keep the Dockerfile scanner ARGs in sync
   with `.settings.yaml`.
-- **Not yet wired (deferred):** email/push alerting and scan concurrency pooling —
-  see IMPLEMENTATION.md. `SEND_API_KEY` is used for magic-link today; alerting
-  will reuse it.
+- **Deferred:** email/webhook delivery and scan concurrency pooling. See
+  [ROADMAP.md](ROADMAP.md). `SEND_API_KEY` is used for magic-link email today.

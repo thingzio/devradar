@@ -2,7 +2,7 @@
 
 Repository guidance for coding agents working on DevRadar.
 
-_Last validated: 2026-07-11 against `main` at v0.10.3._
+_Last validated: 2026-07-12 against `main` at v0.13.5._
 
 ## Current State and Source of Truth
 
@@ -10,13 +10,12 @@ DevRadar v1 is implemented and runnable end to end: ingest â†’ recurring scan â†
 
 - Code under `pkg/` and `cmd/` is authoritative when older documentation samples differ.
 - `README.md` explains the product and local workflow.
-- `IMPLEMENTATION.md` records the implementation architecture and infra contract.
+- `DEVELOPMENT.md` records implementation architecture, invariants, and engineering guidance.
 - `DEPLOYMENT.md` is the manual first-apply and routine deployment runbook.
 - `.settings.yaml` is the version and quality-threshold source of truth.
-- `docs/superpowers/specs/2026-07-11-actionable-alerts-and-posture-design.md` is the approved next-release design.
-- `IDEAS.md` is the stack-ranked roadmap; it is not an implementation specification.
+- `ROADMAP.md` is the stack-ranked unshipped roadmap; it is not an implementation specification.
 
-The approved next release adds tenant-scoped, opt-in browser alerts, a deterministic work queue, digest comparison, and fleet/repository trends. Email, webhooks, multi-user ownership, and deployment are deferred.
+Browser alerts, the deterministic work queue, digest comparison, fleet/repository trends, admin health, and optional attestation verification are shipped. Production infrastructure hardening, email/webhooks, SBOM quality assessment, and CI assurance gates are next.
 
 ## Non-Negotiable Product Boundaries
 
@@ -24,7 +23,7 @@ The approved next release adds tenant-scoped, opt-in browser alerts, a determini
 - Treat SBOMs as attacker-controlled: bound raw and decompressed input, validate schemas, and fail closed when the subject digest cannot be resolved.
 - Preserve immutable, digest-pinned inventory and explicit `image` / `db` / `tooling` causality.
 - Preserve the scanner abstraction and subprocess isolation. Never import or depend on `github.com/mchmarny/vimp`.
-- Pin scanner binaries in `.settings.yaml`; refresh vulnerability databases lazily at job start and record every version axis.
+- Pin scanner binaries in `.settings.yaml`; refresh vulnerability databases lazily only when scan work exists, freeze them for the run, and record every version axis.
 - Keep alert evaluation outside `ApplyScan`; alert failure must never block scan persistence.
 - Never infer runtime deployment, compatibility, reachability, or universal image safety from SBOM data.
 
@@ -88,9 +87,9 @@ Use test-driven development for behavior changes. Never skip or disable tests. P
 
 - Migrations must be forward-only, transactional where Postgres permits, and safe under concurrent startup.
 - Add migration integration tests and cross-tenant isolation tests for every tenant-scoped table or query.
-- Before this release, restore a production database backup into an isolated environment and validate migration apply, application behavior, query performance, and the documented rollback procedure.
+- Before a release with migrations, restore a production database backup into an isolated environment and validate migration apply, application behavior, query performance, and the documented rollback procedure.
 - Do not deploy, tag, push, run `terraform apply`, or enable a production feature without explicit owner approval.
-- Browser alerts must run in shadow mode before tenant exposure; verify deterministic output and zero duplicates under retry.
+- New alert kinds or delivery channels must run in shadow/test mode before tenant exposure; verify deterministic output and zero duplicates under retry.
 - The owner must validate the complete workflow locally before any beta or release.
 
 ## Working Style

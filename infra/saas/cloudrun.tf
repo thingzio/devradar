@@ -162,7 +162,7 @@ resource "google_cloud_run_v2_job" "scan" {
   deletion_protection = false # TODO: set true after initial deploy
 
   template {
-    # v1 is single-instance (see IMPLEMENTATION.md "Concurrency"); one task per run.
+    # The scan loop is sequential and idempotent; one task avoids duplicate work.
     task_count  = 1
     parallelism = 1
 

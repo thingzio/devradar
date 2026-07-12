@@ -18,7 +18,7 @@ import (
 // otherwise linger — with a usable plaintext credential — until the next token
 // mint overwrites it or the tenant is deleted. Purging expired flash rows bounds
 // that plaintext exposure to the flash TTL. (Provisioning the key to encrypt the
-// value at rest is tracked in INFRA.md; this purge is the defense until then.)
+// value at rest is tracked in ROADMAP.md; this purge is the defense until then.)
 //
 // Run periodically off the scan job's end-of-run housekeeping (there is no cron).
 // Returns the first error encountered but always attempts every delete, so one
