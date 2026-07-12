@@ -37,6 +37,22 @@ func TestPurgeExpiredAuth(t *testing.T) {
 		randID(t), liveEmail, randID(t)); err != nil {
 		t.Fatalf("seed login tokens: %v", err)
 	}
+	// Token-flash rows are keyed by tenant (PK), so use two tenants: this one has
+	// an EXPIRED flash (must be purged — a lingering plaintext token), a second has
+	// a LIVE flash (must survive).
+	var liveFlashTenant string
+	if err := st.DB().QueryRowContext(ctx,
+		`INSERT INTO devradar_tenant (email) VALUES ($1) RETURNING id`,
+		"flash-live-"+randID(t)[:8]+"@example.com").Scan(&liveFlashTenant); err != nil {
+		t.Fatalf("seed flash tenant: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx,
+		`INSERT INTO devradar_token_flash (tenant_id, value, expires_at) VALUES
+		 ($1, 'dr_expired_plaintext', now() - interval '1 hour'),
+		 ($2, 'dr_live_plaintext',    now() + interval '1 hour')`,
+		tenantID, liveFlashTenant); err != nil {
+		t.Fatalf("seed token flash: %v", err)
+	}
 
 	if err := st.PurgeExpiredAuth(ctx); err != nil {
 		t.Fatalf("purge: %v", err)
@@ -57,5 +73,21 @@ func TestPurgeExpiredAuth(t *testing.T) {
 	}
 	if tokens != 1 {
 		t.Errorf("live login tokens after purge = %d, want 1", tokens)
+	}
+	// The expired flash (plaintext token) is gone; the live one survives.
+	var expiredFlash, liveFlash int
+	if err := st.DB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM devradar_token_flash WHERE tenant_id=$1`, tenantID).Scan(&expiredFlash); err != nil {
+		t.Fatalf("count expired flash: %v", err)
+	}
+	if expiredFlash != 0 {
+		t.Errorf("expired token-flash row must be purged, got %d", expiredFlash)
+	}
+	if err := st.DB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM devradar_token_flash WHERE tenant_id=$1`, liveFlashTenant).Scan(&liveFlash); err != nil {
+		t.Fatalf("count live flash: %v", err)
+	}
+	if liveFlash != 1 {
+		t.Errorf("live token-flash row must survive, got %d", liveFlash)
 	}
 }

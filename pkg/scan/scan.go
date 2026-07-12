@@ -447,7 +447,7 @@ func (r *Runner) scanOne(ctx context.Context, sb *postgres.SBOM, ready []readySc
 
 	raw, err := r.fetch.Fetch(ctx, sb.ObjectPath)
 	if err != nil {
-		r.recordFailure(ctx, sb.ID, "", "download", err)
+		r.recordSharedFailure(ctx, sb, ready, "download", err)
 		return
 	}
 
@@ -474,12 +474,12 @@ func (r *Runner) scanOne(ctx context.Context, sb *postgres.SBOM, ready []readySc
 	}
 	cdx, err := r.canon.Canonicalize(canonCtx, raw, sbom.Format(sb.Format))
 	if err != nil {
-		r.recordFailure(ctx, sb.ID, "", "canonicalize", err)
+		r.recordSharedFailure(ctx, sb, ready, "canonicalize", err)
 		return
 	}
 	local, cleanup, err := writeTemp(sb.ID, cdx)
 	if err != nil {
-		r.recordFailure(ctx, sb.ID, "", "canonicalize", err)
+		r.recordSharedFailure(ctx, sb, ready, "canonicalize", err)
 		return
 	}
 	defer cleanup()
@@ -622,6 +622,27 @@ func (r *Runner) recordScannerFailure(ctx context.Context, sbomID, scanner, stag
 	}
 	if err := r.store.RecordScannerAttemptFailure(ctx, sbomID, scanner, stage+": "+msg); err != nil {
 		slog.Warn("record scanner backoff", "sbom_id", sbomID, "scanner", scanner, "error", err)
+	}
+}
+
+// recordSharedFailure records a failure at a SHARED, pre-scanner stage (download,
+// canonicalize) — one that blocks EVERY scanner for this SBOM, not just one. It
+// records the failure log once (scanner="") for the human surface, and drives the
+// backoff state machine for each READY scanner, so a poison SBOM that can't be
+// fetched or canonicalized backs off across the board instead of being retried
+// every tick (which also lets it drop out of the due set once quarantined — see
+// ListScannableSBOMs). Without this, a shared-stage failure bypassed backoff
+// entirely (the original gap).
+func (r *Runner) recordSharedFailure(ctx context.Context, sb *postgres.SBOM, ready []readyScanner, stage string, cause error) {
+	r.recordFailure(ctx, sb.ID, "", stage, cause)
+	msg := ""
+	if cause != nil {
+		msg = cause.Error()
+	}
+	for _, sc := range ready {
+		if err := r.store.RecordScannerAttemptFailure(ctx, sb.ID, sc.Name(), stage+": "+msg); err != nil {
+			slog.Warn("record scanner backoff", "sbom_id", sb.ID, "scanner", sc.Name(), "error", err)
+		}
 	}
 }
 

@@ -36,13 +36,20 @@ func CreateAPIToken(ctx context.Context, db *sql.DB, tenantID, name string, ttl 
 	return CreateAPITokenWithLimit(ctx, db, tenantID, name, ttl, 0)
 }
 
-// CreateAPITokenWithLimit is CreateAPIToken with a per-tenant token cap enforced
-// ATOMICALLY (maxTokens <= 0 disables it). Folding the count into the INSERT's
-// WHERE removes the check-then-insert race the previous CountAPITokens-then-
-// CreateAPIToken flow had: two concurrent mints could both pass the count and
-// blow past the cap. Here the count and insert share one statement. Inserts zero
-// rows and returns ErrTokenLimit when at/over the cap. Matches the caps counted
-// by CountAPITokens (all rows for the tenant).
+// CreateAPITokenWithLimit is CreateAPIToken with a per-tenant token cap
+// (maxTokens <= 0 disables it). Inserts zero rows and returns ErrTokenLimit when
+// at/over the cap. Matches the caps counted by CountAPITokens (all rows for the
+// tenant).
+//
+// The cap is EXACT, not soft: unlike the SBOM/repository workload quotas (which
+// protect cost and tolerate a bounded overshoot), the token cap is a SECURITY
+// control — it bounds how many credentials a compromised session can mint. A
+// single-statement "INSERT ... WHERE count < cap" does NOT serialize under READ
+// COMMITTED, so concurrent mints could each see count < cap and both insert,
+// deliberately blowing past the limit. We therefore serialize the count+insert
+// per tenant with pg_advisory_xact_lock(hashtext(tenant_id)) inside a transaction.
+// Token creation is rare (a human action), so the lock's contention cost is
+// negligible; other tenants are unaffected (the lock key is the tenant).
 func CreateAPITokenWithLimit(ctx context.Context, db *sql.DB, tenantID, name string, ttl time.Duration, maxTokens int) (string, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
@@ -53,7 +60,21 @@ func CreateAPITokenWithLimit(ctx context.Context, db *sql.DB, tenantID, name str
 	if ttl > 0 {
 		expires = time.Now().Add(ttl).UTC()
 	}
-	res, err := db.ExecContext(ctx, `
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("begin token tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Serialize admission for THIS tenant so the count+insert is atomic under
+	// concurrency. Released at commit/rollback.
+	if _, err := tx.ExecContext(ctx,
+		`SELECT pg_advisory_xact_lock(hashtext($1))`, tenantID); err != nil {
+		return "", fmt.Errorf("acquire token admission lock: %w", err)
+	}
+
+	res, err := tx.ExecContext(ctx, `
 		INSERT INTO devradar_api_token (tenant_id, name, token_hash, expires_at)
 		SELECT $1, $2, $3, $4
 		WHERE $5 <= 0
@@ -64,6 +85,9 @@ func CreateAPITokenWithLimit(ctx context.Context, db *sql.DB, tenantID, name str
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return "", ErrTokenLimit
+	}
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("commit token: %w", err)
 	}
 	return rawToken, nil
 }

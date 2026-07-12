@@ -238,6 +238,60 @@ func TestPolicyExceptions(t *testing.T) {
 	}
 }
 
+// TestPolicyWithExceptionPair verifies a pair-specific allow-exception: deny a
+// category in general, but permit a license ONLY when it carries a specific WITH
+// exception. The flat-set path could not express this (the bare license was
+// denied regardless of the exception).
+func TestPolicyWithExceptionPair(t *testing.T) {
+	policy := LicensePolicy{
+		DeniedCategories: []LicenseCategory{CategoryStrongCopyleft},
+		AllowExceptions:  []string{"GPL-3.0-only WITH Classpath-exception-2.0"},
+	}
+	// The excepted pair is allowed...
+	if vio, reason := policy.Evaluate(PackageLicense{
+		Package: "a", Licenses: []string{"GPL-3.0-only WITH Classpath-exception-2.0"},
+	}); vio {
+		t.Errorf("GPL-3.0 WITH the allowed exception should be compliant, got violation: %q", reason)
+	}
+	// ...but bare GPL-3.0 (no exception) still violates the category.
+	if vio, _ := policy.Evaluate(PackageLicense{Package: "b", Licenses: []string{"GPL-3.0-only"}}); !vio {
+		t.Error("bare GPL-3.0 (no exception) should still violate")
+	}
+	// ...and GPL-3.0 with a DIFFERENT exception still violates.
+	if vio, _ := policy.Evaluate(PackageLicense{
+		Package: "c", Licenses: []string{"GPL-3.0-only WITH GCC-exception-3.1"},
+	}); !vio {
+		t.Error("GPL-3.0 with a non-allowed exception should violate")
+	}
+}
+
+// TestPolicyMalformedIsUnknown verifies a malformed SPDX entry is treated as
+// unknown (a data-quality signal), not turned into a partial verdict: it violates
+// only when the policy denies the unknown category, and never manufactures an
+// allow/deny from a broken expression.
+func TestPolicyMalformedIsUnknown(t *testing.T) {
+	malformed := []string{"MIT OR", "(GPL-3.0", "MIT garbage-token", "AND", "GPL-2.0 WITH"}
+
+	// Policy denies strong-copyleft but NOT unknown: a malformed entry must NOT be
+	// read as a denied GPL (e.g. "(GPL-3.0" must not manufacture a violation), and
+	// must NOT be read as an allowed MIT either — it is simply unknown ⇒ no
+	// violation here.
+	noUnknown := LicensePolicy{DeniedCategories: []LicenseCategory{CategoryStrongCopyleft}}
+	for _, entry := range malformed {
+		if vio, reason := noUnknown.Evaluate(PackageLicense{Package: "a", Licenses: []string{entry}}); vio {
+			t.Errorf("malformed %q must not manufacture a violation (unknown not denied), got %q", entry, reason)
+		}
+	}
+
+	// Policy denies unknown: every malformed entry now violates as unparseable.
+	denyUnknown := LicensePolicy{DeniedCategories: []LicenseCategory{CategoryUnknown}}
+	for _, entry := range malformed {
+		if vio, _ := denyUnknown.Evaluate(PackageLicense{Package: "b", Licenses: []string{entry}}); !vio {
+			t.Errorf("malformed %q should violate when unknown is denied", entry)
+		}
+	}
+}
+
 func TestPolicyUnknownDenied(t *testing.T) {
 	policy := LicensePolicy{DeniedCategories: []LicenseCategory{CategoryUnknown}}
 	if vio, _ := policy.Evaluate(PackageLicense{Package: "a"}); !vio {

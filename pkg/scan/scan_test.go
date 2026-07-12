@@ -257,6 +257,12 @@ func TestRunner_FetchFailureRecorded(t *testing.T) {
 	if len(store.failures) != 1 || store.failures[0] != "download" {
 		t.Errorf("want one download failure, got %v", store.failures)
 	}
+	// A shared-stage (download) failure must ALSO drive backoff for the ready
+	// scanner, so a persistently-unfetchable SBOM eventually quarantines instead of
+	// retrying every tick.
+	if store.attemptFailures != 1 {
+		t.Errorf("download failure should record backoff for the ready scanner, got %d", store.attemptFailures)
+	}
 }
 
 // TestRunner_PanicIsolation is the "one bad apple" guarantee: a scanner that

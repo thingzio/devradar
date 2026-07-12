@@ -30,10 +30,16 @@ type exprNode struct {
 	excep    string      // for leaf: the WITH exception operand, if any (original case)
 }
 
-// exprParser is a recursive-descent parser over a token stream.
+// exprParser is a recursive-descent parser over a token stream. `malformed` is
+// set whenever the input violates the SPDX expression grammar — a missing
+// operand (e.g. "MIT OR", "GPL WITH"), an unbalanced parenthesis (e.g. "(GPL"),
+// or unconsumed trailing tokens (e.g. "MIT garbage"). A malformed expression must
+// NOT be turned into a partial policy verdict; the caller treats it as an unknown
+// license (a data-quality signal) instead.
 type exprParser struct {
-	toks []string
-	pos  int
+	toks      []string
+	pos       int
+	malformed bool
 }
 
 // tokenizeExpr splits an SPDX expression into tokens: parentheses become their
@@ -91,6 +97,7 @@ func (p *exprParser) parseOr() *exprNode {
 		p.next()
 		right := p.parseAnd()
 		if right == nil {
+			p.malformed = true // "… OR" with no right operand
 			break
 		}
 		nodes = append(nodes, right)
@@ -112,6 +119,7 @@ func (p *exprParser) parseAnd() *exprNode {
 		p.next()
 		right := p.parseWith()
 		if right == nil {
+			p.malformed = true // "… AND" with no right operand
 			break
 		}
 		nodes = append(nodes, right)
@@ -131,7 +139,9 @@ func (p *exprParser) parseWith() *exprNode {
 	if isKeyword(p.peek(), "with") {
 		p.next()
 		exc := p.next() // the exception operand
-		if node.op == "leaf" {
+		if exc == "" || isKeyword(exc, "or") || isKeyword(exc, "and") || exc == "(" || exc == ")" {
+			p.malformed = true // "… WITH" with no (valid) exception operand
+		} else if node.op == "leaf" {
 			node.excep = exc
 		}
 	}
@@ -147,16 +157,23 @@ func (p *exprParser) parsePrimary() *exprNode {
 	if tok == "(" {
 		p.next()
 		inner := p.parseOr()
+		if inner == nil {
+			p.malformed = true // "()" or "(" with no expression
+		}
 		if p.peek() == ")" {
 			p.next()
+		} else {
+			p.malformed = true // unbalanced: missing ")"
 		}
 		return inner
 	}
 	if tok == ")" {
+		p.malformed = true // stray ")"
 		return nil
 	}
-	// A stray operator where a primary was expected → skip it defensively.
+	// A stray operator where a primary was expected is a grammar error.
 	if isKeyword(tok, "or") || isKeyword(tok, "and") || isKeyword(tok, "with") {
+		p.malformed = true
 		return nil
 	}
 	p.next()
@@ -165,33 +182,49 @@ func (p *exprParser) parsePrimary() *exprNode {
 
 // parseLicenseExpression parses expr into an AST, or nil if it has no license.
 func parseLicenseExpression(expr string) *exprNode {
-	p := &exprParser{toks: tokenizeExpr(expr)}
-	return p.parseOr()
+	root, _ := parseLicenseExpressionChecked(expr)
+	return root
 }
 
-// eval reports whether the subtree is allowed given the denied-key set. A leaf is
-// allowed unless its key is denied; the key prefers the full "license WITH
-// exception" pair (so a policy can target the pair) and falls back to the bare
-// license. AND requires all children; OR requires any child.
-func (n *exprNode) eval(denied map[string]struct{}, offending *[]string) bool {
+// parseLicenseExpressionChecked parses expr into an AST and reports whether it was
+// well-formed. malformed is true for a missing operand, an unbalanced/stray
+// parenthesis, or unconsumed trailing tokens (e.g. "MIT garbage"). A well-formed
+// empty input (no tokens) yields (nil, false) — vacuous, not malformed.
+func parseLicenseExpressionChecked(expr string) (root *exprNode, malformed bool) {
+	p := &exprParser{toks: tokenizeExpr(expr)}
+	root = p.parseOr()
+	// Trailing tokens the grammar never consumed → malformed (e.g. "MIT garbage",
+	// "MIT )"). An all-empty token stream that produced no root is simply vacuous.
+	if p.pos < len(p.toks) {
+		p.malformed = true
+	}
+	if root == nil && len(p.toks) > 0 {
+		p.malformed = true // had tokens but produced no license (e.g. "AND", "()")
+	}
+	return root, p.malformed
+}
+
+// deniedLeaf decides whether a single license leaf is denied by the policy. It
+// receives the raw license ID and the WITH exception operand ("" if none), so the
+// policy can honor a pair-specific rule (e.g. deny GPL-2.0 in general but ALLOW
+// "GPL-2.0 WITH Classpath-exception-2.0"). Returns denied + the display string to
+// surface as the offending token.
+type deniedLeaf func(license, excep string) (denied bool, display string)
+
+// eval reports whether the subtree is allowed under the leaf predicate. AND
+// requires all children allowed; OR requires any child allowed.
+func (n *exprNode) eval(isDenied deniedLeaf, offending *[]string) bool {
 	switch n.op {
 	case "leaf":
-		if n.excep != "" {
-			pair := normalizeLicenseID(n.license) + " with " + strings.ToLower(strings.TrimSpace(n.excep))
-			if _, bad := denied[pair]; bad {
-				*offending = append(*offending, n.license+" WITH "+n.excep)
-				return false
-			}
-		}
-		if _, bad := denied[normalizeLicenseID(n.license)]; bad {
-			*offending = append(*offending, n.license)
+		if denied, display := isDenied(n.license, n.excep); denied {
+			*offending = append(*offending, display)
 			return false
 		}
 		return true
 	case "and":
 		ok := true
 		for _, c := range n.children {
-			if !c.eval(denied, offending) {
+			if !c.eval(isDenied, offending) {
 				ok = false // keep evaluating so every offending leaf is reported
 			}
 		}
@@ -204,7 +237,7 @@ func (n *exprNode) eval(denied map[string]struct{}, offending *[]string) bool {
 		anyAllowed := false
 		for _, c := range n.children {
 			var childOff []string
-			if c.eval(denied, &childOff) {
+			if c.eval(isDenied, &childOff) {
 				anyAllowed = true
 			} else {
 				branchOffending = append(branchOffending, childOff...)

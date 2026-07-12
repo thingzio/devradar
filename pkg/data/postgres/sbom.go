@@ -201,11 +201,18 @@ func (s *Store) ListScannableSBOMs(ctx context.Context, maxAge time.Duration, ex
 	where := `WHERE sb.status = 'active'`
 	args := []any{}
 	if maxAge > 0 && len(expected) > 0 {
-		// Due if forced, OR if any expected scanner lacks a run within the window.
-		// The correlated NOT EXISTS is scanner-scoped: unnest(expected) enumerates
-		// the required scanners and the inner NOT EXISTS asks "is this scanner
-		// missing a recent run for this SBOM?" — true for a never-run or a
-		// stale/failed scanner. $1 = interval, $2 = the expected scanner names.
+		// Due if forced, OR if any expected scanner is BOTH missing a recent run AND
+		// currently attemptable (not backing off / not quarantined). The correlated
+		// EXISTS is scanner-scoped: unnest(expected) enumerates the required scanners
+		// and, for each, we require (a) no scan_run within the window — a never-run,
+		// stale, or failed scanner — AND (b) no active backoff row in
+		// devradar_scan_attempt. Clause (b) is the fix for the retry storm: a pair
+		// that persistently fails is quarantined/backing off, so it no longer counts
+		// as "due", and an SBOM whose ONLY outstanding scanner is quarantined drops
+		// out of the due set entirely — which also stops the idle scanner-DB refresh
+		// from being defeated by a poison input. A forced rescan overrides all of it
+		// (and clears the backoff — see AdminRequestRescan). $1 = interval,
+		// $2 = expected scanner names.
 		where += `
 		  AND (sb.rescan_requested_at IS NOT NULL
 		    OR EXISTS (
@@ -214,7 +221,12 @@ func (s *Store) ListScannableSBOMs(ctx context.Context, maxAge time.Duration, ex
 		        SELECT 1 FROM devradar_scan_run sr
 		        WHERE sr.sbom_id = sb.id
 		          AND sr.scanner = want.scanner
-		          AND sr.scanned_at > now() - $1::interval)))`
+		          AND sr.scanned_at > now() - $1::interval)
+		        AND NOT EXISTS (
+		          SELECT 1 FROM devradar_scan_attempt sa
+		          WHERE sa.sbom_id = sb.id
+		            AND sa.scanner = want.scanner
+		            AND (sa.quarantined OR sa.next_attempt_at > now()))))`
 		args = append(args, fmt.Sprintf("%d seconds", int64(maxAge.Seconds())), pq.Array(expected))
 	}
 	rows, err := s.db.QueryContext(ctx, `

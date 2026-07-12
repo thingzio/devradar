@@ -489,9 +489,21 @@ func (s *Store) AdminResetFailure(ctx context.Context, id int64) error {
 }
 
 // AdminRequestRescan marks an SBOM due for a rescan on the next scheduler tick
-// (see migration 013). Returns sql.ErrNoRows if the SBOM does not exist.
+// (see migration 013) AND clears any per-scanner backoff/quarantine state for it.
+// Clearing the backoff is the operator RECOVERY PATH: a pair that quarantined
+// after repeated failures (a poison input, since fixed, or a transient outage that
+// tripped the threshold) would otherwise never be retried automatically — a forced
+// rescan now un-quarantines it so the next tick attempts it fresh. Done in one
+// transaction so the marker and the reset commit together. Returns sql.ErrNoRows
+// if the SBOM does not exist.
 func (s *Store) AdminRequestRescan(ctx context.Context, sbomID string) error {
-	res, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin rescan tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx,
 		`UPDATE devradar_sbom SET rescan_requested_at = now() WHERE id = $1`, sbomID)
 	if err != nil {
 		return fmt.Errorf("request rescan: %w", err)
@@ -499,7 +511,11 @@ func (s *Store) AdminRequestRescan(ctx context.Context, sbomID string) error {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return sql.ErrNoRows
 	}
-	return nil
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM devradar_scan_attempt WHERE sbom_id = $1`, sbomID); err != nil {
+		return fmt.Errorf("clear scan backoff on rescan: %w", err)
+	}
+	return tx.Commit()
 }
 
 // ── Platform stats snapshots (devradar_platform_stats, migration 014) ─────────

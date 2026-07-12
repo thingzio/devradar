@@ -310,16 +310,6 @@ func ParseExpression(expr string) []string {
 	return out
 }
 
-// isSimpleExpr reports whether expr is a single license ID (no operators).
-func isSimpleExpr(expr string) bool {
-	for f := range strings.FieldsSeq(expr) {
-		if exprOperators[strings.ToLower(f)] {
-			return false
-		}
-	}
-	return !strings.ContainsAny(expr, "()")
-}
-
 // EvaluateExpression decides whether a license expression is allowed given a set
 // of denied license IDs (already lowercased/normalized keys — see the policy
 // evaluator). It parses the SPDX expression into a boolean AST and evaluates it
@@ -340,8 +330,26 @@ func EvaluateExpression(expr string, denied map[string]struct{}) (allowed bool, 
 	if root == nil {
 		return true, nil
 	}
+	// Predicate over the flat denied set: a leaf is denied if its bare license key
+	// is denied OR (when it carries an exception) its "license WITH exception" pair
+	// key is denied. This preserves the historical flat-set contract for callers
+	// that pass a precomputed set; the policy-aware path (LicensePolicy.Evaluate)
+	// uses deniedLeafForPolicy instead, which can ALLOW a pair whose bare license is
+	// denied.
+	isDenied := func(license, excep string) (bool, string) {
+		if excep != "" {
+			pair := normalizeLicenseID(license) + " with " + strings.ToLower(strings.TrimSpace(excep))
+			if _, bad := denied[pair]; bad {
+				return true, license + " WITH " + excep
+			}
+		}
+		if _, bad := denied[normalizeLicenseID(license)]; bad {
+			return true, license
+		}
+		return false, ""
+	}
 	var off []string
-	if root.eval(denied, &off) {
+	if root.eval(isDenied, &off) {
 		return true, nil
 	}
 	return false, off
@@ -362,33 +370,6 @@ type LicensePolicy struct {
 // IsEmpty reports whether the policy denies nothing.
 func (p LicensePolicy) IsEmpty() bool {
 	return len(p.DeniedCategories) == 0 && len(p.DenyExceptions) == 0
-}
-
-// deniedLicenseSet builds the set of normalized license IDs the policy forbids:
-// every ID whose category is denied (minus allow-exceptions), plus every
-// deny-exception ID. Returned keyed by normalizeLicenseID for matching.
-func (p LicensePolicy) deniedLicenseSet(candidateIDs []string) map[string]struct{} {
-	deniedCat := map[LicenseCategory]struct{}{}
-	for _, c := range p.DeniedCategories {
-		deniedCat[c] = struct{}{}
-	}
-	allowEx := map[string]struct{}{}
-	for _, id := range p.AllowExceptions {
-		allowEx[normalizeLicenseID(id)] = struct{}{}
-	}
-	denied := map[string]struct{}{}
-	for _, id := range candidateIDs {
-		n := normalizeLicenseID(id)
-		if _, ok := deniedCat[Classify(id)]; ok {
-			if _, allowed := allowEx[n]; !allowed {
-				denied[n] = struct{}{}
-			}
-		}
-	}
-	for _, id := range p.DenyExceptions {
-		denied[normalizeLicenseID(id)] = struct{}{}
-	}
-	return denied
 }
 
 // Evaluate reports whether a package violates the policy and, if so, a
@@ -419,23 +400,23 @@ func (p LicensePolicy) Evaluate(pkg PackageLicense) (violation bool, reason stri
 		return false, ""
 	}
 
-	// Collect every candidate ID across all entries so the denied set is complete.
-	var allIDs []string
-	for _, entry := range pkg.Licenses {
-		allIDs = append(allIDs, ParseExpression(entry)...)
-	}
-	denied := p.deniedLicenseSet(allIDs)
-
 	var offending []string
 	for _, entry := range pkg.Licenses {
-		if isSimpleExpr(entry) {
-			if _, bad := denied[normalizeLicenseID(entry)]; bad {
-				offending = append(offending, entry)
+		// Parse each entry as its own SPDX expression. A MALFORMED entry (missing
+		// operand, unbalanced parens, trailing junk) must NOT be turned into a
+		// partial verdict — the tolerant parser could otherwise read "MIT OR" as an
+		// allowed MIT, or "(GPL-3.0" as a denied GPL. Treat it as UNKNOWN instead:
+		// a data-quality signal the tenant's existing unknown-category policy
+		// decides (denied ⇒ violation, otherwise descriptive only).
+		root, malformed := parseLicenseExpressionChecked(entry)
+		if malformed || root == nil {
+			if deniesUnknown {
+				offending = append(offending, entry+" (unparseable)")
 			}
 			continue
 		}
-		// A compound expression: OR relaxes, AND is strict (see EvaluateExpression).
-		if ok, off := EvaluateExpression(entry, denied); !ok {
+		var off []string
+		if !root.eval(p.deniedLeafForPolicy(), &off) {
 			offending = append(offending, off...)
 		}
 	}
@@ -444,6 +425,73 @@ func (p LicensePolicy) Evaluate(pkg PackageLicense) (violation bool, reason stri
 		return false, ""
 	}
 	return true, "denied license: " + strings.Join(dedupeSorted(offending), ", ")
+}
+
+// deniedLeafForPolicy returns a per-leaf predicate that honors WITH exceptions at
+// pair granularity. A leaf is denied when its category is denied (or it is a
+// DenyException) UNLESS an allow-exception clears it — and an allow-exception may
+// be either the bare license ("gpl-2.0") or the specific pair
+// ("gpl-2.0 with classpath-exception-2.0"). This is what lets a policy deny a
+// whole category but permit one license only WHEN accompanied by its exception,
+// as documented — the flat denied-set path could not express that.
+func (p LicensePolicy) deniedLeafForPolicy() deniedLeaf {
+	deniedCat := map[LicenseCategory]struct{}{}
+	for _, c := range p.DeniedCategories {
+		deniedCat[c] = struct{}{}
+	}
+	allowEx := map[string]struct{}{}
+	for _, id := range p.AllowExceptions {
+		allowEx[normalizeLicenseID(id)] = struct{}{}
+		allowEx[normalizeExceptionKey(id)] = struct{}{} // also allow a raw pair form
+	}
+	denyEx := map[string]struct{}{}
+	for _, id := range p.DenyExceptions {
+		denyEx[normalizeLicenseID(id)] = struct{}{}
+		denyEx[normalizeExceptionKey(id)] = struct{}{}
+	}
+
+	return func(license, excep string) (bool, string) {
+		bare := normalizeLicenseID(license)
+		display := license
+		pair := bare
+		if excep != "" {
+			pair = bare + " with " + strings.ToLower(strings.TrimSpace(excep))
+			display = license + " WITH " + excep
+		}
+
+		// A pair-specific or bare allow-exception clears the leaf entirely.
+		if _, ok := allowEx[pair]; ok {
+			return false, ""
+		}
+		if excep != "" {
+			if _, ok := allowEx[bare]; ok {
+				return false, ""
+			}
+		}
+		// Explicit deny-exception (pair or bare) always flags.
+		if _, ok := denyEx[pair]; ok {
+			return true, display
+		}
+		if _, ok := denyEx[bare]; ok {
+			return true, display
+		}
+		// Otherwise category-driven.
+		if _, ok := deniedCat[Classify(license)]; ok {
+			return true, display
+		}
+		return false, ""
+	}
+}
+
+// normalizeExceptionKey lowercases/trims an "id WITH exception" string to the
+// space-joined form used as a pair key, or returns the plain normalized id when
+// there is no WITH.
+func normalizeExceptionKey(id string) string {
+	low := strings.ToLower(strings.TrimSpace(id))
+	if lic, exc, found := strings.Cut(low, " with "); found {
+		return normalizeLicenseID(lic) + " with " + strings.TrimSpace(exc)
+	}
+	return normalizeLicenseID(id)
 }
 
 func dedupeSorted(in []string) []string {

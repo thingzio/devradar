@@ -27,10 +27,20 @@ service and the scan job"), `infra/saas/cloudrun.tf:170`, `infra/saas/secrets.tf
 
 **Proposed fix.**
 - Separate `run-serve` and `run-scan` service accounts. Grant each only what it
-  uses: serve → `database_url`, `send_api_key`, `oauth_client_secret`, bucket
-  read + create; scan → `database_url`, `anthropic_api_key`, bucket read only.
+  uses: serve → `database_url`, `send_api_key`, `oauth_client_secret`,
+  `anthropic_api_key`, bucket read + create; scan → `database_url`, bucket read
+  only. NOTE: `anthropic_api_key` belongs to SERVE, not scan — it is used by the
+  serve/admin-metrics path (Claude narratives), never by the scan job. So the
+  hostile-scanner surface does not need the Anthropic secret at all.
 - Narrow the bucket role from `objectAdmin` to `objectCreator` + `objectViewer`
   (writes are content-addressed / write-once; neither runtime needs delete/ACL).
+  CAVEAT: `objectCreator` cannot OVERWRITE an existing object, so the
+  pending→active self-heal (a re-submit after "upload succeeded, activation
+  failed") must treat an already-existing identical content-addressed object as
+  success rather than re-Put-and-fail. Since the object is content-addressed
+  (same bytes → same path), an existing object is by definition the correct bytes;
+  the blob Put should tolerate/ignore an "already exists" precondition. Verify the
+  ingest self-heal path before narrowing the role.
 - Split out a migrator identity/role with DDL rights so the daily runtime roles
   can be `SELECT/INSERT/UPDATE`-only (see item 11).
 
@@ -137,6 +147,33 @@ no `Delete` and none is called anywhere); `infra/saas/storage.tf:4`
 - Enable bucket `versioning` and add a `lifecycle_rule` (e.g. delete noncurrent
   versions after N days) and/or a `retention_policy` for the audited artifacts.
 - Define an explicit retention/export/deletion policy for archived SBOMs.
+
+---
+
+## 14. Wire code-guard env vars in Terraform (P1 — required before first apply)
+
+Two code-level guards were added that need corresponding infrastructure, or they
+are either inert or (previously) deploy-blocking:
+
+- **`DEVRADAR_TOKEN_FLASH_KEY`** — the AES-256 key that encrypts the one-time
+  API-token flash at rest. Terraform provisions neither the secret nor the env
+  var. The serve code no longer refuses to start when it is unset (that briefly
+  broke the v0.13.4 deploy — the container failed its startup probe); it now
+  degrades to **plaintext-at-rest with a loud startup warning**. To actually
+  encrypt the flash, provision a 32-byte base64 secret and wire it into the serve
+  revision's env. Until then the plaintext window is bounded by the flash TTL and
+  the expired-flash janitor (`PurgeExpiredAuth` now also purges token-flash rows),
+  but the value is still plaintext while live.
+- **`DEVRADAR_REQUIRE_COMPLETE_TOOLCHAIN`** — when set, the scan job refuses to
+  start unless grype + trivy + syft are all present. Terraform does not set it, so
+  production currently permits a partial toolchain silently (one scanner, or
+  SPDX-blind without syft). Set it to `true` on the scan job once the image is
+  known to ship the full toolchain.
+
+**Proposed fix.** Add both to `infra/saas/cloudrun.tf`: a
+`google_secret_manager_secret` + `secret_key_ref` env for the flash key on the
+serve service, and a plain `DEVRADAR_REQUIRE_COMPLETE_TOOLCHAIN=true` env on the
+scan job. Both are cheap and remove a silent-degradation gap.
 
 ---
 

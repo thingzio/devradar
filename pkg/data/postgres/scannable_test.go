@@ -163,3 +163,58 @@ func TestListScannableSBOMs_RescanClearedAfterAllScanners(t *testing.T) {
 		t.Errorf("after clearing the rescan marker the fresh SBOM should not be due")
 	}
 }
+
+// TestListScannableSBOMs_BackoffExcludesQuarantined verifies the retry-storm fix:
+// an SBOM whose only-outstanding scanner is quarantined (or backing off) drops out
+// of the due set, and a forced rescan (which clears backoff) brings it back.
+func TestListScannableSBOMs_BackoffExcludesQuarantined(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	tenantID, sb := seedTenantAndSBOM(t, st)
+	both := []string{"grype", "trivy"}
+	ver := postgres.Versions{DBVersion: "db1", ScannerVersion: "v1", CanonicalizerVersion: "c1"}
+
+	contains := func(sbs []*postgres.SBOM, id string) bool {
+		return slices.ContainsFunc(sbs, func(s *postgres.SBOM) bool { return s.ID == id })
+	}
+
+	// grype succeeds; trivy is the only outstanding scanner.
+	if err := st.ApplyScan(ctx, sb, "grype", ver,
+		[]data.Vulnerability{vuln("CVE-1", "openssl", "3.0", "high", 7.5, false)}); err != nil {
+		t.Fatalf("apply grype: %v", err)
+	}
+	// Before backoff: due (trivy never ran).
+	if due, _ := st.ListScannableSBOMs(ctx, 12*time.Hour, both); !contains(due, sb.ID) {
+		t.Fatal("SBOM should be due while trivy is outstanding")
+	}
+
+	// Quarantine the trivy pair (repeated failures).
+	for range 8 {
+		if err := st.RecordScannerAttemptFailure(ctx, sb.ID, "trivy", "scan: boom"); err != nil {
+			t.Fatalf("record failure: %v", err)
+		}
+	}
+	// Now NOT due: the only outstanding scanner is quarantined, so re-scanning would
+	// just churn — and the SBOM drops out (so the scanner-DB refresh isn't defeated).
+	if due, _ := st.ListScannableSBOMs(ctx, 12*time.Hour, both); contains(due, sb.ID) {
+		t.Error("SBOM with only a quarantined outstanding scanner must NOT be due")
+	}
+
+	// Forced rescan clears the backoff and brings it back.
+	if err := st.AdminRequestRescan(ctx, sb.ID); err != nil {
+		t.Fatalf("request rescan: %v", err)
+	}
+	if due, _ := st.ListScannableSBOMs(ctx, 12*time.Hour, both); !contains(due, sb.ID) {
+		t.Error("SBOM should be due again after a forced rescan clears the quarantine")
+	}
+	// And the backoff row is gone (recovery path).
+	var n int
+	if err := st.DB().QueryRowContext(ctx,
+		`SELECT count(*) FROM devradar_scan_attempt WHERE sbom_id=$1`, sb.ID).Scan(&n); err != nil {
+		t.Fatalf("count attempts: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("forced rescan should clear backoff rows, got %d", n)
+	}
+	_ = tenantID
+}
