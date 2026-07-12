@@ -458,24 +458,18 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = "api-token"
 	}
-	// Enforce a per-tenant token cap so a bug or a compromised session can't mint
-	// unbounded credentials. 0 disables the cap.
-	if cap := config.MaxTokensPerTenant(); cap > 0 {
-		n, err := tenant.CountAPITokens(r.Context(), s.store.DB(), tn.ID)
-		if err != nil {
-			http.Error(w, "failed to create token", http.StatusInternalServerError)
-			return
-		}
-		if n >= cap {
-			http.Error(w, fmt.Sprintf("token limit reached (%d per tenant); revoke an unused token first", cap),
-				http.StatusTooManyRequests)
-			return
-		}
-	}
 	// Optional expiry: the form's expires_days field (0/absent ⇒ never expires,
 	// the historical default). Bounded to a sane maximum to catch fat-fingering.
 	ttl := parseTokenTTL(r.FormValue("expires_days"))
-	raw, err := tenant.CreateAPIToken(r.Context(), s.store.DB(), tn.ID, name, ttl)
+	// Enforce the per-tenant token cap ATOMICALLY inside the insert (0 disables it)
+	// so a bug or compromised session can't mint unbounded credentials — the old
+	// count-then-create was raceable. ErrTokenLimit → 429.
+	raw, err := tenant.CreateAPITokenWithLimit(r.Context(), s.store.DB(), tn.ID, name, ttl, config.MaxTokensPerTenant())
+	if errors.Is(err, tenant.ErrTokenLimit) {
+		http.Error(w, fmt.Sprintf("token limit reached (%d per tenant); revoke an unused token first",
+			config.MaxTokensPerTenant()), http.StatusTooManyRequests)
+		return
+	}
 	if err != nil {
 		http.Error(w, "failed to create token", http.StatusInternalServerError)
 		return

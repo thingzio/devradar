@@ -16,6 +16,10 @@ const tokenPrefix = "dr_"
 // ErrTokenInvalid is returned for an unknown or revoked API token.
 var ErrTokenInvalid = errors.New("invalid or revoked API token")
 
+// ErrTokenLimit is returned by CreateAPITokenWithLimit when minting a token would
+// exceed the tenant's cap.
+var ErrTokenLimit = errors.New("API token limit reached for tenant")
+
 // APITokenInfo is a token's metadata (never the secret).
 type APITokenInfo struct {
 	ID        string
@@ -29,6 +33,17 @@ type APITokenInfo struct {
 // and returns the raw token — shown to the user once, never persisted. A ttl > 0
 // sets an expiry; ttl <= 0 mints a non-expiring token (the historical default).
 func CreateAPIToken(ctx context.Context, db *sql.DB, tenantID, name string, ttl time.Duration) (string, error) {
+	return CreateAPITokenWithLimit(ctx, db, tenantID, name, ttl, 0)
+}
+
+// CreateAPITokenWithLimit is CreateAPIToken with a per-tenant token cap enforced
+// ATOMICALLY (maxTokens <= 0 disables it). Folding the count into the INSERT's
+// WHERE removes the check-then-insert race the previous CountAPITokens-then-
+// CreateAPIToken flow had: two concurrent mints could both pass the count and
+// blow past the cap. Here the count and insert share one statement. Inserts zero
+// rows and returns ErrTokenLimit when at/over the cap. Matches the caps counted
+// by CountAPITokens (all rows for the tenant).
+func CreateAPITokenWithLimit(ctx context.Context, db *sql.DB, tenantID, name string, ttl time.Duration, maxTokens int) (string, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", fmt.Errorf("generate api token: %w", err)
@@ -38,10 +53,17 @@ func CreateAPIToken(ctx context.Context, db *sql.DB, tenantID, name string, ttl 
 	if ttl > 0 {
 		expires = time.Now().Add(ttl).UTC()
 	}
-	if _, err := db.ExecContext(ctx,
-		`INSERT INTO devradar_api_token (tenant_id, name, token_hash, expires_at) VALUES ($1, $2, $3, $4)`,
-		tenantID, name, HashToken(rawToken), expires); err != nil {
+	res, err := db.ExecContext(ctx, `
+		INSERT INTO devradar_api_token (tenant_id, name, token_hash, expires_at)
+		SELECT $1, $2, $3, $4
+		WHERE $5 <= 0
+		   OR (SELECT count(*) FROM devradar_api_token WHERE tenant_id = $1) < $5`,
+		tenantID, name, HashToken(rawToken), expires, maxTokens)
+	if err != nil {
 		return "", fmt.Errorf("create api token: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return "", ErrTokenLimit
 	}
 	return rawToken, nil
 }

@@ -221,6 +221,17 @@ func MaxTokensPerTenant() int {
 	return GetEnvAsInt("DEVRADAR_MAX_TOKENS_PER_TENANT", 25)
 }
 
+// MaxSBOMsPerTenant caps how many ACTIVE SBOMs (distinct digests) a tenant may
+// track at once. The repository cap (MaxImagesPerTenant) alone leaves a hole: an
+// unbounded number of digests can accrue under a single repository (every rebuild
+// is a new digest), each multiplying scan work and findings. This bounds the real
+// cost driver. Re-submitting an already-stored digest is always allowed (it is an
+// update, not growth); only a brand-new digest past the cap is rejected. 0
+// disables the cap. Tunable via DEVRADAR_MAX_SBOMS_PER_TENANT (default 5000).
+func MaxSBOMsPerTenant() int {
+	return GetEnvAsInt("DEVRADAR_MAX_SBOMS_PER_TENANT", 5000)
+}
+
 // LoginRatePerHourEmail caps magic-link requests per normalized email per hour
 // (unbounded requests mint login-token rows and send emails). 0 disables.
 // Tunable via DEVRADAR_LOGIN_RATE_EMAIL (default 5).

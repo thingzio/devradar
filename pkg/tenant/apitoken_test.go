@@ -2,6 +2,7 @@ package tenant_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -122,5 +123,28 @@ func TestCountAPITokens(t *testing.T) {
 	}
 	if n, _ := tenant.CountAPITokens(ctx, st.DB(), tenantID); n != 3 {
 		t.Errorf("token count = %d, want 3", n)
+	}
+}
+
+// TestCreateAPITokenWithLimit_Cap verifies the atomic per-tenant token cap:
+// tokens mint up to the cap, the next is rejected with ErrTokenLimit, and a cap
+// of 0 disables enforcement.
+func TestCreateAPITokenWithLimit_Cap(t *testing.T) {
+	st := testDB(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, st)
+
+	const cap = 2
+	for i := range cap {
+		if _, err := tenant.CreateAPITokenWithLimit(ctx, st.DB(), tenantID, "x", 0, cap); err != nil {
+			t.Fatalf("mint %d under cap: %v", i, err)
+		}
+	}
+	if _, err := tenant.CreateAPITokenWithLimit(ctx, st.DB(), tenantID, "over", 0, cap); !errors.Is(err, tenant.ErrTokenLimit) {
+		t.Fatalf("over-cap mint: err = %v, want ErrTokenLimit", err)
+	}
+	// Cap disabled (0) still mints.
+	if _, err := tenant.CreateAPITokenWithLimit(ctx, st.DB(), tenantID, "unbounded", 0, 0); err != nil {
+		t.Fatalf("cap disabled: %v", err)
 	}
 }

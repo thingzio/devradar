@@ -198,8 +198,12 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 	// The store keys on (tenant_id, digest, format): one SBOM per digest+format
 	// per tenant, first submission canonical. A new row is created 'pending' — it
 	// is not scannable or readable until the bytes are stored and the row is
-	// promoted to 'active' below.
-	effID, inserted, status, err := s.store.UpsertSBOM(ctx, &postgres.SBOM{
+	// promoted to 'active' below. The active-SBOM (digest) cap is enforced
+	// ATOMICALLY inside the upsert: the repo cap above bounds distinct
+	// repositories, but without this a tenant could accrue unbounded digests under
+	// one repo (every rebuild is a new digest). A re-submit of an existing digest
+	// is always admitted; only a brand-new digest past the cap returns ErrSBOMLimit.
+	effID, inserted, status, err := s.store.UpsertSBOMWithLimit(ctx, &postgres.SBOM{
 		ID:           id,
 		TenantID:     tn.ID,
 		ImageRef:     imageRef,
@@ -214,7 +218,13 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 		ObjectPath:   objectPath,
 		Labels:       normalizeLabels(req.Labels),
 		GeneratedAt:  generatedAt,
-	})
+	}, config.MaxSBOMsPerTenant())
+	if errors.Is(err, postgres.ErrSBOMLimit) {
+		writeError(w, http.StatusTooManyRequests, fmt.Sprintf(
+			"SBOM limit reached (%d active SBOMs per tenant); archive an SBOM or contact support to raise the limit",
+			config.MaxSBOMsPerTenant()))
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to record SBOM")
 		return

@@ -2,11 +2,18 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/lib/pq"
 )
+
+// ErrSBOMLimit is returned by UpsertSBOM when a brand-new SBOM would exceed the
+// tenant's active-SBOM cap. A re-submit of an already-stored (tenant, digest,
+// format) never hits this — it resolves to the existing row via ON CONFLICT.
+var ErrSBOMLimit = errors.New("active SBOM limit reached for tenant")
 
 // UpsertSBOM inserts a submitted SBOM, or returns the existing one. The natural
 // identity is (tenant_id, digest, format): an image digest is an immutable
@@ -24,6 +31,24 @@ import (
 // that resolves to an existing but still-'pending' row (inserted=false,
 // status="pending") re-drives the upload+activate instead of skipping it.
 func (s *Store) UpsertSBOM(ctx context.Context, sb *SBOM) (id string, inserted bool, status string, err error) {
+	return s.UpsertSBOMWithLimit(ctx, sb, 0)
+}
+
+// UpsertSBOMWithLimit is UpsertSBOM with a per-tenant active-SBOM cap enforced
+// ATOMICALLY in the same statement (maxSBOMs <= 0 disables it). The cap counts
+// non-archived SBOMs (active + pending — a pending row is in-flight growth); a
+// re-submit of an already-stored (tenant, digest, format) is always admitted
+// (the EXISTS branch), so a tenant at the cap can still update what they have. A
+// brand-new digest past the cap inserts zero rows and returns ErrSBOMLimit.
+//
+// Folding the count into the INSERT...SELECT...WHERE removes the check-then-insert
+// race the previous two-round-trip (RepoAdmissible then UpsertSBOM) design had:
+// the count and the insert now share one statement snapshot. (A hard, fully
+// serialized cap would need a per-tenant advisory lock; this soft abuse guard
+// deliberately trades that for one cheap statement, so two truly-simultaneous
+// brand-new inserts on one tenant may overshoot by the in-flight count — bounded
+// and self-correcting, never unbounded.)
+func (s *Store) UpsertSBOMWithLimit(ctx context.Context, sb *SBOM, maxSBOMs int) (id string, inserted bool, status string, err error) {
 	var generatedAt any
 	if !sb.GeneratedAt.IsZero() {
 		generatedAt = sb.GeneratedAt.UTC()
@@ -41,12 +66,22 @@ func (s *Store) UpsertSBOM(ctx context.Context, sb *SBOM) (id string, inserted b
 	// report `inserted` accurately without a second query. The RETURNING status
 	// reflects the post-conflict row so the caller can detect a stuck 'pending'.
 	// Labels union on conflict so a re-submit adds labels without dropping prior ones.
+	//
+	// The SELECT...WHERE admits the row only when: the cap is disabled ($17 <= 0),
+	// OR this (tenant, digest, format) already exists (a re-submit, never counts as
+	// growth), OR the tenant is below the cap. If none hold, no row is inserted and
+	// no conflict fires, so RETURNING is empty → ErrSBOMLimit.
 	err = s.db.QueryRowContext(ctx, `
 		INSERT INTO devradar_sbom
 			(id, tenant_id, image_ref, repository, version, digest, format, spec_version,
 			 tool, tool_version, package_count, object_path, verification_status, status,
 			 labels, generated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+		SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16
+		WHERE $17 <= 0
+		   OR EXISTS (SELECT 1 FROM devradar_sbom
+		              WHERE tenant_id = $2 AND digest = $6 AND format = $7)
+		   OR (SELECT count(*) FROM devradar_sbom
+		       WHERE tenant_id = $2 AND status IN ('active','pending')) < $17
 		ON CONFLICT (tenant_id, digest, format) DO UPDATE
 		SET version = COALESCE(EXCLUDED.version, devradar_sbom.version),
 		    labels = (SELECT COALESCE(array_agg(DISTINCT l), '{}')
@@ -56,8 +91,11 @@ func (s *Store) UpsertSBOM(ctx context.Context, sb *SBOM) (id string, inserted b
 		sb.Digest, sb.Format, sb.SpecVersion,
 		nullStr(sb.Tool), nullStr(sb.ToolVersion), sb.PackageCount, sb.ObjectPath,
 		defaultStr(sb.VerificationStatus, "unverified"), defaultStr(sb.Status, "pending"),
-		pq.Array(labels), generatedAt,
+		pq.Array(labels), generatedAt, maxSBOMs,
 	).Scan(&id, &inserted, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, "", ErrSBOMLimit
+	}
 	if err != nil {
 		return "", false, "", fmt.Errorf("upsert sbom: %w", err)
 	}
