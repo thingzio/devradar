@@ -78,7 +78,7 @@ func TestDeleteTenant_Cascades(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
-	if _, err := tenant.CreateAPIToken(ctx, db, tn.ID, "t"); err != nil {
+	if _, err := tenant.CreateAPIToken(ctx, db, tn.ID, "t", 0); err != nil {
 		t.Fatalf("seed token: %v", err)
 	}
 

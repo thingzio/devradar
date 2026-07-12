@@ -87,6 +87,15 @@ func RequireAuth(db *sql.DB, loginURL string) func(http.Handler) http.Handler {
 				http.Redirect(w, r, loginURL+"?error=suspended", http.StatusFound)
 				return
 			}
+			// Ensure a CSRF cookie exists on every authenticated page, so the
+			// always-present logout form in the nav can carry a double-submit token
+			// even on pages whose handler doesn't otherwise issue one. First-party
+			// app.js echoes this cookie into the logout form's hidden field.
+			if CSRFTokenFromRequest(r) == "" {
+				if token, terr := GenerateCSRFToken(); terr == nil {
+					SetCSRFCookie(w, token)
+				}
+			}
 			next.ServeHTTP(w, r.WithContext(WithTenant(r.Context(), tn)))
 		})
 	}

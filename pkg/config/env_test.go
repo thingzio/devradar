@@ -72,11 +72,12 @@ func TestDevMode(t *testing.T) {
 	if !DevMode() {
 		t.Error("DEVRADAR_DEV_MODE=true should enable dev mode")
 	}
-	// Implied by local SBOM store.
+	// DevMode must NOT be inferred from the local SBOM storage selector — a
+	// storage option must never silently relax a production security guardrail.
 	t.Setenv("DEVRADAR_DEV_MODE", "")
 	t.Setenv("DEVRADAR_LOCAL_SBOMS", "1")
-	if !DevMode() {
-		t.Error("DEVRADAR_LOCAL_SBOMS should imply dev mode")
+	if DevMode() {
+		t.Error("DEVRADAR_LOCAL_SBOMS must NOT imply dev mode (decoupled)")
 	}
 }
 

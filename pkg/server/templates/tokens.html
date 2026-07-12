@@ -54,21 +54,23 @@
     <form class="row" method="post" action="/tokens">
       <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
       <input type="text" name="name" placeholder="Token name (e.g. ci-prod)" maxlength="80">
+      <input type="number" name="expires_days" min="0" max="3650" placeholder="Expires (days, 0 = never)" title="Optional: days until the token expires. Leave blank or 0 for a non-expiring token.">
       <button class="btn" type="submit">Create token</button>
     </form>
 
     <table>
-      <thead><tr><th>Name</th><th>Created</th><th>Last used</th><th></th></tr></thead>
+      <thead><tr><th>Name</th><th>Created</th><th>Last used</th><th>Expires</th><th></th></tr></thead>
       <tbody>
         {{range .Tokens}}
         <tr>
           <td>{{.Name}}</td>
           <td>{{.CreatedAt.Format "2006-01-02"}}</td>
           <td>{{if .LastUsed}}{{.LastUsed.Format "2006-01-02"}}{{else}}<span class="muted">never</span>{{end}}</td>
+          <td>{{if .ExpiresAt}}{{.ExpiresAt.Format "2006-01-02"}}{{else}}<span class="muted">never</span>{{end}}</td>
           <td><form class="inline" method="post" action="/tokens/{{.ID}}/revoke"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><button class="btn danger" type="submit">Revoke</button></form></td>
         </tr>
         {{else}}
-        <tr><td colspan="4" class="muted">No tokens yet.</td></tr>
+        <tr><td colspan="5" class="muted">No tokens yet.</td></tr>
         {{end}}
       </tbody>
     </table>

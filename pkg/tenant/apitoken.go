@@ -21,20 +21,26 @@ type APITokenInfo struct {
 	ID        string
 	Name      string
 	LastUsed  *time.Time
+	ExpiresAt *time.Time // nil ⇒ never expires
 	CreatedAt time.Time
 }
 
 // CreateAPIToken generates a "dr_"-prefixed token, stores only its SHA-256 hash,
-// and returns the raw token — shown to the user once, never persisted.
-func CreateAPIToken(ctx context.Context, db *sql.DB, tenantID, name string) (string, error) {
+// and returns the raw token — shown to the user once, never persisted. A ttl > 0
+// sets an expiry; ttl <= 0 mints a non-expiring token (the historical default).
+func CreateAPIToken(ctx context.Context, db *sql.DB, tenantID, name string, ttl time.Duration) (string, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", fmt.Errorf("generate api token: %w", err)
 	}
 	rawToken := tokenPrefix + hex.EncodeToString(raw)
+	var expires any // NULL ⇒ never expires
+	if ttl > 0 {
+		expires = time.Now().Add(ttl).UTC()
+	}
 	if _, err := db.ExecContext(ctx,
-		`INSERT INTO devradar_api_token (tenant_id, name, token_hash) VALUES ($1, $2, $3)`,
-		tenantID, name, HashToken(rawToken)); err != nil {
+		`INSERT INTO devradar_api_token (tenant_id, name, token_hash, expires_at) VALUES ($1, $2, $3, $4)`,
+		tenantID, name, HashToken(rawToken), expires); err != nil {
 		return "", fmt.Errorf("create api token: %w", err)
 	}
 	return rawToken, nil
@@ -52,15 +58,19 @@ const lastUsedCoarsening = time.Minute
 // the token row directly (not the UPDATE's RETURNING), so authentication
 // succeeds whether or not the bump fired this call.
 func ValidateAPIToken(ctx context.Context, db *sql.DB, rawToken string) (*Tenant, error) {
+	// An expired token authenticates no one: both the last_used bump and the
+	// tenant lookup exclude rows whose expires_at has passed (NULL = never expires).
 	row := db.QueryRowContext(ctx, `
 		WITH bumped AS (
 			UPDATE devradar_api_token SET last_used_at = NOW()
 			WHERE token_hash = $1
+			  AND (expires_at IS NULL OR expires_at > NOW())
 			  AND (last_used_at IS NULL OR last_used_at < NOW() - $2::interval)
 		)
 		SELECT `+prefixed("t")+`
 		FROM devradar_api_token a JOIN devradar_tenant t ON t.id = a.tenant_id
-		WHERE a.token_hash = $1`,
+		WHERE a.token_hash = $1
+		  AND (a.expires_at IS NULL OR a.expires_at > NOW())`,
 		HashToken(rawToken), fmt.Sprintf("%d seconds", int64(lastUsedCoarsening.Seconds())))
 	t, err := scanTenant(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -87,7 +97,7 @@ func CountAPITokens(ctx context.Context, db *sql.DB, tenantID string) (int, erro
 // ListAPITokens returns a tenant's tokens, newest first.
 func ListAPITokens(ctx context.Context, db *sql.DB, tenantID string) ([]APITokenInfo, error) {
 	rows, err := db.QueryContext(ctx,
-		`SELECT id, name, last_used_at, created_at FROM devradar_api_token
+		`SELECT id, name, last_used_at, expires_at, created_at FROM devradar_api_token
 		 WHERE tenant_id = $1 ORDER BY created_at DESC`, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("list api tokens: %w", err)
@@ -97,12 +107,15 @@ func ListAPITokens(ctx context.Context, db *sql.DB, tenantID string) ([]APIToken
 	var out []APITokenInfo
 	for rows.Next() {
 		var ti APITokenInfo
-		var last sql.NullTime
-		if err := rows.Scan(&ti.ID, &ti.Name, &last, &ti.CreatedAt); err != nil {
+		var last, expires sql.NullTime
+		if err := rows.Scan(&ti.ID, &ti.Name, &last, &expires, &ti.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan api token: %w", err)
 		}
 		if last.Valid {
 			ti.LastUsed = &last.Time
+		}
+		if expires.Valid {
+			ti.ExpiresAt = &expires.Time
 		}
 		out = append(out, ti)
 	}
@@ -114,13 +127,19 @@ func ListAPITokens(ctx context.Context, db *sql.DB, tenantID string) ([]APIToken
 // the tenant (a new token supersedes an old unshown one). The raw token is
 // never written anywhere else — this row is deleted the moment it is read
 // (ConsumeTokenFlash). ttl bounds how long an unread flash may linger.
-func StashTokenFlash(ctx context.Context, db *sql.DB, tenantID, rawToken string, ttl time.Duration) error {
+// The key encrypts the value at rest (AES-256-GCM) when non-nil; a nil key
+// stores plaintext (local dev). See flashcrypt.go.
+func StashTokenFlash(ctx context.Context, db *sql.DB, tenantID, rawToken string, ttl time.Duration, key []byte) error {
+	stored, err := encryptFlash(key, rawToken)
+	if err != nil {
+		return fmt.Errorf("stash token flash: %w", err)
+	}
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO devradar_token_flash (tenant_id, value, expires_at)
 		VALUES ($1, $2, now() + $3::interval)
 		ON CONFLICT (tenant_id) DO UPDATE
 		SET value = EXCLUDED.value, expires_at = EXCLUDED.expires_at`,
-		tenantID, rawToken, ttl.String()); err != nil {
+		tenantID, stored, ttl.String()); err != nil {
 		return fmt.Errorf("stash token flash: %w", err)
 	}
 	return nil
@@ -130,19 +149,19 @@ func StashTokenFlash(ctx context.Context, db *sql.DB, tenantID, rawToken string,
 // unexpired one exists (delete-and-return, so it is shown at most once). Returns
 // an empty string with no error when there is nothing to show — the common case
 // on an ordinary /tokens visit.
-func ConsumeTokenFlash(ctx context.Context, db *sql.DB, tenantID string) (string, error) {
-	var raw string
+func ConsumeTokenFlash(ctx context.Context, db *sql.DB, tenantID string, key []byte) (string, error) {
+	var stored string
 	err := db.QueryRowContext(ctx, `
 		DELETE FROM devradar_token_flash
 		WHERE tenant_id = $1 AND expires_at > now()
-		RETURNING value`, tenantID).Scan(&raw)
+		RETURNING value`, tenantID).Scan(&stored)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
 	if err != nil {
 		return "", fmt.Errorf("consume token flash: %w", err)
 	}
-	return raw, nil
+	return decryptFlash(key, stored)
 }
 
 // RevokeAPIToken deletes a token owned by the tenant. Ownership is enforced in

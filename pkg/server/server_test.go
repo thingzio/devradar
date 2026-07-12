@@ -101,7 +101,7 @@ func seedTenantToken(t *testing.T, st *postgres.Store) (tenantID, token string) 
 		"u"+hex.EncodeToString(b)+"@example.com").Scan(&tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
-	tok, err := tenant.CreateAPIToken(ctx, st.DB(), tenantID, "test")
+	tok, err := tenant.CreateAPIToken(ctx, st.DB(), tenantID, "test", 0)
 	if err != nil {
 		t.Fatalf("create token: %v", err)
 	}

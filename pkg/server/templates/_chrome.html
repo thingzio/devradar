@@ -37,7 +37,7 @@
       <div class="user-menu-divider"></div>
       <a href="/tokens" class="user-menu-item">Settings</a>
       <div class="user-menu-divider"></div>
-      <form method="post" action="/auth/logout"><button class="user-menu-item user-menu-signout" type="submit">Sign out</button></form>
+      <form method="post" action="/auth/logout"><input type="hidden" name="csrf_token" data-csrf-cookie><button class="user-menu-item user-menu-signout" type="submit">Sign out</button></form>
     </div>
   </div>
   {{end}}

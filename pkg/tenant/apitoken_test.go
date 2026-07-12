@@ -29,7 +29,7 @@ func TestValidateAPIToken_CoarsenedLastUsed(t *testing.T) {
 	db := st.DB()
 	tenantID := seedTenant(t, st)
 
-	raw, err := tenant.CreateAPIToken(ctx, db, tenantID, "ci")
+	raw, err := tenant.CreateAPIToken(ctx, db, tenantID, "ci", 0)
 	if err != nil {
 		t.Fatalf("create token: %v", err)
 	}
@@ -71,6 +71,41 @@ func TestValidateAPIToken_Invalid(t *testing.T) {
 	}
 }
 
+// TestValidateAPIToken_Expiry: a token minted with a TTL authenticates while
+// valid and is rejected once expired; a token minted with ttl<=0 never expires.
+func TestValidateAPIToken_Expiry(t *testing.T) {
+	st := testDB(t)
+	ctx := context.Background()
+	db := st.DB()
+	tenantID := seedTenant(t, st)
+
+	// Non-expiring token (ttl 0) authenticates.
+	forever, err := tenant.CreateAPIToken(ctx, db, tenantID, "forever", 0)
+	if err != nil {
+		t.Fatalf("create non-expiring: %v", err)
+	}
+	if _, err := tenant.ValidateAPIToken(ctx, db, forever); err != nil {
+		t.Fatalf("non-expiring token should authenticate: %v", err)
+	}
+
+	// Expiring token: valid now, then force it into the past and confirm rejection.
+	expiring, err := tenant.CreateAPIToken(ctx, db, tenantID, "expiring", time.Hour)
+	if err != nil {
+		t.Fatalf("create expiring: %v", err)
+	}
+	if _, err := tenant.ValidateAPIToken(ctx, db, expiring); err != nil {
+		t.Fatalf("unexpired token should authenticate: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`UPDATE devradar_api_token SET expires_at = now() - interval '1 minute'
+		 WHERE token_hash = $1`, tenant.HashToken(expiring)); err != nil {
+		t.Fatalf("backdate expiry: %v", err)
+	}
+	if _, err := tenant.ValidateAPIToken(ctx, db, expiring); err == nil {
+		t.Fatal("expired token must be rejected")
+	}
+}
+
 // TestCountAPITokens counts a tenant's tokens.
 func TestCountAPITokens(t *testing.T) {
 	st := testDB(t)
@@ -81,7 +116,7 @@ func TestCountAPITokens(t *testing.T) {
 		t.Errorf("fresh tenant token count = %d, want 0", n)
 	}
 	for range 3 {
-		if _, err := tenant.CreateAPIToken(ctx, st.DB(), tenantID, "x"); err != nil {
+		if _, err := tenant.CreateAPIToken(ctx, st.DB(), tenantID, "x", 0); err != nil {
 			t.Fatalf("create: %v", err)
 		}
 	}

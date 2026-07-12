@@ -53,6 +53,21 @@
     });
   });
 
+  // CSRF token for the always-present nav logout form. The double-submit token
+  // lives in a non-HttpOnly cookie (by design); RequireAuth guarantees it exists
+  // on every authenticated page. Echo it into any hidden [data-csrf-cookie]
+  // field so the form carries a matching token without every page handler having
+  // to render one. CSP-safe: this is first-party script-src 'self'.
+  document.addEventListener("DOMContentLoaded", function () {
+    var fields = document.querySelectorAll("input[data-csrf-cookie]");
+    if (!fields.length) return;
+    var m = document.cookie.match(/(?:^|;\s*)(?:__Host-csrf|csrf)=([^;]+)/);
+    if (!m) return;
+    fields.forEach(function (f) {
+      f.value = decodeURIComponent(m[1]);
+    });
+  });
+
   // Copy-to-clipboard for code blocks on the submit guide. Each .copyable wraps
   // a <pre> and a <button class="copy-btn">; clicking copies the <pre> text.
   document.addEventListener("DOMContentLoaded", function () {

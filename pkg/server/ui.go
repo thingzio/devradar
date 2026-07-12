@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -90,7 +91,6 @@ func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("POST /auth/login", s.handleRequestLink)
 	mux.HandleFunc("GET /auth/verify", s.handleVerifyConfirm)
 	mux.HandleFunc("POST /auth/verify", s.handleVerify)
-	mux.HandleFunc("POST /auth/logout", s.handleLogout)
 
 	// GitHub OAuth sign-in — registered only when configured (see Server.github).
 	if s.github != nil {
@@ -106,6 +106,10 @@ func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
 
 	authed := middleware.RequireAuth(db, loginPath)
 	csrf := middleware.ValidateCSRF
+	// Logout is CSRF-protected (double-submit) so a cross-site page can't force a
+	// victim's session to be cleared. It intentionally does NOT require an active
+	// session (authed) — clearing an already-invalid cookie is harmless and idempotent.
+	mux.Handle("POST /auth/logout", csrf(http.HandlerFunc(s.handleLogout)))
 	mux.Handle("GET /overview", authed(http.HandlerFunc(s.handleOverview)))
 	mux.Handle("GET /search", authed(http.HandlerFunc(s.handleSearch)))
 	mux.Handle("GET /dashboard", authed(http.HandlerFunc(s.handleDashboard)))
@@ -386,7 +390,7 @@ func (s *Server) handleTokensPage(w http.ResponseWriter, r *http.Request) {
 	// Read-and-delete the one-time token flash (set by handleCreateToken). Shown
 	// exactly once, never carried in the URL. A failure to read is non-fatal — the
 	// page still renders, just without the banner.
-	newToken, err := tenant.ConsumeTokenFlash(r.Context(), s.store.DB(), tn.ID)
+	newToken, err := tenant.ConsumeTokenFlash(r.Context(), s.store.DB(), tn.ID, config.TokenFlashKey())
 	if err != nil {
 		slog.Error("consume token flash", "error", err)
 	}
@@ -451,7 +455,10 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	raw, err := tenant.CreateAPIToken(r.Context(), s.store.DB(), tn.ID, name)
+	// Optional expiry: the form's expires_days field (0/absent ⇒ never expires,
+	// the historical default). Bounded to a sane maximum to catch fat-fingering.
+	ttl := parseTokenTTL(r.FormValue("expires_days"))
+	raw, err := tenant.CreateAPIToken(r.Context(), s.store.DB(), tn.ID, name, ttl)
 	if err != nil {
 		http.Error(w, "failed to create token", http.StatusInternalServerError)
 		return
@@ -459,7 +466,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	// Stash the raw token server-side for one-time display and redirect to a clean
 	// URL — never put the secret in the query string (browser history, Referer,
 	// logs). The /tokens page reads-and-deletes it once.
-	if err := tenant.StashTokenFlash(r.Context(), s.store.DB(), tn.ID, raw, tokenFlashTTL); err != nil {
+	if err := tenant.StashTokenFlash(r.Context(), s.store.DB(), tn.ID, raw, tokenFlashTTL, config.TokenFlashKey()); err != nil {
 		slog.Error("stash token flash", "error", err)
 		http.Error(w, "failed to create token", http.StatusInternalServerError)
 		return
@@ -605,21 +612,51 @@ func (s *Server) overLoginLimit(ctx context.Context, db *sql.DB, key string, lim
 	return !allowed
 }
 
-// clientIP extracts the caller's IP for rate-limit keying. Cloud Run sets
-// X-Forwarded-For as "client, proxy1, proxy2, ..."; the left-most entry is the
-// real client (the trailing hops are Google's front end). Falls back to the
-// connection's RemoteAddr host when the header is absent (local/dev).
+// clientIP extracts the caller's IP for rate-limit keying. It reads
+// X-Forwarded-For from the RIGHT, not the left: the client controls its own XFF
+// header, and infrastructure (Cloud Run's Google front end) only APPENDS the
+// hop it observed. So the left-most entries are attacker-spoofable, while the
+// entry `trustedProxies` from the right is the address the nearest trusted proxy
+// actually saw. With the Cloud Run default of 1 appended hop, that's the last
+// entry. Taking the left-most (the old behavior) let a client send
+// `X-Forwarded-For: <random>` to mint a fresh rate-limit key per request and
+// defeat the per-IP login limiter. Falls back to RemoteAddr host when the header
+// is absent (local/dev).
 func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			return strings.TrimSpace(xff[:i])
+	trusted := config.TrustedProxyCount()
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" && trusted > 0 {
+		parts := strings.Split(xff, ",")
+		// The right-most `trusted` entries were added by our own proxies; the one
+		// just before them is the furthest hop we can still trust.
+		// fewer hops than expected → fall back to the left-most present entry.
+		idx := max(len(parts)-trusted, 0)
+		if ip := strings.TrimSpace(parts[idx]); ip != "" {
+			return ip
 		}
-		return strings.TrimSpace(xff)
 	}
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		return host
 	}
 	return r.RemoteAddr
+}
+
+// parseTokenTTL turns an "expires_days" form value into a token lifetime. An
+// empty, zero, negative, or unparseable value yields 0 (never expires — the
+// historical default). Bounded to 10 years to catch obvious fat-fingering.
+func parseTokenTTL(raw string) time.Duration {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0
+	}
+	days, err := strconv.Atoi(raw)
+	if err != nil || days <= 0 {
+		return 0
+	}
+	const maxDays = 3650
+	if days > maxDays {
+		days = maxDays
+	}
+	return time.Duration(days) * 24 * time.Hour
 }
 
 // looksLikeEmail is a minimal sanity check — real validation is that the link is

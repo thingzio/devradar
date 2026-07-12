@@ -13,7 +13,7 @@ GOLANGCI_VERSION   ?= $(shell yq -r '.linting.golangci_lint' .settings.yaml 2>/d
 DEV_DB       := postgres://devradar:devradar@localhost:5432/devradar?sslmode=disable
 LOCAL_SBOMS  := .sboms
 LDFLAGS      := -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
-LOCAL_ENV    := DATABASE_URL="$(DEV_DB)" DEVRADAR_DEBUG=true DEVRADAR_LOCAL_SBOMS=1 DEVRADAR_LOCAL_SBOM_DIR="$(LOCAL_SBOMS)"
+LOCAL_ENV    := DATABASE_URL="$(DEV_DB)" DEVRADAR_DEBUG=true DEVRADAR_DEV_MODE=true DEVRADAR_LOCAL_SBOMS=1 DEVRADAR_LOCAL_SBOM_DIR="$(LOCAL_SBOMS)"
 
 all: help
 

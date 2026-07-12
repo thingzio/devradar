@@ -33,7 +33,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("upsert tenant: %w", err)
 	}
-	token, err := tenant.CreateAPIToken(ctx, db, tn.ID, "local-dev")
+	token, err := tenant.CreateAPIToken(ctx, db, tn.ID, "local-dev", 0)
 	if err != nil {
 		return fmt.Errorf("create token: %w", err)
 	}
