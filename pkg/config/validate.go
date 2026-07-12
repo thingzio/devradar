@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"strconv"
@@ -119,23 +120,28 @@ func validateURL(key string) error {
 	return nil
 }
 
-// validateTokenFlashKey fails closed on a security-at-rest misconfig: a SET but
-// invalid DEVRADAR_TOKEN_FLASH_KEY (not base64, or not 32 bytes) would otherwise
-// make TokenFlashKey() return nil and the caller store the one-time API token in
-// PLAINTEXT — silently defeating the encryption the operator meant to enable.
-// In DevMode anything goes (plaintext is the documented local default). OUTSIDE
-// dev the key is REQUIRED and must be valid: the one-time flash holds a live API
-// token, so an unset or invalid key silently stores that secret in plaintext at
-// rest — fail closed instead. This is stricter than before (unset used to be
-// allowed in prod); production deployments must provision the key.
+// validateTokenFlashKey guards the token-flash encryption key. A SET but invalid
+// DEVRADAR_TOKEN_FLASH_KEY (not base64, or not 32 bytes) would make TokenFlashKey()
+// return nil and the caller store the one-time API token in PLAINTEXT — silently
+// defeating the encryption the operator meant to enable — so a set-but-invalid
+// value is a HARD error in every mode (it is unambiguously a mistake).
+//
+// An UNSET key is NOT an error: the flash then falls back to plaintext-at-rest for
+// the ~2-minute display window, which is the documented behavior when no key is
+// provisioned (dev, and any environment that hasn't set one yet). Outside DevMode
+// we emit a loud startup WARNING so the plaintext fallback is visible, but we do
+// NOT refuse to start — making it fatal turned a not-yet-provisioned secret into a
+// deploy-blocking startup-probe failure (the container won't boot), which is worse
+// than the plaintext window it was trying to prevent. Provisioning the key is
+// tracked in INFRA.md; until then this degrades loudly, not fatally.
 func validateTokenFlashKey() error {
-	if DevMode() {
-		return nil
-	}
 	v := strings.TrimSpace(os.Getenv("DEVRADAR_TOKEN_FLASH_KEY"))
 	if v == "" {
-		return fmt.Errorf("DEVRADAR_TOKEN_FLASH_KEY is required outside DevMode " +
-			"(without it the one-time API-token flash is stored in plaintext at rest)")
+		if !DevMode() {
+			slog.Warn("DEVRADAR_TOKEN_FLASH_KEY is not set; the one-time API-token " +
+				"flash will be stored in PLAINTEXT at rest (provision the key to encrypt it)")
+		}
+		return nil
 	}
 	key, err := base64.StdEncoding.DecodeString(v)
 	if err != nil || len(key) != 32 {

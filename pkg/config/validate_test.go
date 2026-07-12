@@ -51,14 +51,15 @@ func TestValidate_RejectsInvalid(t *testing.T) {
 }
 
 func TestValidate_TokenFlashKeyFailsClosed(t *testing.T) {
-	// Outside dev the key is REQUIRED and must be valid (an unset or invalid key
-	// would silently store API tokens in plaintext). In dev anything goes.
-	t.Run("unset in prod is rejected", func(t *testing.T) {
+	// A set-but-invalid key is a HARD error in every mode. An UNSET key is allowed
+	// (degrades to a documented plaintext fallback with a startup warning) — it must
+	// NOT block startup, or a not-yet-provisioned secret becomes a deploy-blocking
+	// startup-probe failure.
+	t.Run("unset in prod is allowed (warns, not fatal)", func(t *testing.T) {
 		t.Setenv("DEVRADAR_DEV_MODE", "false")
 		t.Setenv("DEVRADAR_TOKEN_FLASH_KEY", "")
-		err := Validate()
-		if err == nil || !strings.Contains(err.Error(), "DEVRADAR_TOKEN_FLASH_KEY") {
-			t.Fatalf("expected token-flash-key required error in prod, got %v", err)
+		if err := Validate(); err != nil {
+			t.Fatalf("unset flash key must not fail startup in prod, got %v", err)
 		}
 	})
 	t.Run("invalid in prod is rejected", func(t *testing.T) {
@@ -76,11 +77,20 @@ func TestValidate_TokenFlashKeyFailsClosed(t *testing.T) {
 			t.Fatal("expected error for wrong-length key in prod")
 		}
 	})
-	t.Run("invalid in dev is tolerated", func(t *testing.T) {
+	t.Run("invalid in dev is also rejected", func(t *testing.T) {
+		// A set-but-invalid value is unambiguously a mistake, so it is a hard error
+		// even in dev (unlike an UNSET key, which is the documented plaintext default).
 		t.Setenv("DEVRADAR_DEV_MODE", "true")
 		t.Setenv("DEVRADAR_TOKEN_FLASH_KEY", "not-base64-!!")
+		if err := Validate(); err == nil {
+			t.Fatal("a set-but-invalid key should be rejected even in dev")
+		}
+	})
+	t.Run("unset in dev is fine", func(t *testing.T) {
+		t.Setenv("DEVRADAR_DEV_MODE", "true")
+		t.Setenv("DEVRADAR_TOKEN_FLASH_KEY", "")
 		if err := Validate(); err != nil {
-			t.Fatalf("dev mode should tolerate a bad key, got %v", err)
+			t.Fatalf("unset key in dev must pass, got %v", err)
 		}
 	})
 	t.Run("valid 32-byte key passes", func(t *testing.T) {
