@@ -618,7 +618,12 @@ func TestSnapshotTenantPosture_SkipsEmptyRepositoryKeys(t *testing.T) {
 }
 
 func TestSnapshotTenantPosture_ConcurrentRetries(t *testing.T) {
-	st := testStore(t)
+	// SnapshotTenantPosture does a global DELETE-then-INSERT of today's rows for
+	// all active tenants (no ON CONFLICT), serialized in production by a global
+	// advisory lock. A private schema keeps this test's writes from colliding
+	// with concurrent package tests that insert directly into the posture
+	// snapshot tables on the shared DB under `go test -race ./...`.
+	st := isolatedAdminProductHealthStore(t)
 	ctx := context.Background()
 	tenantID, sb := seedTenantAndSBOM(t, st)
 	repository := "registry.test/concurrent-" + randID(t)[:8]
@@ -673,7 +678,11 @@ func TestSnapshotTenantPosture_ConcurrentRetries(t *testing.T) {
 }
 
 func TestSnapshotTenantPosture_UsesOneSourceSnapshotAcrossProjections(t *testing.T) {
-	st := testStore(t)
+	// SnapshotTenantPosture rewrites every active tenant's snapshot for today
+	// (a global DELETE + INSERT). A private schema keeps a concurrent package
+	// test's snapshot on the shared DB from racing this test's projection reads
+	// under `go test -race ./...`.
+	st := isolatedAdminProductHealthStore(t)
 	ctx := context.Background()
 	tenantID, sb := seedTenantAndSBOM(t, st)
 	repository := "registry.test/interleaved-" + randID(t)[:8]

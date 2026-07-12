@@ -10,16 +10,13 @@ import (
 // on-or-before-horizon snapshot from the current one. It starts from a clean
 // devradar_platform_stats table (shared test DB) and cleans up after itself.
 func TestSnapshotPlatformStats_UpsertAndDeltas(t *testing.T) {
-	st := testStore(t)
+	// SnapshotPlatformStats and the delta assertions read GLOBAL cross-tenant
+	// state (devradar_platform_stats row counts, the tenant count). A private
+	// schema keeps concurrent package tests on the shared DB from drifting those
+	// counts under `go test -race ./...`.
+	st := isolatedAdminProductHealthStore(t)
 	ctx := context.Background()
 	db := st.DB()
-
-	// Isolate from any rows left by other runs; restore-free (table is only
-	// written by this feature, and re-snapshotting recreates today's row).
-	if _, err := db.ExecContext(ctx, `DELETE FROM devradar_platform_stats`); err != nil {
-		t.Fatalf("clean stats: %v", err)
-	}
-	t.Cleanup(func() { _, _ = db.ExecContext(ctx, `DELETE FROM devradar_platform_stats`) })
 
 	if _, err := db.ExecContext(ctx,
 		`INSERT INTO devradar_tenant (email) VALUES ('snap-'||gen_random_uuid()||'@example.com')`); err != nil {

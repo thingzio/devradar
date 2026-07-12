@@ -16,7 +16,11 @@ import (
 )
 
 func TestAlertEvaluatorStore_ReverseCommitDoesNotLoseEarlierEvent(t *testing.T) {
-	st := testStore(t)
+	// A new consumer initializes prospectively from the GLOBAL finding-event
+	// tail, and the evaluator drains the GLOBAL alert queue. A private schema
+	// keeps concurrent package tests on the shared DB from inserting events
+	// behind this test's cursor under `go test -race ./...`.
+	st := isolatedAdminProductHealthStore(t)
 	ctx := context.Background()
 	tenantID, sb := seedTenantAndSBOM(t, st)
 	consumer := "reverse-commit-" + randID(t)
@@ -24,8 +28,11 @@ func TestAlertEvaluatorStore_ReverseCommitDoesNotLoseEarlierEvent(t *testing.T) 
 	if _, err := st.EnsureAlertPolicy(ctx, tenantID); err != nil {
 		t.Fatalf("ensure policy: %v", err)
 	}
+	// Backdate updated_at so the policy predates the synthetic events below: the
+	// evaluator skips events that occurred before the policy was last changed, and
+	// these events are timestamped relative to the (possibly epoch) cursor tail.
 	if _, err := st.DB().ExecContext(ctx,
-		`UPDATE devradar_alert_policy SET enabled=true WHERE tenant_id=$1`, tenantID); err != nil {
+		`UPDATE devradar_alert_policy SET enabled=true, updated_at='epoch' WHERE tenant_id=$1`, tenantID); err != nil {
 		t.Fatalf("enable policy: %v", err)
 	}
 
