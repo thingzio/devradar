@@ -71,10 +71,12 @@ func (c *SyftCanonicalizer) convert(ctx context.Context, raw []byte) ([]byte, er
 	// CycloneDX form syft emits is not, and it is buffered fully in memory. A
 	// capped writer keeps an adversarial expansion from exhausting memory.
 	out := &cappedBuffer{limit: maxCanonicalizedBytes}
-	var errb bytes.Buffer
+	// Bound stderr too: syft is fed an attacker-controlled SPDX file, so a
+	// diagnostic flood on stderr must not be an unbounded allocation either.
+	errb := &cappedBuffer{limit: maxSyftStderrBytes}
 	cmd := exec.CommandContext(ctx, "syft", "convert", f.Name(), "-q", "-o", "cyclonedx-json")
 	cmd.Stdout = out
-	cmd.Stderr = &errb
+	cmd.Stderr = errb
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("syft convert: %w (%s)", err, truncate(errb.String(), 300))
 	}
@@ -91,6 +93,10 @@ func (c *SyftCanonicalizer) convert(ctx context.Context, raw []byte) ([]byte, er
 // A 20 MiB SPDX input converts to a comparable CycloneDX document; this cap sits
 // well above legitimate output while bounding adversarial expansion.
 const maxCanonicalizedBytes = 128 << 20
+
+// maxSyftStderrBytes caps retained syft stderr — only a truncated prefix is ever
+// surfaced for diagnostics, so bounding it defeats an SBOM-induced flood.
+const maxSyftStderrBytes = 64 << 10
 
 // cappedBuffer is an io.Writer that stops accepting data past limit and records
 // the overflow, so a subprocess cannot drive an unbounded in-memory allocation.
@@ -114,6 +120,8 @@ func (c *cappedBuffer) Write(p []byte) (int, error) {
 	}
 	return c.buf.Write(p)
 }
+
+func (c *cappedBuffer) String() string { return c.buf.String() }
 
 func syftVersion() string {
 	var out bytes.Buffer

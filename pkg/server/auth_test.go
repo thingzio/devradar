@@ -222,13 +222,28 @@ func TestMagicLink_ConsumeAndSession(t *testing.T) {
 	if getRec.Code != http.StatusOK {
 		t.Fatalf("verify GET: status = %d, want 200 (confirm page)", getRec.Code)
 	}
-	if len(getRec.Result().Cookies()) != 0 {
-		t.Error("verify GET must not set a session cookie (no consume)")
+	// The confirm page sets a CSRF cookie and embeds the token, but must NOT set a
+	// session cookie (no consume). POST /auth/verify is CSRF-protected (login-CSRF
+	// defense), so capture the double-submit pair the confirm page issued.
+	var csrfCookie *http.Cookie
+	for _, c := range getRec.Result().Cookies() {
+		switch c.Name {
+		case middleware.SessionCookieName():
+			t.Error("verify GET must not set a session cookie (no consume)")
+		case middleware.CSRFCookieName():
+			csrfCookie = c
+		}
 	}
+	if csrfCookie == nil {
+		t.Fatal("verify GET must set a CSRF cookie for the confirm form")
+	}
+	csrfTok := scrapeCSRF(t, getRec.Body.String())
 
 	// POST consumes the still-valid token and mints a session.
-	postReq := httptest.NewRequest(http.MethodPost, "/auth/verify", strings.NewReader("token="+raw))
+	postReq := httptest.NewRequest(http.MethodPost, "/auth/verify",
+		strings.NewReader("token="+raw+"&csrf_token="+csrfTok))
 	postReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	postReq.AddCookie(csrfCookie)
 	postRec := httptest.NewRecorder()
 	h.ServeHTTP(postRec, postReq)
 	if postRec.Code != http.StatusFound {
@@ -241,12 +256,50 @@ func TestMagicLink_ConsumeAndSession(t *testing.T) {
 		t.Error("verify POST should set a session cookie")
 	}
 
-	// Reuse the same token → single-use, must fail to /?error=used.
-	reuseReq := httptest.NewRequest(http.MethodPost, "/auth/verify", strings.NewReader("token="+raw))
+	// Reuse the same token → single-use, must fail to /?error=used. (Still passes
+	// CSRF; single-use rejection happens after.)
+	reuseReq := httptest.NewRequest(http.MethodPost, "/auth/verify",
+		strings.NewReader("token="+raw+"&csrf_token="+csrfTok))
 	reuseReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	reuseReq.AddCookie(csrfCookie)
 	reuseRec := httptest.NewRecorder()
 	h.ServeHTTP(reuseRec, reuseReq)
 	if loc := reuseRec.Header().Get("Location"); !strings.Contains(loc, "error=used") {
 		t.Errorf("reused token redirect = %q, want ?error=used", loc)
+	}
+}
+
+// TestMagicLink_VerifyRequiresCSRF asserts POST /auth/verify is CSRF-protected:
+// a forged cross-site POST carrying an attacker-owned magic-link token but no
+// double-submit CSRF pair is rejected with 403, so it cannot silently sign a
+// victim into the attacker's tenant (login-CSRF). The token is never consumed.
+func TestMagicLink_VerifyRequiresCSRF(t *testing.T) {
+	srv, st := testServer(t)
+	h := srv.Handler()
+	ctx := context.Background()
+
+	raw, err := tenant.CreateLoginToken(ctx, st.DB(), "csrf-victim@example.com", 15*time.Minute)
+	if err != nil {
+		t.Fatalf("create login token: %v", err)
+	}
+
+	// POST with a valid token but no csrf_token field / cookie → 403, no session.
+	req := httptest.NewRequest(http.MethodPost, "/auth/verify", strings.NewReader("token="+raw))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("forged verify POST: status = %d, want 403", rec.Code)
+	}
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == middleware.SessionCookieName() && c.Value != "" {
+			t.Error("forged verify POST must not mint a session cookie")
+		}
+	}
+
+	// The token must survive (not consumed) — a subsequent legitimate confirm can
+	// still peek it. PeekLoginToken succeeds only if the token is still valid.
+	if _, err := tenant.PeekLoginToken(ctx, st.DB(), raw); err != nil {
+		t.Errorf("token should be unconsumed after rejected CSRF POST, got: %v", err)
 	}
 }

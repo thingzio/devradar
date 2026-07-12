@@ -35,10 +35,18 @@ func (s *Store) DistinctActiveCVEs(ctx context.Context) ([]string, error) {
 }
 
 // UpsertCVEEnrichment writes enrichment records, replacing prior values per CVE.
-// A KEV that later drops from the catalog is reflected by the fresh upsert only
-// for CVEs in this batch; CVEs not re-fetched keep their last-known values (a
-// stale EPSS is acceptable — see the package doc).
-func (s *Store) UpsertCVEEnrichment(ctx context.Context, recs []enrich.Record) error {
+// CVEs not re-fetched keep their last-known values (a stale EPSS is acceptable —
+// see the package doc).
+//
+// kevAuthoritative controls how the KEV flag is written. A KEV designation is a
+// security-relevant signal, so it may only be CLEARED when the KEV catalog was
+// authoritatively fetched this run (kevAuthoritative=true) — then a record's
+// KEV=false means the CVE genuinely left the catalog. When false (a KEV feed
+// outage that Fetch rode through on EPSS alone), every record carries a
+// zero-value KEV=false that is NOT a real removal; writing it would silently wipe
+// every stored KEV flag. In that case we preserve the prior flag (kev = prior OR
+// incoming), so an outage never downgrades a KEV.
+func (s *Store) UpsertCVEEnrichment(ctx context.Context, recs []enrich.Record, kevAuthoritative bool) error {
 	if len(recs) == 0 {
 		return nil
 	}
@@ -48,13 +56,20 @@ func (s *Store) UpsertCVEEnrichment(ctx context.Context, recs []enrich.Record) e
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// When KEV was NOT authoritatively fetched, never let an incoming false clear a
+	// stored true: OR the prior value in. When it WAS, take the fresh value verbatim
+	// so a genuine catalog removal is honored.
+	kevSet := `kev = EXCLUDED.kev`
+	if !kevAuthoritative {
+		kevSet = `kev = (devradar_cve_enrichment.kev OR EXCLUDED.kev)`
+	}
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO devradar_cve_enrichment (cve, epss_score, epss_percentile, kev, kev_added, updated_at)
 		VALUES ($1, $2, $3, $4, $5, now())
 		ON CONFLICT (cve) DO UPDATE SET
 			epss_score      = COALESCE(EXCLUDED.epss_score, devradar_cve_enrichment.epss_score),
 			epss_percentile = COALESCE(EXCLUDED.epss_percentile, devradar_cve_enrichment.epss_percentile),
-			kev             = EXCLUDED.kev,
+			`+kevSet+`,
 			kev_added       = COALESCE(EXCLUDED.kev_added, devradar_cve_enrichment.kev_added),
 			updated_at      = now()`)
 	if err != nil {

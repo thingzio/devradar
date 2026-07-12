@@ -90,7 +90,13 @@ func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /", s.handleLanding)
 	mux.HandleFunc("POST /auth/login", s.handleRequestLink)
 	mux.HandleFunc("GET /auth/verify", s.handleVerifyConfirm)
-	mux.HandleFunc("POST /auth/verify", s.handleVerify)
+	// POST /auth/verify mints a session for the token's tenant, so it must be
+	// bound to our own confirm page — otherwise a cross-site form carrying an
+	// attacker-owned magic-link token is a login-CSRF: the victim's browser gets
+	// a session cookie for the ATTACKER's tenant. The confirm GET seeds a
+	// double-submit CSRF cookie (issueCSRF) that a cross-site page can neither
+	// read nor set (SameSite=Strict, __Host-), so the forged POST fails.
+	mux.Handle("POST /auth/verify", middleware.ValidateCSRF(http.HandlerFunc(s.handleVerify)))
 
 	// GitHub OAuth sign-in — registered only when configured (see Server.github).
 	if s.github != nil {
@@ -195,6 +201,10 @@ func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 // which addresses are registered.
 func (s *Server) handleRequestLink(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	// Cap the unauthenticated login body — a magic-link request carries only an
+	// email field, so a small ceiling is ample and bounds abuse of a pre-auth
+	// endpoint.
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	email := tenant.NormalizeEmail(r.FormValue("email"))
 	if !looksLikeEmail(email) {
 		http.Redirect(w, r, loginPath+"?error=email", http.StatusSeeOther)
@@ -251,9 +261,10 @@ func (s *Server) handleVerifyConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	render(w, "verify.html", map[string]any{
-		"Title":   "Confirm sign-in",
-		"Token":   token,
-		"Version": s.opts.Version,
+		"Title":     "Confirm sign-in",
+		"Token":     token,
+		"CSRFToken": issueCSRF(w),
+		"Version":   s.opts.Version,
 	})
 }
 

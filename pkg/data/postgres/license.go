@@ -12,11 +12,18 @@ import (
 	"github.com/thingzio/devradar/pkg/data"
 )
 
+// licenseInsertChunk is the number of packages per multi-row INSERT. Up to
+// maxPackages (100k) rows can be captured per SBOM; inserting them one round-trip
+// each — synchronously inside the HTTP ingest request — was a latency and
+// connection-hold hazard. Chunked multi-row VALUES cut that to ~maxPackages/chunk
+// round-trips (5 columns × 1000 = 5000 params, well under lib/pq's 65535 limit).
+const licenseInsertChunk = 1000
+
 // UpsertSBOMPackages records the per-package license inventory extracted from an
 // SBOM at ingest. The inventory is immutable (frozen per digest), so conflicts on
 // the natural key (sbom_id, package, version) are ignored — the first write is
 // canonical. Called once, only for a newly-inserted SBOM; a no-op for an empty
-// list. Batched in one transaction.
+// list. Inserts are chunked into multi-row statements in one transaction.
 func (s *Store) UpsertSBOMPackages(ctx context.Context, sbomID string, pkgs []data.PackageLicense) error {
 	if len(pkgs) == 0 {
 		return nil
@@ -27,25 +34,40 @@ func (s *Store) UpsertSBOMPackages(ctx context.Context, sbomID string, pkgs []da
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO devradar_sbom_package (sbom_id, package, version, purl, licenses)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (sbom_id, package, version) DO NOTHING`)
-	if err != nil {
-		return fmt.Errorf("prepare package insert: %w", err)
+	for start := 0; start < len(pkgs); start += licenseInsertChunk {
+		end := min(start+licenseInsertChunk, len(pkgs))
+		if err := insertPackageChunk(ctx, tx, sbomID, pkgs[start:end]); err != nil {
+			return err
+		}
 	}
-	defer func() { _ = stmt.Close() }()
+	return tx.Commit()
+}
 
-	for _, p := range pkgs {
+// insertPackageChunk inserts one batch of package rows in a single multi-row
+// INSERT. Builds ($1,$2,…) placeholders per row so the whole chunk is one
+// round-trip. ON CONFLICT DO NOTHING preserves the first-write-canonical rule.
+func insertPackageChunk(ctx context.Context, tx *sql.Tx, sbomID string, pkgs []data.PackageLicense) error {
+	const cols = 5
+	var b strings.Builder
+	b.WriteString(`INSERT INTO devradar_sbom_package (sbom_id, package, version, purl, licenses) VALUES `)
+	args := make([]any, 0, len(pkgs)*cols)
+	for i, p := range pkgs {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		n := i * cols
+		fmt.Fprintf(&b, "($%d,$%d,$%d,$%d,$%d)", n+1, n+2, n+3, n+4, n+5)
 		lics := p.Licenses
 		if lics == nil {
 			lics = []string{} // pq.Array(nil) sends NULL; the column is NOT NULL
 		}
-		if _, err := stmt.ExecContext(ctx, sbomID, p.Package, p.Version, p.PURL, pq.Array(lics)); err != nil {
-			return fmt.Errorf("insert package %s: %w", p.Package, err)
-		}
+		args = append(args, sbomID, p.Package, p.Version, p.PURL, pq.Array(lics))
 	}
-	return tx.Commit()
+	b.WriteString(` ON CONFLICT (sbom_id, package, version) DO NOTHING`)
+	if _, err := tx.ExecContext(ctx, b.String(), args...); err != nil {
+		return fmt.Errorf("insert package chunk: %w", err)
+	}
+	return nil
 }
 
 // HasSBOMPackages reports whether the license inventory for an SBOM has already

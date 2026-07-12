@@ -67,7 +67,14 @@ func New() *Fetcher {
 // whole catalog); EPSS is requested only for cves (batched). A CVE with neither
 // KEV nor EPSS data yields no record — callers upsert what they get. Partial
 // failure is surfaced as an error only when nothing could be retrieved.
-func (f *Fetcher) Fetch(ctx context.Context, cves []string) ([]Record, error) {
+//
+// kevAuthoritative reports whether the KEV catalog was successfully fetched this
+// call. It is CRITICAL for the upsert: when false (a KEV feed outage while EPSS
+// succeeded), every record carries the zero-value KEV=false, and the store must
+// NOT let that clear a previously-set KEV flag — a KEV designation is a
+// security-relevant signal that must survive a transient feed blip. Only an
+// authoritative fetch may clear a KEV flag (the CVE genuinely left the catalog).
+func (f *Fetcher) Fetch(ctx context.Context, cves []string) (recs []Record, kevAuthoritative bool, err error) {
 	client := f.Client
 	if client == nil {
 		client = &http.Client{Timeout: defaultTimeout}
@@ -76,7 +83,7 @@ func (f *Fetcher) Fetch(ctx context.Context, cves []string) ([]Record, error) {
 	kev, kevErr := f.fetchKEV(ctx, client)
 	epss, epssErr := f.fetchEPSS(ctx, client, cves)
 	if kevErr != nil && epssErr != nil {
-		return nil, fmt.Errorf("enrichment fetch failed: %w", errors.Join(kevErr, epssErr))
+		return nil, false, fmt.Errorf("enrichment fetch failed: %w", errors.Join(kevErr, epssErr))
 	}
 
 	// Merge over the union of CVEs we have data for, restricted to the requested
@@ -112,7 +119,7 @@ func (f *Fetcher) Fetch(ctx context.Context, cves []string) ([]Record, error) {
 	for _, r := range merged {
 		out = append(out, *r)
 	}
-	return out, nil
+	return out, kevErr == nil, nil
 }
 
 // ── KEV ─────────────────────────────────────────────────────────────────────

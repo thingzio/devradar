@@ -76,19 +76,24 @@ func csrfFor(t *testing.T, h http.Handler, session *http.Cookie, path string) (*
 	if csrfCookie == nil {
 		t.Fatalf("no CSRF cookie set by GET %s (status %d)", path, rec.Code)
 	}
-	// Scrape value="..." from the first csrf_token hidden input.
-	body := rec.Body.String()
+	return csrfCookie, scrapeCSRF(t, rec.Body.String())
+}
+
+// scrapeCSRF pulls the hidden csrf_token value out of rendered HTML — the value
+// a browser would echo back as the double-submit form field.
+func scrapeCSRF(t *testing.T, body string) string {
+	t.Helper()
 	marker := `name="csrf_token" value="`
 	i := strings.Index(body, marker)
 	if i < 0 {
-		t.Fatalf("no csrf_token field in GET %s", path)
+		t.Fatal("no csrf_token field in rendered HTML")
 	}
 	rest := body[i+len(marker):]
 	j := strings.IndexByte(rest, '"')
 	if j < 0 {
-		t.Fatalf("malformed csrf_token field in GET %s", path)
+		t.Fatal("malformed csrf_token field in rendered HTML")
 	}
-	return csrfCookie, rest[:j]
+	return rest[:j]
 }
 
 func seedTenantToken(t *testing.T, st *postgres.Store) (tenantID, token string) {

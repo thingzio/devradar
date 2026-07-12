@@ -52,7 +52,7 @@ func (f *fakeStore) RecordScanFailure(_ context.Context, sbomID, _, stage string
 	f.failedIDs = append(f.failedIDs, sbomID)
 }
 func (f *fakeStore) DistinctActiveCVEs(context.Context) ([]string, error)       { return nil, nil }
-func (f *fakeStore) UpsertCVEEnrichment(context.Context, []enrich.Record) error { return nil }
+func (f *fakeStore) UpsertCVEEnrichment(context.Context, []enrich.Record, bool) error { return nil }
 func (f *fakeStore) HasSBOMPackages(_ context.Context, sbomID string) (bool, error) {
 	return f.hasPkgs[sbomID], nil
 }
@@ -215,11 +215,15 @@ func TestRunner_ZeroFindingsTripwire(t *testing.T) {
 	if err := r.Execute(context.Background()); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if store.applied != 0 {
-		t.Errorf("ApplyScan should not run on tripwire, got %d", store.applied)
-	}
+	// The zero-finding anomaly is RECORDED for ops visibility...
 	if len(store.failures) != 1 || store.failures[0] != "zero-findings" {
 		t.Errorf("want one zero-findings failure, got %v", store.failures)
+	}
+	// ...but the scan STILL persists (a clean result is valid). Suppressing
+	// ApplyScan here left no scan_run, so the SBOM never converged and re-scanned
+	// every tick forever — the bug this asserts against.
+	if store.applied != 1 {
+		t.Errorf("ApplyScan must still run so the SBOM converges, got %d", store.applied)
 	}
 }
 
@@ -348,7 +352,7 @@ func TestRunner_ScanTimeoutRecorded(t *testing.T) {
 // nil enricher (disabled) is a no-op.
 func TestRunner_EnrichmentRefresh(t *testing.T) {
 	store := &enrichStore{cves: []string{"CVE-2025-1", "CVE-2025-2"}}
-	en := &fakeEnricher{recs: []enrich.Record{{CVE: "CVE-2025-1", KEV: true}}}
+	en := &fakeEnricher{recs: []enrich.Record{{CVE: "CVE-2025-1", KEV: true}}, kevAuthoritative: true}
 	r := NewRunner(store, fakeFetcher{}, sbom.NewPassthroughCanonicalizer(),
 		[]scanner.Scanner{&fakeScanner{name: "grype", out: grypeDoc}},
 		converter.DefaultRegistry(), en, DefaultOptions())
@@ -360,6 +364,23 @@ func TestRunner_EnrichmentRefresh(t *testing.T) {
 	}
 	if store.upserted != 1 {
 		t.Errorf("upserted %d records, want 1", store.upserted)
+	}
+	if !store.lastKEVAuthoritative {
+		t.Error("kevAuthoritative should propagate true to the store")
+	}
+
+	// KEV feed outage (kevAuthoritative=false) must still upsert, but signal the
+	// store to preserve KEV flags rather than clear them.
+	store3 := &enrichStore{cves: []string{"CVE-2025-1"}}
+	en3 := &fakeEnricher{recs: []enrich.Record{{CVE: "CVE-2025-1"}}, kevAuthoritative: false}
+	r3 := NewRunner(store3, fakeFetcher{}, sbom.NewPassthroughCanonicalizer(),
+		[]scanner.Scanner{&fakeScanner{name: "grype", out: grypeDoc}},
+		converter.DefaultRegistry(), en3, DefaultOptions())
+	if err := r3.Execute(context.Background()); err != nil {
+		t.Fatalf("run (kev outage): %v", err)
+	}
+	if store3.lastKEVAuthoritative {
+		t.Error("a KEV outage must propagate kevAuthoritative=false so flags are preserved")
 	}
 
 	// Nil enricher: enrichment skipped, no calls.
@@ -376,8 +397,9 @@ func TestRunner_EnrichmentRefresh(t *testing.T) {
 }
 
 type enrichStore struct {
-	cves     []string
-	upserted int
+	cves         []string
+	upserted     int
+	lastKEVAuthoritative bool // captured from the most recent UpsertCVEEnrichment
 }
 
 func (s *enrichStore) ListActiveSBOMs(context.Context) ([]*postgres.SBOM, error) { return nil, nil }
@@ -394,19 +416,21 @@ func (s *enrichStore) UpsertSBOMPackages(context.Context, string, []data.Package
 	return nil
 }
 func (s *enrichStore) DistinctActiveCVEs(context.Context) ([]string, error) { return s.cves, nil }
-func (s *enrichStore) UpsertCVEEnrichment(_ context.Context, recs []enrich.Record) error {
+func (s *enrichStore) UpsertCVEEnrichment(_ context.Context, recs []enrich.Record, kevAuthoritative bool) error {
 	s.upserted += len(recs)
+	s.lastKEVAuthoritative = kevAuthoritative
 	return nil
 }
 
 type fakeEnricher struct {
-	recs    []enrich.Record
-	gotCVEs []string
+	recs             []enrich.Record
+	gotCVEs          []string
+	kevAuthoritative bool
 }
 
-func (f *fakeEnricher) Fetch(_ context.Context, cves []string) ([]enrich.Record, error) {
+func (f *fakeEnricher) Fetch(_ context.Context, cves []string) ([]enrich.Record, bool, error) {
 	f.gotCVEs = cves
-	return f.recs, nil
+	return f.recs, f.kevAuthoritative, nil
 }
 
 // ── fake scanner plumbing ─────────────────────────────────────────────────────

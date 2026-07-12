@@ -56,7 +56,10 @@ type Store interface {
 	ClearRescanRequested(ctx context.Context, sbomID string) error
 	RecordScanFailure(ctx context.Context, sbomID, scanner, stage string, cause error)
 	DistinctActiveCVEs(ctx context.Context) ([]string, error)
-	UpsertCVEEnrichment(ctx context.Context, recs []enrich.Record) error
+	// UpsertCVEEnrichment writes enrichment records. kevAuthoritative gates whether
+	// a KEV=false in a record may clear a stored KEV flag — false (a KEV feed
+	// outage) preserves existing flags rather than wiping them.
+	UpsertCVEEnrichment(ctx context.Context, recs []enrich.Record, kevAuthoritative bool) error
 	// License-inventory backfill: HasSBOMPackages gates re-extraction so SBOMs
 	// ingested before license capture existed are populated once, on their next
 	// scan, without re-extracting the whole fleet nightly.
@@ -67,7 +70,7 @@ type Store interface {
 // Enricher fetches CVE risk context (EPSS + KEV). Injectable so the scan loop is
 // testable without live feeds.
 type Enricher interface {
-	Fetch(ctx context.Context, cves []string) ([]enrich.Record, error)
+	Fetch(ctx context.Context, cves []string) (recs []enrich.Record, kevAuthoritative bool, err error)
 }
 
 // Options configures a scan run.
@@ -144,8 +147,11 @@ func Run(ctx context.Context, opts Options) error {
 
 	scanners := scanner.DefaultRegistry().Available()
 	if len(scanners) == 0 {
-		slog.Warn("no scanners available on PATH; nothing to do")
-		return nil
+		// FAIL LOUDLY, not nil. A scan job with no scanner binary on PATH is a
+		// broken deploy (bad image, PATH misconfig), not "nothing to do" — returning
+		// nil exits 0 and the Cloud Run Job reports success, masking the outage.
+		// An error surfaces it in job status and ops alerting.
+		return fmt.Errorf("no scanners available on PATH (expected grype and/or trivy); check the scan-job image")
 	}
 
 	// Prefer the syft-backed canonicalizer (SPDX -> CycloneDX); fall back to
@@ -287,12 +293,15 @@ func (r *Runner) refreshEnrichment(ctx context.Context) {
 	if len(cves) == 0 {
 		return
 	}
-	recs, err := r.enricher.Fetch(ctx, cves)
+	recs, kevAuthoritative, err := r.enricher.Fetch(ctx, cves)
 	if err != nil {
 		slog.Warn("enrichment fetch failed", "error", err)
 		return
 	}
-	if err := r.store.UpsertCVEEnrichment(ctx, recs); err != nil {
+	if !kevAuthoritative {
+		slog.Warn("enrichment: KEV feed unavailable this run; preserving existing KEV flags")
+	}
+	if err := r.store.UpsertCVEEnrichment(ctx, recs, kevAuthoritative); err != nil {
 		slog.Warn("enrichment upsert failed", "error", err)
 		return
 	}
@@ -445,13 +454,19 @@ func (r *Runner) scanWith(ctx context.Context, sb *postgres.SBOM, sc readyScanne
 		return
 	}
 
-	// Tripwire: zero findings on a non-trivial SBOM signals a conversion/DB
-	// regression (e.g. Trivy on un-canonicalized SPDX, or a missing DB), not a
-	// clean image. Record it rather than writing a misleading "all resolved".
+	// Tripwire: zero findings on a non-trivial SBOM is WORTH SURFACING — it can
+	// signal a conversion/DB regression (e.g. Trivy on un-canonicalized SPDX, or a
+	// missing DB). But it can equally be a genuinely clean image (distroless,
+	// minimal, well-patched bases routinely carry >5 packages and 0 CVEs). So we
+	// record the anomaly for ops visibility but STILL persist the scan below —
+	// a clean result is a valid result. Suppressing the ApplyScan here (the old
+	// behavior) meant no scan_run row was written, so ListScannableSBOMs kept the
+	// SBOM perpetually "due": it re-scanned every tick and re-failed forever,
+	// never converging. Cross-scanner disagreement (grype finds >0, trivy finds 0)
+	// remains queryable via this failure surface for a real regression signal.
 	if len(vulns) == 0 && sb.PackageCount > zeroFindingFloor {
 		r.recordFailure(ctx, sb.ID, sc.Name(), "zero-findings",
-			fmt.Errorf("0 findings on sbom with %d packages", sb.PackageCount))
-		return
+			fmt.Errorf("0 findings on sbom with %d packages (recorded; may be a clean image)", sb.PackageCount))
 	}
 
 	// ver was captured once at job start (DB is frozen for the run).

@@ -5,10 +5,23 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/thingzio/devradar/pkg/data"
 )
+
+// sortedKeys returns a map's keys in ascending order, so a loop over a finding
+// map emits events in a stable, reproducible sequence rather than Go's
+// randomized map-iteration order.
+func sortedKeys(m map[string]data.Vulnerability) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
 
 // ApplyScan records the result of scanning one SBOM with one scanner. It is the
 // delta engine: it diffs the incoming findings against the current stored state,
@@ -75,8 +88,13 @@ func (s *Store) ApplyScan(ctx context.Context, sb *SBOM, scanner string, ver Ver
 	// scan shares the same cause.
 	cause := classifyCause(ver, prevVer)
 
-	// added / rerated / fixed
-	for id, in := range incoming {
+	// added / rerated / fixed. Iterate finding IDs in sorted order (not Go's
+	// randomized map order) so that identical inputs produce the same event-id
+	// sequence run-to-run — reproducibility of the append-only log, matching the
+	// determinism guarantee. State convergence is order-independent, but a stable
+	// order makes the event stream itself reproducible.
+	for _, id := range sortedKeys(incoming) {
+		in := incoming[id]
 		old, existed := prev[id]
 		switch {
 		case !existed:
@@ -109,11 +127,12 @@ func (s *Store) ApplyScan(ctx context.Context, sb *SBOM, scanner string, ver Ver
 		}
 	}
 
-	// resolved: in previous, not in incoming
-	for id, old := range prev {
+	// resolved: in previous, not in incoming (sorted, same reproducibility reason)
+	for _, id := range sortedKeys(prev) {
 		if _, stillPresent := incoming[id]; stillPresent {
 			continue
 		}
+		old := prev[id]
 		eventID, err := insertEvent(ctx, tx, sb, scanner, id, data.EventResolved, old, &old, cause, ver, runID, now)
 		if err != nil {
 			return err
@@ -202,25 +221,32 @@ func recomputeSBOMRollup(ctx context.Context, tx *sql.Tx, sbomID string) error {
 	return nil
 }
 
-// classifyCause attributes a run's deltas to the single version axis that
-// changed since the prior run of this exact SBOM+scanner. Because the SBOM is
-// immutable and keyed per digest, the first-ever run of an SBOM is image-caused
-// (the image is the newest input); thereafter a changed vuln DB is db-caused and
-// a changed scanner/canonicalizer is tooling-caused. Priority reflects which
-// input is the more meaningful cause when more than one moved.
+// classifyCause attributes a run's deltas to the version axis that changed since
+// the prior run of this exact SBOM+scanner. Because the SBOM is immutable and
+// keyed per digest, the first-ever run of an SBOM is image-caused (the image is
+// the newest input); thereafter a changed scanner/canonicalizer is tooling-caused
+// and a changed vuln DB is db-caused.
+//
+// When MORE THAN ONE axis moved (a realistic deploy ships a new scanner binary
+// together with a refreshed DB), tooling DOMINATES: the delta is treated as
+// tooling (non-alertable) rather than db (alertable). This upholds the
+// hard invariant that a scanner/canonicalizer upgrade must NEVER page a tenant —
+// when a matcher-logic change is in the mix, its effect on the finding set is
+// inseparable from the DB's, so we conservatively under-page (tooling) instead of
+// risking a tooling-driven delta being alerted as db. A pure DB bump (tooling
+// unchanged) is still correctly db-caused and alertable.
 func classifyCause(ver, prev Versions) string {
 	if prev == (Versions{}) {
 		// No prior scan of this exact SBOM → the SBOM itself is what's new.
 		return data.CauseImage
 	}
-	if prev.DBVersion != ver.DBVersion {
-		return data.CauseDB
-	}
 	if prev.ScannerVersion != ver.ScannerVersion || prev.CanonicalizerVersion != ver.CanonicalizerVersion {
+		// Tooling moved (possibly alongside the DB): classify as tooling so a
+		// scanner upgrade can never page, even when the DB also changed.
 		return data.CauseTooling
 	}
-	// Same SBOM, same DB, same tooling — a delta here reflects real-world DB
-	// movement the caller labeled identically; attribute to db, never image.
+	// Tooling held constant. A changed DB — or a delta under identical versions,
+	// reflecting real-world DB movement the caller labeled the same — is db-caused.
 	return data.CauseDB
 }
 

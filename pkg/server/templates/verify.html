@@ -5,6 +5,7 @@
     <p class="sub">You're one click away from signing in to DevRadar.</p>
     <form method="post" action="/auth/verify">
       <input type="hidden" name="token" value="{{.Token}}">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
       <button class="btn" type="submit" style="margin-top:0.5rem">Sign in to DevRadar</button>
     </form>
     <p class="muted" style="margin-bottom:0; margin-top:1rem; font-size:0.85rem">

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/url"
@@ -44,6 +45,16 @@ func Validate() error {
 
 	// Non-negative durations (0 disables the staleness filter, documented).
 	check(validateDuration("DEVRADAR_SCAN_MAX_AGE", 0))
+	check(validateDuration("DEVRADAR_POSTURE_SNAPSHOT_MIN_INTERVAL", 0))
+
+	// Trusted-proxy count gates X-Forwarded-For client-IP trust (rate-limit
+	// keying), so a bad value is a security-relevant misconfig, not a cosmetic one.
+	check(validateInt("DEVRADAR_TRUSTED_PROXY_COUNT", 0, -1))
+
+	// Fail closed on a security-at-rest key: a SET-but-invalid token-flash key
+	// silently degrades to plaintext storage of the live API token. Acceptable in
+	// dev (unset ⇒ plaintext by design); a deployment mistake in production.
+	check(validateTokenFlashKey())
 
 	// Required URLs, when set, must parse with a scheme + host.
 	check(validateURL("BASE_URL"))
@@ -103,6 +114,29 @@ func validateURL(key string) error {
 	}
 	if u.Scheme == "" || u.Host == "" {
 		return fmt.Errorf("%s=%q must include a scheme and host (e.g. https://devradar.example.com)", key, v)
+	}
+	return nil
+}
+
+// validateTokenFlashKey fails closed on a security-at-rest misconfig: a SET but
+// invalid DEVRADAR_TOKEN_FLASH_KEY (not base64, or not 32 bytes) would otherwise
+// make TokenFlashKey() return nil and the caller store the one-time API token in
+// PLAINTEXT — silently defeating the encryption the operator meant to enable.
+// Unset is always fine (dev default is plaintext by design). A set-but-invalid
+// key is a hard error outside dev; in DevMode it is downgraded to allow local
+// experimentation.
+func validateTokenFlashKey() error {
+	v, ok := os.LookupEnv("DEVRADAR_TOKEN_FLASH_KEY")
+	if !ok || strings.TrimSpace(v) == "" {
+		return nil // unset ⇒ documented plaintext-in-dev default
+	}
+	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(v))
+	if err != nil || len(key) != 32 {
+		if DevMode() {
+			return nil
+		}
+		return fmt.Errorf("DEVRADAR_TOKEN_FLASH_KEY must be base64-encoded 32 bytes " +
+			"(set-but-invalid would silently store API tokens in plaintext)")
 	}
 	return nil
 }

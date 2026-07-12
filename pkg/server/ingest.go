@@ -220,13 +220,24 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// canonicalBytes is true only when `raw` are the bytes we are actually storing
+	// under effID — a fresh insert, or a 'pending' row we are self-healing. On a
+	// re-submit that resolves to an existing 'active' row (same digest+format,
+	// possibly DIFFERENT bytes: by-tag vs by-digest generation, a newer generator),
+	// the stored bytes are the ORIGINAL submitter's, not `raw`. Attestation
+	// verification and license extraction must only ever run over the canonical
+	// stored bytes — verifying `raw` and attaching the evidence to effID would
+	// falsely claim the STORED SBOM was signed (a sbom-bytes binding over bytes we
+	// never kept). See attestation trust model in CLAUDE.md.
+	canonicalBytes := inserted || status == sbomStatusPending
+
 	// Store bytes then activate, for a genuinely new SBOM OR one left 'pending' by
 	// an earlier submission whose upload failed (self-heal). An existing 'active'
 	// row's bytes are canonical and must not be rewritten. Upload-before-activate
 	// guarantees an active row always has its bytes; a failure here deletes the
 	// pending row so a retry starts clean (writes are content-addressed, so the
 	// re-Put is idempotent).
-	if inserted || status == sbomStatusPending {
+	if canonicalBytes {
 		if err := s.blobs.Put(ctx, objectPath, raw); err != nil {
 			slog.Error("store sbom bytes", "sbom_id", effID, "error", err)
 			if delErr := s.store.DeletePendingSBOM(ctx, effID); delErr != nil {
@@ -254,12 +265,22 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Verify an attestation if one was supplied and a trust policy is configured.
-	// Best-effort and fully isolated (like license extraction above): a verifier
-	// error or a failed verification is recorded as evidence and reflected in the
-	// response, but NEVER changes the 202 or fails ingest. DevRadar's guarantee is
-	// determinism; authenticity is an additive overlay.
-	verificationStatus := s.verifyAttestation(ctx, tn.ID, effID, raw, subj.Digest, req.Attestation)
+	// Verify an attestation only against the canonical stored bytes (see
+	// canonicalBytes above). Best-effort and fully isolated (like license
+	// extraction): a verifier error or a failed verification is recorded as
+	// evidence and reflected in the response, but NEVER changes the 202 or fails
+	// ingest. DevRadar's guarantee is determinism; authenticity is an additive
+	// overlay. For a re-submit onto an existing SBOM we do NOT re-verify (the bytes
+	// under effID are the original's, and re-verification is user-triggered only);
+	// we report the STORED status so the response reflects the actual evidence.
+	var verificationStatus string
+	if canonicalBytes {
+		verificationStatus = s.verifyAttestation(ctx, tn.ID, effID, raw, subj.Digest, req.Attestation)
+	} else if st, err := s.store.GetVerificationStatus(ctx, tn.ID, effID); err == nil {
+		verificationStatus = st
+	} else {
+		verificationStatus = attest.StatusUnverified
+	}
 
 	writeJSON(w, http.StatusAccepted, submitResponse{
 		SBOMID: effID, ImageRef: imageRef, Digest: subj.Digest,

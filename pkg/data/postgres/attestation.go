@@ -45,13 +45,21 @@ func (s *Store) SaveAttestation(ctx context.Context, tenantID, sbomID string, r 
 		return fmt.Errorf("insert attestation: %w", err)
 	}
 
-	// Reflect the outcome on the SBOM. Scoped to the tenant; a verified result
-	// never regresses to failed on a later re-check of the same SBOM under a
-	// different subject/policy — but within one submission this is the authoritative
-	// status for the bytes just stored.
+	// Reflect the outcome on the SBOM, deriving the denormalized flag from the
+	// evidence row that is actually PERSISTED — not blindly from r.Outcome. The
+	// INSERT above is ON CONFLICT DO NOTHING on (sbom_id, subject_digest,
+	// policy_version): a re-verification under the same key keeps the original
+	// evidence untouched. Setting the flag from r.Outcome there would let the
+	// fast-path flag and the evidence row disagree (e.g. stored 'verified',
+	// re-run 'failed' → flag flips to failed while the row still says verified).
+	// Reading the flag back out of the evidence table keeps them in lockstep by
+	// construction, for both the fresh-insert and the conflict-kept case.
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE devradar_sbom SET verification_status=$3
-		WHERE id=$1 AND tenant_id=$2`, sbomID, tenantID, r.Outcome); err != nil {
+		UPDATE devradar_sbom sb SET verification_status = ev.result
+		FROM devradar_sbom_attestation ev
+		WHERE sb.id=$1 AND sb.tenant_id=$2
+		  AND ev.sbom_id=$1 AND ev.subject_digest=$3 AND ev.policy_version=$4`,
+		sbomID, tenantID, r.SubjectDigest, r.PolicyVersion); err != nil {
 		return fmt.Errorf("update verification status: %w", err)
 	}
 
@@ -59,6 +67,24 @@ func (s *Store) SaveAttestation(ctx context.Context, tenantID, sbomID string, r 
 		return fmt.Errorf("commit attestation: %w", err)
 	}
 	return nil
+}
+
+// GetVerificationStatus returns the denormalized verification_status for an
+// SBOM (unverified | verified | failed), tenant-scoped. Used by ingest to report
+// the STORED status of a pre-existing SBOM without re-verifying against
+// possibly-different resubmitted bytes. ErrNotFound if not owned.
+func (s *Store) GetVerificationStatus(ctx context.Context, tenantID, sbomID string) (string, error) {
+	var status string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT verification_status FROM devradar_sbom WHERE id=$1 AND tenant_id=$2`,
+		sbomID, tenantID).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("get verification status: %w", err)
+	}
+	return status, nil
 }
 
 // GetAttestation returns the most recent verification evidence for an SBOM, or

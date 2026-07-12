@@ -47,6 +47,42 @@ func TestValidate_RejectsInvalid(t *testing.T) {
 	}
 }
 
+func TestValidate_TokenFlashKeyFailsClosed(t *testing.T) {
+	// A set-but-invalid encryption key must FAIL in production (it would otherwise
+	// silently store API tokens in plaintext), be ACCEPTED in dev, and an unset
+	// key is always fine (documented plaintext-in-dev default).
+	t.Run("invalid in prod is rejected", func(t *testing.T) {
+		t.Setenv("DEVRADAR_DEV_MODE", "false")
+		t.Setenv("DEVRADAR_TOKEN_FLASH_KEY", "not-base64-!!") // invalid
+		err := Validate()
+		if err == nil || !strings.Contains(err.Error(), "DEVRADAR_TOKEN_FLASH_KEY") {
+			t.Fatalf("expected token-flash-key error in prod, got %v", err)
+		}
+	})
+	t.Run("wrong length in prod is rejected", func(t *testing.T) {
+		t.Setenv("DEVRADAR_DEV_MODE", "false")
+		t.Setenv("DEVRADAR_TOKEN_FLASH_KEY", "dG9vc2hvcnQ=") // valid base64, 8 bytes
+		if err := Validate(); err == nil {
+			t.Fatal("expected error for wrong-length key in prod")
+		}
+	})
+	t.Run("invalid in dev is tolerated", func(t *testing.T) {
+		t.Setenv("DEVRADAR_DEV_MODE", "true")
+		t.Setenv("DEVRADAR_TOKEN_FLASH_KEY", "not-base64-!!")
+		if err := Validate(); err != nil {
+			t.Fatalf("dev mode should tolerate a bad key, got %v", err)
+		}
+	})
+	t.Run("valid 32-byte key passes", func(t *testing.T) {
+		t.Setenv("DEVRADAR_DEV_MODE", "false")
+		// base64 of 32 zero bytes.
+		t.Setenv("DEVRADAR_TOKEN_FLASH_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+		if err := Validate(); err != nil {
+			t.Fatalf("valid key rejected: %v", err)
+		}
+	})
+}
+
 func TestValidate_UnsetIsFine(t *testing.T) {
 	// Explicitly clear the bounded vars: unset must not error (defaults apply).
 	for _, k := range []string{

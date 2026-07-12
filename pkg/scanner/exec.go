@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -21,6 +22,15 @@ func isInstalled(bin string) bool {
 // attacker-controllable, so an induced stderr flood must not be an unbounded
 // allocation; we only ever surface a truncated prefix for diagnostics anyway.
 const maxStderrBytes = 64 << 10
+
+// maxOutputBytes bounds a scanner's report file. The SBOM is attacker-controlled
+// and can drive an arbitrarily large report; on Cloud Run /tmp is tmpfs (RAM),
+// so an unbounded report is a memory-exhaustion vector. We reject an oversized
+// file at the stat gate — before any read — and validateJSON reads through a
+// LimitReader as defense in depth. Matches the 256 MiB read cap the downstream
+// parser (pkg/scan.parseJSONBounded) enforces, kept independent to avoid a
+// cross-package import.
+const maxOutputBytes = 256 << 20
 
 // runCmd runs cmd under ctx, killing the process if ctx is cancelled, then
 // verifies outPath exists and contains parseable JSON. A scanner that dies on a
@@ -49,6 +59,12 @@ func runCmd(ctx context.Context, cmd *exec.Cmd, outPath string) error {
 			return fmt.Errorf("%s produced no output (stderr=%s): %w",
 				cmd.Path, truncate(stderr.String(), 500), waitErr)
 		}
+		// Reject an oversized report BEFORE reading it — the file lives on tmpfs
+		// (RAM) on Cloud Run, so a huge attacker-driven report must not be pulled
+		// into memory for validation.
+		if info.Size() > maxOutputBytes {
+			return fmt.Errorf("%s output exceeds %d bytes (%d)", cmd.Path, int64(maxOutputBytes), info.Size())
+		}
 		if err := validateJSON(outPath); err != nil {
 			return fmt.Errorf("%s output is not valid JSON: %w", cmd.Path, err)
 		}
@@ -74,6 +90,9 @@ func captureVersion(bin string, args ...string) string {
 	return strings.TrimSpace(out.String())
 }
 
+// validateJSON confirms the report is well-formed JSON, reading through a
+// LimitReader so a report that grew past the cap between the stat gate and here
+// (or a stat that under-reported) still cannot drive an unbounded read.
 func validateJSON(path string) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -81,7 +100,7 @@ func validateJSON(path string) error {
 	}
 	defer func() { _ = f.Close() }()
 	var raw json.RawMessage
-	return json.NewDecoder(f).Decode(&raw)
+	return json.NewDecoder(io.LimitReader(f, maxOutputBytes+1)).Decode(&raw)
 }
 
 func truncate(s string, n int) string {

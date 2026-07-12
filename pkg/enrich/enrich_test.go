@@ -39,9 +39,12 @@ func TestFetch_MergesKEVandEPSS(t *testing.T) {
 		EPSSAPIURL: srv.URL + "/epss",
 		Client:     srv.Client(),
 	}
-	recs, err := f.Fetch(context.Background(), []string{"CVE-2025-0001", "CVE-2025-0003"})
+	recs, kevAuthoritative, err := f.Fetch(context.Background(), []string{"CVE-2025-0001", "CVE-2025-0003"})
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
+	}
+	if !kevAuthoritative {
+		t.Error("kevAuthoritative should be true when the KEV catalog fetch succeeds")
 	}
 	byCVE := map[string]Record{}
 	for _, r := range recs {
@@ -69,13 +72,44 @@ func TestFetch_MergesKEVandEPSS(t *testing.T) {
 	}
 }
 
+// TestFetch_KEVOutageNotAuthoritative asserts that when the KEV feed is down but
+// EPSS succeeds, Fetch rides through (returns records) but reports
+// kevAuthoritative=false — the signal the store uses to preserve existing KEV
+// flags instead of clearing them.
+func TestFetch_KEVOutageNotAuthoritative(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "known_exploited") {
+			w.WriteHeader(http.StatusServiceUnavailable) // KEV feed outage
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"cve":"CVE-2025-0001","epss":"0.5","percentile":"0.9"}]}`))
+	}))
+	defer srv.Close()
+
+	f := &Fetcher{
+		KEVURL:     srv.URL + "/known_exploited_vulnerabilities.json",
+		EPSSAPIURL: srv.URL + "/epss",
+		Client:     srv.Client(),
+	}
+	recs, kevAuthoritative, err := f.Fetch(context.Background(), []string{"CVE-2025-0001"})
+	if err != nil {
+		t.Fatalf("fetch should ride through a KEV-only outage: %v", err)
+	}
+	if kevAuthoritative {
+		t.Error("kevAuthoritative must be false when the KEV feed fails")
+	}
+	if len(recs) == 0 {
+		t.Error("EPSS records should still be returned during a KEV outage")
+	}
+}
+
 func TestFetch_BothFeedsDownIsError(t *testing.T) {
 	f := &Fetcher{
 		KEVURL:     "http://127.0.0.1:0/nope",
 		EPSSAPIURL: "http://127.0.0.1:0/nope",
 		Client:     &http.Client{},
 	}
-	if _, err := f.Fetch(context.Background(), []string{"CVE-2025-0001"}); err == nil {
+	if _, _, err := f.Fetch(context.Background(), []string{"CVE-2025-0001"}); err == nil {
 		t.Error("expected error when both feeds are unreachable")
 	}
 }

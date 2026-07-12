@@ -266,6 +266,26 @@ func TestApplyScan_DeltaEngine(t *testing.T) {
 	if queuedTooling != 0 {
 		t.Errorf("queued tooling events = %d, want 0", queuedTooling)
 	}
+
+	// ── Scan 6: BOTH the scanner AND the DB change in one run (a realistic deploy
+	// that ships a new grype binary alongside a refreshed DB). Tooling must
+	// DOMINATE — the delta is 'tooling' (non-alertable), never 'db' — so a scanner
+	// upgrade can't page even when the DB also moved. Re-add CVE-3.
+	v4 := v3
+	v4.ScannerVersion = "grype-0.117"
+	v4.DBVersion = "db-2026-02-01"
+	scan6 := []data.Vulnerability{
+		vuln("CVE-1", "openssl", "1.1.1", data.SeverityCritical, 9.8, true),
+		vuln("CVE-3", "zlib", "1.2.11", data.SeverityHigh, 7.5, false),
+	}
+	if err := st.ApplyScan(ctx, sb, "grype", v4, scan6); err != nil {
+		t.Fatalf("scan6: %v", err)
+	}
+	// The re-added CVE-3 is an 'added' event; with both axes moved it must be
+	// tooling, not db.
+	if got := countEvents(t, st, sb.ID, data.EventAdded, data.CauseTooling); got != 1 {
+		t.Errorf("scan6 added/tooling = %d, want 1 (tooling must dominate a simultaneous db+scanner change)", got)
+	}
 }
 
 func totalEvents(t *testing.T, st *postgres.Store, sbomID string) int {
