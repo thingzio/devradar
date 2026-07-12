@@ -104,10 +104,15 @@ func (s *Store) FleetCVEs(ctx context.Context, tenantID, minSeverity string, fil
 	args = append(args, fetch)
 	limitPos := fmt.Sprintf("$%d", len(args))
 
-	// risk is a stable lexicographic key with non-overlapping numeric bands:
+	// risk is a stable ranking key built from priority bands, highest first:
 	// KEV → fixable → severity → EPSS → image reach → oldest first. first_seen
 	// uses a fixed 2100 epoch inverse instead of now(), so pagination cursors do
-	// not drift between requests.
+	// not drift between requests. Ordering is strictly lexicographic at every
+	// boundary EXCEPT EPSS→image reach: the EPSS band (×1e17 over a continuous
+	// 0..1) only strictly outranks the image-reach band (max 1e16) when two
+	// same-severity CVEs differ in EPSS by more than ~0.1; below that, image
+	// reach can break the tie. This is an intentional heuristic — making EPSS
+	// strictly dominate would require re-tiering every multiplier.
 	// vex_* aggregate the tenant's statements for the CVE: a VEX is scoped to a
 	// specific image, so ANY suppressing occurrence surfaces the status (bool_or);
 	// all_vexed distinguishes "mitigated on every image" from "partial" (mitigated
