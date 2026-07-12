@@ -6,6 +6,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"strconv"
@@ -108,6 +109,24 @@ func EmailFrom() string {
 	return GetEnv("EMAIL_FROM", "DevRadar <no-reply@thingz.io>")
 }
 
+// TokenFlashKey returns the AES-256 key used to encrypt the one-time API-token
+// display flash at rest (DEVRADAR_TOKEN_FLASH_KEY, base64-encoded 32 bytes), or
+// nil when unset. When nil the flash is stored as plaintext (acceptable for
+// local dev); production should set a key so the live secret is never at rest in
+// plaintext even for the 2-minute display window. An invalid/wrong-length value
+// returns nil (the caller degrades to plaintext rather than failing).
+func TokenFlashKey() []byte {
+	raw := GetEnv("DEVRADAR_TOKEN_FLASH_KEY", "")
+	if raw == "" {
+		return nil
+	}
+	key, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil || len(key) != 32 {
+		return nil
+	}
+	return key
+}
+
 // GitHubClientID returns the GitHub OAuth app client id, or "" if unset.
 // Unprefixed like the other platform-integration secrets (SEND_API_KEY): it
 // names an external app registration, not a DevRadar service tunable.
@@ -145,13 +164,17 @@ func DebugEnabled() bool {
 }
 
 // DevMode reports whether the service is running in development mode
-// (DEVRADAR_DEV_MODE, or implied by DEVRADAR_LOCAL_SBOMS which only makes sense
-// locally). Dev mode relaxes production guardrails — notably it permits logging
-// magic-link sign-in URLs when no email sender is configured. In production
-// (DevMode false) an unconfigured sender is a fatal startup error, so sign-in
-// links are never written to logs where they could be replayed.
+// (DEVRADAR_DEV_MODE). Dev mode relaxes production guardrails — notably it
+// permits logging magic-link sign-in URLs when no email sender is configured. In
+// production (DevMode false) an unconfigured sender is a fatal startup error, so
+// sign-in links are never written to logs where they could be replayed.
+//
+// It is deliberately a single explicit flag: it must NOT be inferred from an
+// unrelated storage selector like DEVRADAR_LOCAL_SBOMS, so that setting a local
+// storage option in a prod-ish environment can never silently downgrade a
+// security guardrail. The local dev flow sets DEVRADAR_DEV_MODE explicitly.
 func DevMode() bool {
-	return GetEnvBool("DEVRADAR_DEV_MODE") || GetEnvBool("DEVRADAR_LOCAL_SBOMS")
+	return GetEnvBool("DEVRADAR_DEV_MODE")
 }
 
 // EnrichEnabled reports whether the scan job refreshes CVE risk enrichment
@@ -221,6 +244,26 @@ func ScanMaxAge() time.Duration {
 	return GetEnvAsDuration("DEVRADAR_SCAN_MAX_AGE", 12*time.Hour)
 }
 
+// TrustedProxyCount is the number of proxy hops that append to X-Forwarded-For
+// in front of the app. The real client IP is read this many entries from the
+// RIGHT of XFF (client-supplied left-most entries are spoofable). Cloud Run
+// appends exactly one hop, so the default is 1. Set to 0 to ignore XFF entirely
+// and always use RemoteAddr. Tunable via DEVRADAR_TRUSTED_PROXY_COUNT.
+func TrustedProxyCount() int {
+	return GetEnvAsInt("DEVRADAR_TRUSTED_PROXY_COUNT", 1)
+}
+
+// PostureSnapshotMinInterval is the minimum age of the newest posture snapshot
+// before the scan job recomputes it. The snapshot is an expensive full-fleet
+// projection deduplicated to one row per tenant per day, so recomputing it every
+// ~15-min scan tick is wasteful — this bounds it to at most one run per interval
+// while still capturing a well-converged end-of-day value. Default 12h. Set to 0
+// to recompute on every scan run (the legacy behavior). Tunable via
+// DEVRADAR_POSTURE_SNAPSHOT_MIN_INTERVAL (a Go duration).
+func PostureSnapshotMinInterval() time.Duration {
+	return GetEnvAsDuration("DEVRADAR_POSTURE_SNAPSHOT_MIN_INTERVAL", 12*time.Hour)
+}
+
 // AttestEnabled reports whether attestation verification is turned on. On by
 // default, but the feature still requires trust material (identities or keys) to
 // do anything — see AttestConfigured. Set DEVRADAR_ATTEST=false to hard-disable.
@@ -260,10 +303,11 @@ func AttestConfigured() bool {
 // the operator explicitly asked for.
 func AttestPolicy() (attest.Policy, error) {
 	p := attest.Policy{
-		Identities:     csvList("DEVRADAR_ATTEST_IDENTITIES"),
-		Issuers:        csvList("DEVRADAR_ATTEST_ISSUERS"),
-		PredicateTypes: csvList("DEVRADAR_ATTEST_PREDICATE_TYPES"),
-		TUFEnabled:     GetEnvBool("DEVRADAR_ATTEST_TUF"),
+		Identities:       csvList("DEVRADAR_ATTEST_IDENTITIES"),
+		Issuers:          csvList("DEVRADAR_ATTEST_ISSUERS"),
+		PredicateTypes:   csvList("DEVRADAR_ATTEST_PREDICATE_TYPES"),
+		TUFEnabled:       GetEnvBool("DEVRADAR_ATTEST_TUF"),
+		RequireSBOMBytes: GetEnvBool("DEVRADAR_ATTEST_REQUIRE_SBOM_BYTES"),
 	}
 	for _, path := range csvList("DEVRADAR_ATTEST_PUBLIC_KEYS") {
 		pem, err := os.ReadFile(path)

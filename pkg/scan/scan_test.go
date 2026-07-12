@@ -139,7 +139,7 @@ func (f *postureSnapshotFakeStore) CommitAlertBatch(context.Context, string, []p
 	return nil
 }
 
-func (f *postureSnapshotFakeStore) SnapshotTenantPosture(context.Context) error {
+func (f *postureSnapshotFakeStore) SnapshotTenantPostureStale(context.Context, time.Duration) error {
 	f.steps = append(f.steps, "posture")
 	return f.snapshotErr
 }

@@ -7,6 +7,7 @@ package scan
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -28,6 +29,13 @@ import (
 // findings is treated as a failure (a conversion/DB regression), not a clean
 // image. Below it, a genuinely tiny image can legitimately have no CVEs.
 const zeroFindingFloor = 5
+
+// maxScannerOutputBytes bounds how much scanner-report JSON we read into memory
+// before parsing. Finding volume scales with the untrusted SBOM's package count,
+// so a hostile SBOM could drive an arbitrarily large report and OOM the job (on
+// Cloud Run, /tmp is tmpfs, so the file itself is already in memory). 256 MiB is
+// far above any legitimate grype/trivy report yet caps the blast radius.
+const maxScannerOutputBytes = 256 << 20
 
 // Fetcher retrieves the raw SBOM bytes for a stored SBOM (GCS in production).
 type Fetcher interface {
@@ -237,12 +245,15 @@ func (r *Runner) Execute(ctx context.Context) error {
 	}
 
 	// Capture exact daily tenant vulnerability debt after findings, enrichment,
-	// and alerts have converged. The optional boundary keeps focused scan fakes
-	// small; snapshot failure is best-effort and never changes the scan result.
+	// and alerts have converged. Gated to at most once per
+	// PostureSnapshotMinInterval: the projection is a full-fleet scan whose result
+	// is deduplicated to one row per tenant per day, so recomputing it every tick
+	// is wasted work. The optional boundary keeps focused scan fakes small;
+	// snapshot failure is best-effort and never changes the scan result.
 	if snapshotter, ok := r.store.(interface {
-		SnapshotTenantPosture(context.Context) error
+		SnapshotTenantPostureStale(context.Context, time.Duration) error
 	}); ok {
-		if err := snapshotter.SnapshotTenantPosture(ctx); err != nil {
+		if err := snapshotter.SnapshotTenantPostureStale(ctx, config.PostureSnapshotMinInterval()); err != nil {
 			slog.Warn("tenant posture snapshot failed", "error", err)
 		}
 	}
@@ -324,7 +335,19 @@ func (r *Runner) scanOne(ctx context.Context, sb *postgres.SBOM, ready []readySc
 	r.backfillLicenses(ctx, sb, raw)
 
 	// Canonicalize to CycloneDX so every scanner sees a format it reads reliably.
-	cdx, err := r.canon.Canonicalize(ctx, raw, sbom.Format(sb.Format))
+	// The syft-backed canonicalizer shells out to `syft convert` on the SAME
+	// attacker-controlled bytes the scanners see, so it gets the SAME per-SBOM
+	// timeout as scanWith — otherwise a crafted SPDX that hangs `syft convert`
+	// stalls the entire sequential batch until the whole-job Cloud Run timeout,
+	// re-opening the batch-starvation hole the scanner timeout closes. On timeout
+	// the exec is killed via ctx and this becomes a recorded canonicalize failure.
+	canonCtx := ctx
+	if r.opts.ScanTimeout > 0 {
+		var cancel context.CancelFunc
+		canonCtx, cancel = context.WithTimeout(ctx, r.opts.ScanTimeout)
+		defer cancel()
+	}
+	cdx, err := r.canon.Canonicalize(canonCtx, raw, sbom.Format(sb.Format))
 	if err != nil {
 		r.recordFailure(ctx, sb.ID, "", "canonicalize", err)
 		return
@@ -406,7 +429,7 @@ func (r *Runner) scanWith(ctx context.Context, sb *postgres.SBOM, sc readyScanne
 		r.recordFailure(ctx, sb.ID, sc.Name(), "scan", err)
 		return
 	}
-	doc, err := gabs.ParseJSONFile(out)
+	doc, err := parseJSONBounded(out, maxScannerOutputBytes)
 	if err != nil {
 		r.recordFailure(ctx, sb.ID, sc.Name(), "parse", err)
 		return
@@ -447,6 +470,25 @@ func (r *Runner) recordFailure(ctx context.Context, sbomID, scanner, stage strin
 	slog.Warn("scan failure",
 		"sbom_id", sbomID, "scanner", scanner, "stage", stage, "error", cause)
 	r.store.RecordScanFailure(ctx, sbomID, scanner, stage, cause)
+}
+
+// parseJSONBounded reads a scanner-output file through a size-bounded reader
+// (rejecting anything over max) before parsing it with gabs, so an untrusted
+// SBOM cannot drive an unbounded allocation via a huge scanner report.
+func parseJSONBounded(path string, max int64) (*gabs.Container, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	data, err := io.ReadAll(io.LimitReader(f, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > max {
+		return nil, fmt.Errorf("scanner output exceeds %d bytes", max)
+	}
+	return gabs.ParseJSON(data)
 }
 
 // writeTemp writes b to a temp file and returns its path + a cleanup func.

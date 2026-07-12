@@ -86,15 +86,12 @@ func New(ctx context.Context, dsn string, cfg PoolConfig) (*Store, error) {
 	}
 
 	s := &Store{db: db}
+	// Migrate applies schema migrations AND pre-creates the event-log partitions,
+	// both under the migration advisory lock, so concurrent boots can't race the
+	// partition DDL. Idempotent; runs every boot.
 	if err := s.Migrate(ctx); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
-	}
-	// Keep the append-only event log's monthly partitions ahead of now() so rows
-	// never fall into the DEFAULT partition. Idempotent; runs every boot.
-	if err := s.EnsureEventPartitions(ctx, time.Now()); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("ensure event partitions: %w", err)
 	}
 	return s, nil
 }

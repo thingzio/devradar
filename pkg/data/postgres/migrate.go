@@ -84,7 +84,22 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return err
 		}
 	}
+
+	// Pre-create the event-log partitions on the SAME advisory-locked connection,
+	// so two replicas booting from scale-to-zero can't race concurrent
+	// `CREATE TABLE ... PARTITION OF` (not fully race-immune in Postgres, which
+	// can raise duplicate-relation / tuple-concurrently-updated on the catalog).
+	if err := ensureEventPartitions(ctx, conn, time.Now()); err != nil {
+		return fmt.Errorf("ensure event partitions: %w", err)
+	}
 	return nil
+}
+
+// execContext is the subset of *sql.Conn / *sql.DB used to create partitions,
+// so partition creation can run either on the migration-locked connection
+// (Migrate) or on the pool (the exported EnsureEventPartitions, for tests).
+type execContext interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
 // applyOne runs one migration's SQL and records its version atomically, in a
@@ -121,6 +136,11 @@ const partitionMonthsAhead = 3
 // months out. Safe to run on every boot (CREATE TABLE IF NOT EXISTS). base is
 // normally time.Now().UTC(); it is a parameter so the logic is unit-testable.
 func (s *Store) EnsureEventPartitions(ctx context.Context, base time.Time) error {
+	return ensureEventPartitions(ctx, s.db, base)
+}
+
+// ensureEventPartitions creates the partitions on the given executor.
+func ensureEventPartitions(ctx context.Context, exec execContext, base time.Time) error {
 	base = base.UTC()
 	for i := 0; i <= partitionMonthsAhead; i++ {
 		start := time.Date(base.Year(), base.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, i, 0)
@@ -131,7 +151,7 @@ func (s *Store) EnsureEventPartitions(ctx context.Context, base time.Time) error
 		stmt := fmt.Sprintf(
 			`CREATE TABLE IF NOT EXISTS %s PARTITION OF devradar_finding_event FOR VALUES FROM ('%s') TO ('%s')`,
 			name, start.Format("2006-01-02"), end.Format("2006-01-02"))
-		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+		if _, err := exec.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("ensure partition %s: %w", name, err)
 		}
 	}

@@ -36,6 +36,44 @@ type RepositoryPostureOption struct {
 	CoverageStart time.Time
 }
 
+// SnapshotTenantPostureStale runs SnapshotTenantPosture only when the newest
+// snapshot is older than minInterval (or none exists). The scan job calls this
+// every tick, but the projection is an expensive full-fleet scan whose result is
+// deduplicated to one row per tenant per day — running it ~96×/day (every 15 min)
+// throws away all but the last write. The freshness check is a cheap indexed
+// MAX(captured_at) evaluated UNDER the same advisory lock as the projection, so
+// two overlapping ticks can never both do the full work. minInterval <= 0
+// forces a run (preserves the always-run contract for callers that want it).
+func (s *Store) SnapshotTenantPostureStale(ctx context.Context, minInterval time.Duration) (retErr error) {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire tenant posture connection: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	if _, err := conn.ExecContext(ctx, `
+		SELECT pg_advisory_lock(hashtext('devradar'), hashtext('posture-snapshot'))`); err != nil {
+		return fmt.Errorf("lock posture snapshots: %w", err)
+	}
+	defer func() {
+		if err := unlockPostureSnapshots(conn); err != nil && retErr == nil {
+			retErr = err
+		}
+	}()
+
+	if minInterval > 0 {
+		var newest sql.NullTime
+		if err := conn.QueryRowContext(ctx,
+			`SELECT MAX(captured_at) FROM devradar_tenant_posture_snapshot`).Scan(&newest); err != nil {
+			return fmt.Errorf("check posture snapshot freshness: %w", err)
+		}
+		if newest.Valid && time.Since(newest.Time) < minInterval {
+			return nil // a recent snapshot already exists; skip the expensive projection
+		}
+	}
+	return s.snapshotTenantPostureLocked(ctx, conn)
+}
+
 // SnapshotTenantPosture replaces today's repository and tenant snapshots.
 // Findings reported by multiple scanners are collapsed by (sbom_id,
 // finding_id), with the worst reported severity and the union of fix/KEV facts.
@@ -60,7 +98,12 @@ func (s *Store) SnapshotTenantPosture(ctx context.Context) (retErr error) {
 			retErr = err
 		}
 	}()
+	return s.snapshotTenantPostureLocked(ctx, conn)
+}
 
+// snapshotTenantPostureLocked performs the projection on a connection that
+// already holds the posture-snapshot advisory lock.
+func (s *Store) snapshotTenantPostureLocked(ctx context.Context, conn *sql.Conn) error {
 	tx, err := conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
 	if err != nil {
 		return fmt.Errorf("begin tenant posture snapshot: %w", err)
