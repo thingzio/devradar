@@ -6,6 +6,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -227,21 +228,25 @@ func AttestEnabled() bool {
 	return GetEnv("DEVRADAR_ATTEST", "true") != "false"
 }
 
-// AttestConfigured reports whether attestation verification has enough trust
-// material to run (mirrors GitHubOAuthConfigured): enabled AND at least one
-// allowed identity or public key. When false, submitted attestations are ignored
-// and SBOMs stay 'unverified' — verification is never a hard dependency.
+// AttestConfigured reports whether the operator has OPTED IN to attestation
+// verification (mirrors GitHubOAuthConfigured): enabled AND at least one identity
+// or public-key path is present in the environment. It is deliberately based on
+// env-var PRESENCE, not on successfully-loaded material, so a typo'd key/root
+// path still counts as "configured" — that surfaces the misconfiguration at
+// startup (see AttestPolicy) instead of silently disabling verification. When
+// false, submitted attestations are ignored and SBOMs stay 'unverified'.
 func AttestConfigured() bool {
 	if !AttestEnabled() {
 		return false
 	}
-	p := AttestPolicy()
-	return p.Configured()
+	return len(csvList("DEVRADAR_ATTEST_IDENTITIES")) > 0 ||
+		len(csvList("DEVRADAR_ATTEST_PUBLIC_KEYS")) > 0
 }
 
 // AttestPolicy assembles the trust policy from the environment:
 //   - DEVRADAR_ATTEST_IDENTITIES   comma-separated Fulcio SAN identities (keyless)
-//   - DEVRADAR_ATTEST_ISSUERS      comma-separated OIDC issuers (keyless)
+//   - DEVRADAR_ATTEST_ISSUERS      comma-separated OIDC issuers (keyless; required
+//     when identities are set — an identity must be pinned to an issuer)
 //   - DEVRADAR_ATTEST_PUBLIC_KEYS  comma-separated paths to PEM public keys (key mode)
 //   - DEVRADAR_ATTEST_PREDICATE_TYPES comma-separated allow-list (empty ⇒ defaults)
 //   - DEVRADAR_ATTEST_TRUSTED_ROOT path to a sigstore trusted-root JSON
@@ -249,10 +254,11 @@ func AttestConfigured() bool {
 //     TUF root when no trusted-root file is set (off by default: ingest stays
 //     network-free)
 //
-// A key path that cannot be read is skipped with the error left to the verifier
-// constructor to surface, so a single typo never silently weakens the policy
-// without a log line at startup.
-func AttestPolicy() attest.Policy {
+// A configured key or trusted-root path that cannot be read returns an ERROR
+// rather than being silently skipped: a typo must fail loudly (the caller fails
+// closed at startup) instead of silently weakening or disabling a trust policy
+// the operator explicitly asked for.
+func AttestPolicy() (attest.Policy, error) {
 	p := attest.Policy{
 		Identities:     csvList("DEVRADAR_ATTEST_IDENTITIES"),
 		Issuers:        csvList("DEVRADAR_ATTEST_ISSUERS"),
@@ -260,16 +266,20 @@ func AttestPolicy() attest.Policy {
 		TUFEnabled:     GetEnvBool("DEVRADAR_ATTEST_TUF"),
 	}
 	for _, path := range csvList("DEVRADAR_ATTEST_PUBLIC_KEYS") {
-		if pem, err := os.ReadFile(path); err == nil {
-			p.PublicKeys = append(p.PublicKeys, pem)
+		pem, err := os.ReadFile(path)
+		if err != nil {
+			return attest.Policy{}, fmt.Errorf("read attest public key %q: %w", path, err)
 		}
+		p.PublicKeys = append(p.PublicKeys, pem)
 	}
 	if root := GetEnv("DEVRADAR_ATTEST_TRUSTED_ROOT", ""); root != "" {
-		if data, err := os.ReadFile(root); err == nil {
-			p.TrustedRoot = data
+		data, err := os.ReadFile(root)
+		if err != nil {
+			return attest.Policy{}, fmt.Errorf("read attest trusted root %q: %w", root, err)
 		}
+		p.TrustedRoot = data
 	}
-	return p
+	return p, nil
 }
 
 // csvList splits a comma-separated env var into trimmed, non-empty values.

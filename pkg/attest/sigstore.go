@@ -51,12 +51,27 @@ func New(policy Policy) (*Client, error) {
 	}
 
 	c := &Client{policy: policy, trusted: trusted}
-	for _, id := range policy.Identities {
-		certID, err := verify.NewShortCertificateIdentity("", "", id, "")
-		if err != nil {
-			return nil, fmt.Errorf("attest: build identity %q: %w", id, err)
+
+	// Keyless identities must be pinned to BOTH a SAN and an OIDC issuer: a Fulcio
+	// SAN (e.g. a GitHub workflow ref) is not globally unique across issuers, so
+	// matching a SAN without pinning the issuer would accept a certificate issued
+	// under a different (attacker-influenced) OIDC provider. sigstore itself
+	// refuses a certificate identity with no issuer criteria, so a keyless policy
+	// with identities but no issuers is a configuration error, not a silent
+	// no-op — surface it. Each allowed (SAN, issuer) pair is an independent
+	// identity; sigstore matches if ANY pair matches (AND within a pair).
+	if len(policy.Identities) > 0 && len(policy.Issuers) == 0 {
+		return nil, fmt.Errorf("attest: keyless policy has identities but no issuers " +
+			"(set DEVRADAR_ATTEST_ISSUERS); an identity must be pinned to an OIDC issuer")
+	}
+	for _, san := range policy.Identities {
+		for _, issuer := range policy.Issuers {
+			certID, err := verify.NewShortCertificateIdentity(issuer, "", san, "")
+			if err != nil {
+				return nil, fmt.Errorf("attest: build identity %q@%q: %w", san, issuer, err)
+			}
+			c.identity = append(c.identity, verify.WithCertificateIdentity(certID))
 		}
-		c.identity = append(c.identity, verify.WithCertificateIdentity(certID))
 	}
 	c.haveKey = len(policy.PublicKeys) > 0
 	return c, nil
@@ -113,14 +128,30 @@ func (c *Client) Verify(_ context.Context, sbomBytes []byte, subjectDigest strin
 	}
 
 	out := c.result(mode, binding, subjectDigest, bundleJSON, res)
+	c.enforcePredicate(out)
+	return out, nil
+}
 
-	// Predicate-type allow-list: a valid signature over a non-SBOM predicate is a
-	// recorded failure, not a pass.
-	if out.PredicateType != "" && !c.policy.allowsPredicate(out.PredicateType) {
+// enforcePredicate applies the predicate-type allow-list to an otherwise-verified
+// result — FAIL CLOSED. A valid signature only earns a `verified` outcome when it
+// is over an in-toto statement whose predicate type is allow-listed. A
+// signed-but-non-SBOM bundle (a plain DSSE/message signature, or a statement with
+// no predicate type) leaves PredicateType == "": treating that as a pass would
+// let a trusted signer (or holder of the trusted key) attest an arbitrary blob
+// and have DevRadar brand the SBOM authentic. So an empty or non-allow-listed
+// predicate is downgraded to a recorded failure, never a pass. Mutates out.
+func (c *Client) enforcePredicate(out *Result) {
+	if out.Outcome != ResultVerified {
+		return
+	}
+	switch {
+	case out.PredicateType == "":
+		out.Outcome = ResultFailed
+		out.FailureReason = "attestation carries no in-toto SBOM predicate (not an SBOM attestation)"
+	case !c.policy.allowsPredicate(out.PredicateType):
 		out.Outcome = ResultFailed
 		out.FailureReason = fmt.Sprintf("predicate type %q not in allow-list", out.PredicateType)
 	}
-	return out, nil
 }
 
 // identityPolicies picks key vs keyless based on the bundle's verification

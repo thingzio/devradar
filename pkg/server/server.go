@@ -104,19 +104,34 @@ func Run(ctx context.Context, opts Options) error {
 		slog.Info("GitHub OAuth not configured; email-only sign-in")
 	}
 
-	// Attestation verification. Optional: without trust material (identities or
-	// keys) the verifier is nil, submitted attestations are ignored, and SBOMs
-	// stay 'unverified'. A misconfiguration is logged but never fatal — ingest
-	// must keep working even if the trust policy is wrong.
+	// Attestation verification. Opt-in: without any identity/key in the
+	// environment the verifier is nil, submitted attestations are ignored, and
+	// SBOMs stay 'unverified'. But once an operator HAS opted in
+	// (AttestConfigured), a broken trust policy — an unreadable key/root file, a
+	// keyless identity with no issuer — is FATAL at startup. Silently disabling
+	// verification the operator asked for would leave them believing attestations
+	// are enforced when they are not; fail closed instead (mirrors the SEND_API_KEY
+	// prod guard above). Verification failures at request time are still
+	// best-effort and never block ingest — this guard is only about a trust policy
+	// that cannot be assembled at all.
 	var verifier attest.Verifier
 	if config.AttestConfigured() {
-		v, err := attest.New(config.AttestPolicy())
+		policy, err := config.AttestPolicy()
 		if err != nil {
-			slog.Error("attestation verification misconfigured; disabling", "error", err)
-		} else if v.Available() {
-			verifier = v
-			slog.Info("attestation verification enabled")
+			return fmt.Errorf("attestation verification is configured but its trust "+
+				"material is unusable: %w", err)
 		}
+		v, err := attest.New(policy)
+		if err != nil {
+			return fmt.Errorf("attestation verification is configured but the trust "+
+				"policy is invalid: %w", err)
+		}
+		if !v.Available() {
+			return fmt.Errorf("attestation verification is configured but produced no " +
+				"usable verifier (no trusted root and TUF disabled?)")
+		}
+		verifier = v
+		slog.Info("attestation verification enabled")
 	} else {
 		slog.Info("attestation verification not configured; SBOMs remain unverified")
 	}
