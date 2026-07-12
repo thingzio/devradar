@@ -123,11 +123,17 @@ func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
 	mux.Handle("GET /work", authed(http.HandlerFunc(s.handleWorkQueue)))
 	mux.Handle("GET /cves/{cve}", authed(http.HandlerFunc(s.handleCVEDetail)))
 	mux.Handle("GET /licenses", authed(http.HandlerFunc(s.handleLicensesPage)))
+	mux.Handle("GET /licenses/family", authed(http.HandlerFunc(s.handleLicenseFamily)))
 	mux.Handle("GET /alerts", authed(http.HandlerFunc(s.handleAlerts)))
 	mux.Handle("GET /alerts/{id}", authed(http.HandlerFunc(s.handleAlertDetail)))
 	mux.Handle("POST /alerts/{id}/read", authed(csrf(http.HandlerFunc(s.handleMarkAlertRead))))
 	mux.Handle("POST /settings/license-policy", authed(csrf(http.HandlerFunc(s.handleSetLicensePolicy))))
-	mux.Handle("GET /submit", authed(http.HandlerFunc(s.handleSubmitGuide)))
+	mux.Handle("GET /docs", authed(http.HandlerFunc(s.handleSubmitGuide)))
+	// /submit is the historical path — keep it working (bookmarks, older links)
+	// by redirecting to the renamed /docs page.
+	mux.Handle("GET /submit", authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/docs", http.StatusMovedPermanently)
+	})))
 	// VEX upload is a multipart file POST: it cannot use the ValidateCSRF wrapper
 	// (which caps the body at 4KB), so the handler parses its own form and calls
 	// middleware.CheckCSRF after ParseMultipartForm.

@@ -281,6 +281,90 @@ func (s *Store) FleetLicenseStats(ctx context.Context, tenantID string, policy d
 	return fs, nil
 }
 
+// LicensePackage is one distinct (package, version) carrying a queried license
+// family, with its merged license set, obligation category, and the images it
+// appears in — the row model for the family drill-down page.
+type LicensePackage struct {
+	Package      string
+	Version      string
+	Licenses     []string
+	Category     data.LicenseCategory
+	Repositories []string
+}
+
+// FleetLicensePackages returns the distinct packages across the tenant's active
+// fleet whose license set includes the given family (matched in Go via
+// data.LicenseFamily, mirroring FleetLicenseStats so the counts agree). Family
+// matching, classification, and grouping all happen in Go over the raw stored
+// IDs; SQL only aggregates the per-package license set and repositories. Results
+// are sorted by package name for a stable page. A blank family matches nothing.
+func (s *Store) FleetLicensePackages(ctx context.Context, tenantID, family string) ([]LicensePackage, error) {
+	if strings.TrimSpace(family) == "" {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT p.package, p.version,
+		       COALESCE(array_agg(DISTINCT lic) FILTER (WHERE lic IS NOT NULL), '{}'),
+		       COALESCE(array_agg(DISTINCT sb.repository) FILTER (WHERE sb.repository <> ''), '{}')
+		FROM devradar_sbom_package p
+		JOIN devradar_sbom sb ON sb.id = p.sbom_id
+		LEFT JOIN LATERAL unnest(p.licenses) AS lic ON true
+		WHERE sb.tenant_id = $1 AND sb.status = 'active'
+		GROUP BY p.package, p.version`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("fleet license packages: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []LicensePackage
+	for rows.Next() {
+		var pkgName, version string
+		var lics, repos []string
+		if err := rows.Scan(&pkgName, &version, pq.Array(&lics), pq.Array(&repos)); err != nil {
+			return nil, fmt.Errorf("scan license package row: %w", err)
+		}
+		// A package matches the family if any of its (expression-expanded) license
+		// IDs belongs to it. The unlicensed bucket is the "unknown" family.
+		match := false
+		if len(lics) == 0 {
+			match = family == "unknown"
+		} else {
+			for _, id := range lics {
+				for _, single := range data.ParseExpression(id) {
+					if data.LicenseFamily(single) == family {
+						match = true
+						break
+					}
+				}
+				if match {
+					break
+				}
+			}
+		}
+		if !match {
+			continue
+		}
+		sort.Strings(repos)
+		out = append(out, LicensePackage{
+			Package:      pkgName,
+			Version:      version,
+			Licenses:     lics,
+			Category:     worstCategory(lics),
+			Repositories: repos,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Package != out[j].Package {
+			return out[i].Package < out[j].Package
+		}
+		return out[i].Version < out[j].Version
+	})
+	return out, nil
+}
+
 // GetLicensePolicy returns the tenant's compliance policy, or an empty policy
 // (deny nothing) if none is set.
 func (s *Store) GetLicensePolicy(ctx context.Context, tenantID string) (data.LicensePolicy, error) {

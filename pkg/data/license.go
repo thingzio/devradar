@@ -254,6 +254,13 @@ func LicenseFamily(id string) string {
 	if strings.EqualFold(n, "noassertion") || strings.EqualFold(n, "none") {
 		return "unknown"
 	}
+	// A content digest (sha256:…) leaked into the license field by a buggy SBOM
+	// generator — not a license, and not something we can walk up to a real one.
+	// Fold it into "unknown" so it never appears as its own family in the treemap
+	// or legend. Matches Classify's digest handling (see isDigestValue).
+	if isDigestValue(normalizeLicenseID(n)) {
+		return "unknown"
+	}
 	if i := strings.IndexAny(n, "-"); i > 0 {
 		// keep the alpha family prefix (BSD-3-Clause → BSD, GPL-2.0 → GPL).
 		head := n[:i]

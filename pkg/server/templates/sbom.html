@@ -27,7 +27,7 @@
     {{else if eq .VerificationStatus "failed"}}
       <p class="sub" style="margin-top:0"><span class="pill danger">&#10007; Verification failed</span> {{if .Attestation}}{{.Attestation.FailureReason}}{{end}}</p>
     {{else}}
-      <p class="muted" style="margin-top:0">Unverified — no signed attestation was submitted with this SBOM. DevRadar guarantees determinism; authenticity is an optional overlay. <a href="/submit">How to attach one</a>.</p>
+      <p class="muted" style="margin-top:0">Unverified — no signed attestation was submitted with this SBOM. DevRadar guarantees determinism; authenticity is an optional overlay. <a href="/docs">How to attach one</a>.</p>
     {{end}}
     {{if .Attestation}}
     <table>

@@ -55,6 +55,7 @@
         <tr>
           <td>
             <a href="/images?repo={{.Repository}}" class="img-name" title="{{.Repository}}">{{.Short}}</a>
+            {{if ne .Repository .Short}}<div class="img-repo">{{.Repository}}</div>{{end}}
             <div class="img-meta">
               {{if .Versions}}{{range .Versions}}<span class="tag">{{.}}</span>{{end}}{{end}}
               {{if gt .SBOMCount 1}}<span class="muted">{{.SBOMCount}} SBOMs</span>{{end}}
@@ -73,7 +74,7 @@
           <td class="num"><a href="/images?repo={{.Repository}}" class="muted">view →</a></td>
         </tr>
         {{else}}
-        <tr><td colspan="5" class="muted">No images tracked yet. <a href="/submit">Submit your first SBOM →</a></td></tr>
+        <tr><td colspan="5" class="muted">No images tracked yet. <a href="/docs">Submit your first SBOM →</a></td></tr>
         {{end}}
       </tbody>
     </table>

@@ -148,7 +148,10 @@
       <tbody>
         {{range .TopImages}}
         <tr>
-          <td><a href="/images?repo={{.Repository}}" class="img-name" title="{{.Repository}}">{{.Short}}</a></td>
+          <td>
+            <a href="/images?repo={{.Repository}}" class="img-name" title="{{.Repository}}">{{.Short}}</a>
+            {{if ne .Repository .Short}}<div class="img-repo">{{.Repository}}</div>{{end}}
+          </td>
           <td class="col-bar">
             {{if .Bar}}<div class="bar" title="critical {{.Critical}} · high {{.High}} · medium {{.Medium}} · low {{.Low}}">
               {{range .Bar}}<span class="{{.Class}}" style="width:{{.Pct}}%"></span>{{end}}
@@ -168,7 +171,7 @@
     <p style="margin:0 0 0.4rem">You're not tracking any images yet. DevRadar watches how an image's vulnerabilities and licenses change over time by rescanning its <strong>SBOM</strong> daily — so the first step is to submit one.</p>
     <p class="muted" style="margin:0">It takes four copy-paste steps: create a token, generate the SBOM by digest, and POST it.</p>
     <div class="empty-cta">
-      <a href="/submit" class="btn">Submit your first SBOM →</a>
+      <a href="/docs" class="btn">Submit your first SBOM →</a>
       <a href="/tokens" class="btn secondary">Create an API token</a>
     </div>
   </div>

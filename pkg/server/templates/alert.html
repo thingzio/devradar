@@ -18,19 +18,21 @@
       <dt>Observed</dt><dd>{{.Alert.EventOccurredAt.Format "2006-01-02 15:04 UTC"}}</dd>
     </dl>
     <section class="alert-actions">
-      <h2>Act on this</h2>
+      <div class="alert-actions-head">
+        <h2>Act on this</h2>
+        {{if not .Alert.ReadAt}}
+        <form method="post" action="/alerts/{{.Alert.ID}}/read">
+          <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+          <button class="btn secondary" type="submit">Mark as read</button>
+        </form>
+        {{end}}
+      </div>
       <ul>
         <li><a href="{{.WorkURL}}">Open in work queue</a></li>
         {{if .PreviousComparisonURL}}<li><a href="{{.PreviousComparisonURL}}">Compare with preceding tracked digest</a></li>{{end}}
         {{if .RecommendationURL}}<li><a href="{{.RecommendationURL}}">Newer tracked digest with fewer relevant findings</a></li>{{end}}
       </ul>
     </section>
-    {{if not .Alert.ReadAt}}
-    <form method="post" action="/alerts/{{.Alert.ID}}/read">
-      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-      <button class="btn secondary" type="submit">Mark as read</button>
-    </form>
-    {{end}}
   </article>
 </main>
 {{template "foot" .}}

@@ -72,6 +72,61 @@
     {{end}}
   </div>
 
+  <div class="card">
+    <details class="changelog" {{if .HasEvents}}open{{end}}>
+      <summary>
+        <span class="changelog-title">Change log</span>
+        <span class="muted">How this image's vulnerabilities changed over time, across all its digests</span>
+      </summary>
+      <form class="inline sev" method="get" action="/images">
+        <input type="hidden" name="repo" value="{{.Repository}}">
+        <label class="muted" for="sev">Min severity</label>
+        <select id="sev" name="min_severity" data-autosubmit>
+          {{$cur := .MinSeverity}}
+          {{range (list "critical" "high" "medium" "low" "negligible")}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}
+        </select>
+        <label class="muted chk" title="Also show findings with no severity rating (unknown)">
+          <input type="checkbox" name="unrated" value="1" {{if .IncludeUnrated}}checked{{end}} data-autosubmit> unrated
+        </label>
+      </form>
+
+      {{if .HasEvents}}
+      <table class="events">
+        <thead>
+          {{$eq := printf "repo=%s&min_severity=%s" .Repository .MinSeverity}}
+          <tr>
+            <th>{{sorthp "When" "occurred" "/images" $eq "ev_sort" "ev_dir" .EvSort .EvDir}}</th>
+            <th>Change</th>
+            <th>{{sorthp "Cause" "cause" "/images" $eq "ev_sort" "ev_dir" .EvSort .EvDir}}</th>
+            <th>{{sorthp "Severity" "severity" "/images" $eq "ev_sort" "ev_dir" .EvSort .EvDir}}</th>
+            <th>{{sorthp "CVE" "cve" "/images" $eq "ev_sort" "ev_dir" .EvSort .EvDir}}</th>
+            <th>Package</th>
+            <th>Digest</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Events}}
+          <tr>
+            <td class="nowrap">{{.When}}</td>
+            <td><span class="evt evt-{{.EventType}}">{{.EventType}}</span></td>
+            <td><span class="cause cause-{{.Cause}}" title="{{.CauseLabel}}">{{.CauseLabel}}</span></td>
+            <td><span class="sev-badge sev-b-{{.Severity}}">{{.Severity}}</span></td>
+            <td><a href="https://nvd.nist.gov/vuln/detail/{{.Exposure}}" target="_blank" rel="noopener">{{.Exposure}}</a></td>
+            <td>{{.Package}}</td>
+            <td class="muted"><code>{{.ShortDigest}}</code></td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{if .NextCursor}}
+      <p class="loadmore"><a href="/images?repo={{.Repository}}&min_severity={{.MinSeverity}}{{if .IncludeUnrated}}&unrated=1{{end}}{{if .EvSort}}&ev_sort={{.EvSort}}&ev_dir={{.EvDir}}{{end}}&cursor={{.NextCursor}}">Load more →</a></p>
+      {{end}}
+      {{else}}
+      <p class="muted">No changes at or above the <strong>{{.MinSeverity}}</strong> threshold{{if not .IncludeUnrated}} (unrated findings hidden — tick <em>unrated</em> to include them){{end}}.</p>
+      {{end}}
+    </details>
+  </div>
+
   {{if .HasPackages}}
   <div class="card">
     <div class="card-head">
@@ -154,63 +209,8 @@
         {{end}}
       </tbody>
     </table>
-    <p class="muted" style="margin-bottom:0; font-size:0.85rem">Common causes: the reference wasn't a container image (a Helm chart or OCI artifact), an SBOM a scanner couldn't parse, or a scanner with no advisories for the image's distro (e.g. Trivy on an EOL release). See the <a href="/submit">submission guide</a>.</p>
+    <p class="muted" style="margin-bottom:0; font-size:0.85rem">Common causes: the reference wasn't a container image (a Helm chart or OCI artifact), an SBOM a scanner couldn't parse, or a scanner with no advisories for the image's distro (e.g. Trivy on an EOL release). See the <a href="/docs">submission guide</a>.</p>
   </div>
   {{end}}
-
-  <div class="card">
-    <details class="changelog" {{if .HasEvents}}open{{end}}>
-      <summary>
-        <span class="changelog-title">Change log</span>
-        <span class="muted">How this image's vulnerabilities changed over time, across all its digests</span>
-      </summary>
-      <form class="inline sev" method="get" action="/images">
-        <input type="hidden" name="repo" value="{{.Repository}}">
-        <label class="muted" for="sev">Min severity</label>
-        <select id="sev" name="min_severity" data-autosubmit>
-          {{$cur := .MinSeverity}}
-          {{range (list "critical" "high" "medium" "low" "negligible")}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}
-        </select>
-        <label class="muted chk" title="Also show findings with no severity rating (unknown)">
-          <input type="checkbox" name="unrated" value="1" {{if .IncludeUnrated}}checked{{end}} data-autosubmit> unrated
-        </label>
-      </form>
-
-      {{if .HasEvents}}
-      <table class="events">
-        <thead>
-          {{$eq := printf "repo=%s&min_severity=%s" .Repository .MinSeverity}}
-          <tr>
-            <th>{{sorthp "When" "occurred" "/images" $eq "ev_sort" "ev_dir" .EvSort .EvDir}}</th>
-            <th>Change</th>
-            <th>{{sorthp "Cause" "cause" "/images" $eq "ev_sort" "ev_dir" .EvSort .EvDir}}</th>
-            <th>{{sorthp "Severity" "severity" "/images" $eq "ev_sort" "ev_dir" .EvSort .EvDir}}</th>
-            <th>{{sorthp "CVE" "cve" "/images" $eq "ev_sort" "ev_dir" .EvSort .EvDir}}</th>
-            <th>Package</th>
-            <th>Digest</th>
-          </tr>
-        </thead>
-        <tbody>
-          {{range .Events}}
-          <tr>
-            <td class="nowrap">{{.When}}</td>
-            <td><span class="evt evt-{{.EventType}}">{{.EventType}}</span></td>
-            <td><span class="cause cause-{{.Cause}}" title="{{.CauseLabel}}">{{.CauseLabel}}</span></td>
-            <td><span class="sev-badge sev-b-{{.Severity}}">{{.Severity}}</span></td>
-            <td><a href="https://nvd.nist.gov/vuln/detail/{{.Exposure}}" target="_blank" rel="noopener">{{.Exposure}}</a></td>
-            <td>{{.Package}}</td>
-            <td class="muted"><code>{{.ShortDigest}}</code></td>
-          </tr>
-          {{end}}
-        </tbody>
-      </table>
-      {{if .NextCursor}}
-      <p class="loadmore"><a href="/images?repo={{.Repository}}&min_severity={{.MinSeverity}}{{if .IncludeUnrated}}&unrated=1{{end}}{{if .EvSort}}&ev_sort={{.EvSort}}&ev_dir={{.EvDir}}{{end}}&cursor={{.NextCursor}}">Load more →</a></p>
-      {{end}}
-      {{else}}
-      <p class="muted">No changes at or above the <strong>{{.MinSeverity}}</strong> threshold{{if not .IncludeUnrated}} (unrated findings hidden — tick <em>unrated</em> to include them){{end}}.</p>
-      {{end}}
-    </details>
-  </div>
 </main>
 {{template "foot" .}}

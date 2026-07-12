@@ -103,6 +103,8 @@ func TestLicenseFamily(t *testing.T) {
 		"MIT":          "MIT",
 		"NOASSERTION":  "unknown",
 		"":             "unknown",
+		// A leaked content digest is not a license family — folds into unknown.
+		"sha256:da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3": "unknown",
 	}
 	for in, want := range cases {
 		if got := LicenseFamily(in); got != want {

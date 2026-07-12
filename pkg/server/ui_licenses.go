@@ -116,6 +116,62 @@ func (s *Server) handleLicensesPage(w http.ResponseWriter, r *http.Request) {
 	render(w, "licenses.html", v)
 }
 
+// licenseFamilyView is the family drill-down page model: every package across
+// the fleet carrying the selected license family.
+type licenseFamilyView struct {
+	Title     string
+	SignedIn  bool
+	Tab       string
+	Email     string
+	AvatarURL string
+	Version   string
+	Family    string // display label, e.g. "GPL"
+	Count     int
+	Packages  []licenseFamilyRow
+}
+
+// licenseFamilyRow is one package in the family drill-down table.
+type licenseFamilyRow struct {
+	Package      string
+	Version      string
+	Licenses     string   // joined for display
+	Category     string   // obligation category key (for the badge)
+	Repositories []string // images this package appears in
+}
+
+// handleLicenseFamily renders the packages carrying a given license family —
+// the drill-down reached by clicking a family in the Licenses legend.
+func (s *Server) handleLicenseFamily(w http.ResponseWriter, r *http.Request) {
+	tn := middleware.TenantFromContext(r.Context())
+	family := strings.TrimSpace(r.URL.Query().Get("family"))
+	if family == "" {
+		http.Redirect(w, r, "/licenses", http.StatusSeeOther)
+		return
+	}
+
+	pkgs, err := s.store.FleetLicensePackages(r.Context(), tn.ID, family)
+	if err != nil {
+		http.Error(w, "failed to load license packages", http.StatusInternalServerError)
+		return
+	}
+
+	v := licenseFamilyView{
+		Title: "Licenses · " + family, SignedIn: true, Tab: "licenses",
+		Email: tn.Email, AvatarURL: tn.AvatarURL, Version: s.opts.Version,
+		Family: family, Count: len(pkgs),
+	}
+	for _, p := range pkgs {
+		v.Packages = append(v.Packages, licenseFamilyRow{
+			Package:      p.Package,
+			Version:      p.Version,
+			Licenses:     strings.Join(p.Licenses, ", "),
+			Category:     string(p.Category),
+			Repositories: p.Repositories,
+		})
+	}
+	render(w, "license_family.html", v)
+}
+
 // handleSetLicensePolicy persists the tenant's compliance policy from the form
 // (mirrors handleSetMinSeverity). Denied categories are checkboxes; exceptions
 // are comma/space-separated license-ID lists.

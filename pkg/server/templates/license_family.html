@@ -1,0 +1,37 @@
+{{template "head" .}}
+{{template "nav" .}}
+<main class="page-content">
+  <p class="crumb"><a href="/licenses">← Licenses</a></p>
+  <h1 class="page-title">{{.Family}} <span class="muted">licenses</span></h1>
+  <p class="sub">{{.Count}} distinct package{{if ne .Count 1}}s{{end}} across your fleet carry a <strong>{{.Family}}</strong>-family license.</p>
+
+  <div class="card">
+    {{if .Packages}}
+    <table class="packages">
+      <thead>
+        <tr>
+          <th>Package</th>
+          <th>Version</th>
+          <th class="lic-col">License(s)</th>
+          <th>Category</th>
+          <th>Images</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Packages}}
+        <tr>
+          <td>{{.Package}}</td>
+          <td class="muted">{{if .Version}}{{.Version}}{{else}}—{{end}}</td>
+          <td>{{if .Licenses}}{{.Licenses}}{{else}}<span class="muted">none declared</span>{{end}}</td>
+          <td><span class="lic-cat lic-{{.Category}}">{{.Category}}</span></td>
+          <td>{{if .Repositories}}<div class="fam-repos">{{range .Repositories}}<a class="label-chip" href="/images?repo={{.}}">{{.}}</a>{{end}}</div>{{else}}<span class="muted">—</span>{{end}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+    {{else}}
+    <p class="muted" style="margin:0">No packages carry this license family.</p>
+    {{end}}
+  </div>
+</main>
+{{template "foot" .}}

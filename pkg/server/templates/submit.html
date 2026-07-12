@@ -1,8 +1,72 @@
 {{template "head" .}}
 {{template "nav" .}}
 <main class="page-content guide">
-  <h1 class="page-title">Submit an SBOM</h1>
-  <p class="sub">DevRadar tracks an image by rescanning its SBOM — it never pulls the image. The easiest way to submit is the <strong>devradarctl</strong> CLI, which handles digest resolution, all-layers SBOM generation, and upload in one command. Prefer to do it by hand? The <a href="#manual">manual steps</a> are below.</p>
+  <h1 class="page-title">Documentation</h1>
+  <p class="sub">How DevRadar works and how to feed it. Start with the concepts, then submit your first SBOM — DevRadar tracks an image by rescanning its SBOM over time and never pulls the image itself.</p>
+
+  <nav class="toc" aria-label="Table of contents">
+    <h2 class="toc-title">On this page</h2>
+    <ul>
+      <li><a href="#how-it-works">How DevRadar works</a></li>
+      <li><a href="#accuracy">Is SBOM scanning as accurate as image scanning?</a></li>
+      <li><a href="#reading">Reading your results</a></li>
+      <li><a href="#licenses">Licenses &amp; compliance</a></li>
+      <li><a href="#trust">Trust &amp; attestation</a></li>
+      <li><a href="#submit-cli">Submit with the CLI <span class="muted">(recommended)</span></a></li>
+      <li><a href="#manual">Manual submission</a></li>
+      <li><a href="#faq">FAQ</a></li>
+    </ul>
+  </nav>
+
+  <section class="doc-section">
+    <h2 id="how-it-works" class="section-divider">How DevRadar works</h2>
+    <p>DevRadar tracks how a container image's vulnerabilities change <strong>over time</strong> by rescanning its SBOM — the software bill of materials your CI already produces — rather than pulling the image. Scanning the SBOM instead of the image removes registries, credentials, rate limits, and egress from the picture, and it means DevRadar can cover <strong>private-registry images</strong>: the SBOM crosses the trust boundary, not your registry credentials.</p>
+    <ol class="doc-steps">
+      <li><strong>Submit</strong> — you POST an SBOM (pinned to an image digest) through an authenticated API. DevRadar validates it, extracts the subject digest, and stores it immutably.</li>
+      <li><strong>Rescan</strong> — a job re-runs <a href="https://github.com/anchore/grype" rel="noopener noreferrer" target="_blank">Grype</a> and <a href="https://github.com/aquasecurity/trivy" rel="noopener noreferrer" target="_blank">Trivy</a> against each due SBOM on a schedule (every ~15 min; each SBOM at most about twice a day), normalizes both scanners into one scanner-agnostic schema, and records every change.</li>
+      <li><strong>Track change</strong> — DevRadar keeps current findings plus an append-only change log. The product is the <em>delta over time</em>, not a point-in-time scan.</li>
+    </ol>
+    <p class="muted">Because an SBOM is <strong>immutable</strong> once submitted, the only variable across daily scans is the scanner's vulnerability database. That gives clean causality: a new finding on an unchanged digest is <span class="cause cause-db" title="database">database</span>-driven, while a finding that requires a new digest is <span class="cause cause-image" title="image">image</span>-driven. A scanner upgrade is tagged <span class="cause cause-tooling" title="tooling">tooling</span> so it never looks like a real regression.</p>
+  </section>
+
+  <section class="doc-section">
+    <h2 id="accuracy" class="section-divider">Is SBOM scanning as accurate as image scanning?</h2>
+    <p>Scanning splits into <strong>matching</strong> (packages → CVEs) and <strong>cataloging</strong> (image → packages). Matching is <em>identical</em> whether the input is an SBOM or an image — same matcher, same database — so accuracy comes down to how good the SBOM's <em>generator</em> was at cataloging, which is not a property of SBOM-vs-image at all.</p>
+    <ul class="opt-list">
+      <li>An <strong>all-layers</strong> SBOM from the scanner's own cataloger family has zero gap (Syft&nbsp;→&nbsp;Grype is bit-identical).</li>
+      <li>Cross-tool (Syft&nbsp;→&nbsp;Trivy) has a small, bidirectional gap — which is exactly why DevRadar runs both: divergence is a useful cataloger-disagreement signal.</li>
+      <li>Static binaries and unmanifested vendored dependencies are a real but <em>shared</em> weakness — direct image scanning is barely better.</li>
+    </ul>
+    <p class="muted">DevRadar caveat: cataloging is frozen per digest (a newer cataloger's finds arrive only with a new digest), while matching stays live daily. That is the trade that buys clean change causality. Recommendation: <strong>Syft-generated CycloneDX, all layers</strong>.</p>
+  </section>
+
+  <section class="doc-section">
+    <h2 id="reading" class="section-divider">Reading your results</h2>
+    <p>Findings are filtered by a <strong>severity threshold</strong> (your tenant default is <code>medium</code>; override per request with <code>?min_severity=</code>). Where to look:</p>
+    <ul class="opt-list">
+      <li><a href="/dashboard">Images</a> — fleet rollup: one row per tracked image with a severity breakdown, totals, and how much is fixable now.</li>
+      <li><a href="/work">Work</a> — a deterministic remediation queue ordered by known exploitation (KEV), fix availability, severity, EPSS, then blast radius. Every reason stays visible.</li>
+      <li><a href="/trends">Trends</a> — posture over time, so you can see debt rising or falling.</li>
+      <li><a href="/cves">CVEs</a> — every tracked vulnerability across your fleet, with the images it touches.</li>
+      <li><a href="/alerts">Alerts</a> — new KEV, newly-fixable, and posture regressions. Alerts filter to <span class="cause cause-image">image</span> and <span class="cause cause-db">database</span> causes so a scanner upgrade never pages you.</li>
+    </ul>
+    <p class="muted">Use the <strong>Digest comparison</strong> view (from any image page) to see exactly what changed between two immutable digests — added, resolved, and re-rated vulnerabilities, plus package and license deltas.</p>
+  </section>
+
+  <section class="doc-section">
+    <h2 id="licenses" class="section-divider">Licenses &amp; compliance</h2>
+    <p>Every SBOM already carries a per-package license, so DevRadar captures it <strong>at ingest</strong> — no extra scan — into a frozen per-digest inventory. Licenses are classified into an obligation taxonomy (permissive, weak copyleft, strong copyleft, proprietary, unknown) and evaluated against an opt-in per-tenant policy.</p>
+    <p class="muted">The <a href="/licenses">Licenses</a> page shows the fleet distribution by category and family, and a policy editor. Policy is <strong>descriptive by default</strong>: with nothing denied it just reports. Deny a category (with per-license allow/deny exceptions) and DevRadar flags violating packages instantly — evaluation is live, so a policy change re-flags without touching stored data. Classification runs in Go over the raw stored IDs, so multi-license sets and SPDX <code>OR</code>/<code>AND</code> expressions are preserved and evaluated faithfully.</p>
+  </section>
+
+  <section class="doc-section">
+    <h2 id="trust" class="section-divider">Trust &amp; attestation</h2>
+    <p>DevRadar is <strong>trust-on-submission</strong>. It always guarantees <em>determinism</em> (same SBOM + same scanner DB → same findings) and clean change causality. It does <strong>not</strong> guarantee, by default, that an SBOM faithfully represents its claimed digest — a wrong or stale SBOM yields wrong results, and that's on the submitter.</p>
+    <p>You can optionally attach a <a href="https://docs.sigstore.dev/cosign/signing/other_types/" rel="noopener noreferrer" target="_blank">sigstore/cosign</a> attestation on submission. When the service has a trust policy configured, DevRadar verifies the signature and binds it to the subject digest, moving the SBOM from <em>unverified</em> to <em>verified</em>. Verification is <strong>additive and never blocks ingest</strong>: a failed or unconfigured check never rejects a submission and never changes findings. A <code>verified</code> SBOM means the attestation checked out — not that the image is safe.</p>
+  </section>
+
+  <h2 id="submit-cli" class="section-divider">Submit with the CLI <span class="muted">(recommended)</span></h2>
+  <p class="sub">The easiest way to submit is the <strong>devradarctl</strong> CLI, which handles digest resolution, all-layers SBOM generation, and upload in one command. Prefer to do it by hand? The <a href="#manual">manual steps</a> are below.</p>
 
   <div class="card recommended">
     <div class="card-head"><h2>Recommended: the devradarctl CLI</h2><span class="pill">easiest</span></div>
@@ -164,6 +228,34 @@ curl -sS -X POST "$DR_BASE_URL/v1/sboms" \
     <div class="card-head"><h2>That's it</h2></div>
     <p class="muted" style="margin:0">The scan job runs on a schedule (every ~15 min) and picks up new SBOMs automatically — no manual trigger needed. License data is captured immediately at submission; vulnerability findings appear on <a href="/dashboard">Images</a> and licenses on <a href="/licenses">Licenses</a> after the next scan completes. Re-submitting the same image after a rebuild (new digest) tracks the change over time.</p>
     <p class="muted" style="margin:0.6rem 0 0">Reading results back? See the full <a href="/api">REST API reference →</a></p>
+  </div>
+
+  <h2 id="faq" class="section-divider">FAQ</h2>
+  <div class="card faq">
+    <details>
+      <summary>Does DevRadar pull my images?</summary>
+      <p class="muted">No. DevRadar only ever scans the SBOM you submit — it never pulls the image, needs registry credentials, or makes egress calls to your registry. That's what lets it cover private-registry images.</p>
+    </details>
+    <details>
+      <summary>How often are my SBOMs rescanned?</summary>
+      <p class="muted">The scan job runs every ~15 minutes and picks up any SBOM that's never been scanned or was last scanned more than the staleness window (default 12h) ago. So a freshly-submitted SBOM is scanned within a tick, while any given SBOM is rescanned at most about twice a day.</p>
+    </details>
+    <details>
+      <summary>Why do Grype and Trivy sometimes disagree?</summary>
+      <p class="muted">Running two scanners is deliberate. Matching (package → CVE) is the same regardless of input; divergence between the two almost always reflects a <em>cataloging</em> disagreement in how each tool reads the SBOM. Seeing both keeps the normalized schema honest and surfaces that signal.</p>
+    </details>
+    <details>
+      <summary>My SBOM was rejected — what went wrong?</summary>
+      <p class="muted">The most common cause is a missing subject digest. Generate the SBOM <strong>by digest</strong> (<code>image@sha256:…</code>, not <code>:tag</code>), or pass <code>image_ref</code> explicitly. DevRadar also rejects references that aren't container images (Helm charts, OCI artifacts) and enforces a 20&nbsp;MiB decoded body cap.</p>
+    </details>
+    <details>
+      <summary>Why is a package's license "unknown"?</summary>
+      <p class="muted">Either the SBOM declared no license for it, or the declared value isn't a recognizable SPDX ID (a <code>LicenseRef-*</code> placeholder, <code>NOASSERTION</code>, or a value a generator wrote incorrectly). DevRadar fails visible here — it never silently treats an unresolved license as permissive.</p>
+    </details>
+    <details>
+      <summary>What does a "verified" SBOM guarantee?</summary>
+      <p class="muted">Only that an attached sigstore/cosign attestation checked out and binds to the subject digest. It does <em>not</em> mean the image is safe. Verification is optional and never blocks ingest — see <a href="#trust">Trust &amp; attestation</a>.</p>
+    </details>
   </div>
 </main>
 {{template "foot" .}}

@@ -24,7 +24,11 @@
       {{if .FamilyLegend}}
       <div class="tree-legend">
         {{range .FamilyLegend}}
+        {{if eq .Label "others"}}
         <span class="tree-legend-item"><span class="swatch" style="background:{{.Color}}"></span>{{.Label}} <span class="muted">({{.Count}})</span></span>
+        {{else}}
+        <a class="tree-legend-item" href="/licenses/family?family={{.Label}}" title="List packages with a {{.Label}} license"><span class="swatch" style="background:{{.Color}}"></span>{{.Label}} <span class="muted">({{.Count}})</span></a>
+        {{end}}
         {{end}}
       </div>
       {{end}}
