@@ -9,6 +9,12 @@
     <p style="margin-top:0"><a href="https://github.com/thingzio/devradarctl" rel="noopener noreferrer" target="_blank">devradarctl</a> resolves the image's manifest digest, generates an all-layers CycloneDX SBOM, and submits it — one step, no base64 or curl plumbing.</p>
 
     <h3 class="guide-h3">1. Install</h3>
+    <p style="margin-top:0">Homebrew (macOS/Linux):</p>
+    <div class="copyable">
+      <button class="copy-btn" type="button">Copy</button>
+      <pre>brew install thingzio/tap/devradarctl</pre>
+    </div>
+    <p class="muted">Or with Go:</p>
     <div class="copyable">
       <button class="copy-btn" type="button">Copy</button>
       <pre>go install github.com/thingzio/devradarctl@latest</pre>
@@ -34,12 +40,19 @@ devradarctl submit --image alpine:3.20 --label team-x --label prod</pre>
     </div>
 
     <h3 class="guide-h3">Prove authenticity (optional)</h3>
-    <p style="margin-top:0">Attach a <a href="https://docs.sigstore.dev/cosign/signing/other_types/" rel="noopener noreferrer" target="_blank">sigstore/cosign</a> attestation and DevRadar verifies its signature and that its subject matches this SBOM's image digest — moving the SBOM from <em>unverified</em> to <em>verified</em>. Verification is optional and never blocks a submission; without it, DevRadar still guarantees deterministic, reproducible findings.</p>
+    <p style="margin-top:0">Attach a <a href="https://docs.sigstore.dev/cosign/signing/other_types/" rel="noopener noreferrer" target="_blank">sigstore/cosign</a> attestation and — when the service has a trust policy configured — DevRadar verifies its signature and that its subject matches this SBOM's image digest, moving the SBOM from <em>unverified</em> to <em>verified</em>. Verification is optional and never blocks a submission; without it, DevRadar still guarantees deterministic, reproducible findings.</p>
+    <p class="muted">The <code>--attestation</code> flag takes a path to a sigstore bundle. Many public images already ship keyless attestations you can pull with <a href="https://github.com/sigstore/cosign" rel="noopener noreferrer" target="_blank">cosign</a>. For example, the cosign image itself publishes an SBOM attestation:</p>
     <div class="copyable">
       <button class="copy-btn" type="button">Copy</button>
-      <pre>devradarctl submit --image alpine:3.20 --attestation alpine.bundle.json</pre>
+      <pre># download the SBOM attestation bundle for a real, publicly-attested image
+IMAGE=ghcr.io/sigstore/cosign/cosign:v2.4.1
+cosign download attestation --predicate-type https://spdx.dev/Document \
+  "$IMAGE" &gt; cosign.att.jsonl
+
+# submit the image with its attestation; DevRadar verifies the binding
+devradarctl submit --image "$IMAGE" --attestation cosign.att.jsonl</pre>
     </div>
-    <p class="muted" style="margin-bottom:0">Full flag/env reference: the <a href="https://github.com/thingzio/devradarctl#configuration" rel="noopener noreferrer" target="_blank">devradarctl README</a>.</p>
+    <p class="muted" style="margin-bottom:0">For your own images, sign an SBOM attestation in CI (e.g. keyless via GitHub Actions OIDC: <code>cosign attest --predicate sbom.cdx.json --type cyclonedx &lt;image&gt;</code>), export the bundle, and pass it to <code>--attestation</code>. Full flag/env reference: the <a href="https://github.com/thingzio/devradarctl#configuration" rel="noopener noreferrer" target="_blank">devradarctl README</a>.</p>
   </div>
 
   <h2 id="manual" class="section-divider">Manual submission</h2>
