@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"os"
 	"sync"
 	"testing"
 
@@ -17,6 +18,9 @@ func testStore(t *testing.T) *postgres.Store {
 	t.Helper()
 	st, err := postgres.NewFromEnv(context.Background())
 	if err != nil {
+		if os.Getenv("DATABASE_URL") != "" {
+			t.Fatalf("connect configured integration database: %v", err)
+		}
 		t.Skipf("skipping integration test (no database): %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
@@ -243,6 +247,24 @@ func TestApplyScan_DeltaEngine(t *testing.T) {
 	}
 	if toolingAlertable != 0 {
 		t.Errorf("tooling events must never match the alerting filter, got %d", toolingAlertable)
+	}
+
+	var queuedActionable, queuedTooling int
+	if err := st.DB().QueryRowContext(ctx, `
+		SELECT count(*) FILTER (WHERE e.cause IN ('image','db')),
+		       count(*) FILTER (WHERE e.cause = 'tooling')
+		FROM devradar_alert_event_queue q
+		JOIN devradar_finding_event e
+		  ON e.occurred_at=q.event_occurred_at AND e.id=q.event_id
+		WHERE q.consumer='browser-alerts-v1' AND e.sbom_id=$1`, sb.ID).
+		Scan(&queuedActionable, &queuedTooling); err != nil {
+		t.Fatalf("count queued events: %v", err)
+	}
+	if queuedActionable != alertableEvents(t, st, sb.ID) {
+		t.Errorf("queued actionable events = %d, want %d", queuedActionable, alertableEvents(t, st, sb.ID))
+	}
+	if queuedTooling != 0 {
+		t.Errorf("queued tooling events = %d, want 0", queuedTooling)
 	}
 }
 

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{.Title}} — DevRadar</title>
-  <meta name="description" content="Container vulnerability tracking — submit an SBOM, track how its vulnerabilities change over time.">
+  <meta name="description" content="Continuous SBOM security posture for container images — detect change, prioritize remediation, compare digests, and track vulnerability debt.">
   <link rel="stylesheet" href="/static/css/app.css">
   <script src="/static/js/app.js" defer></script>
 </head>
@@ -20,7 +20,10 @@
   <div class="tabs">
     <a href="/overview" class="tab {{if eq .Tab "overview"}}active{{end}}">Overview</a>
     <a href="/dashboard" class="tab {{if eq .Tab "images"}}active{{end}}">Images</a>
+    <a href="/work" class="tab {{if eq .Tab "work"}}active{{end}}">Work</a>
+    <a href="/trends" class="tab {{if eq .Tab "trends"}}active{{end}}" {{if eq .Tab "trends"}}aria-current="page"{{end}}>Trends</a>
     <a href="/cves" class="tab {{if eq .Tab "cves"}}active{{end}}">CVEs</a>
+    <a href="/alerts" class="tab {{if eq .Tab "alerts"}}active{{end}}">Alerts</a>
     <a href="/licenses" class="tab {{if eq .Tab "licenses"}}active{{end}}">Licenses</a>
     <a href="/submit" class="tab {{if eq .Tab "submit"}}active{{end}}">Submit</a>
     <a href="/api" class="tab {{if eq .Tab "api"}}active{{end}}">API</a>

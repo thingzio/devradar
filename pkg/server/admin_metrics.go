@@ -51,13 +51,14 @@ var (
 	metricDayOptions  = []int{1, 2, 7, 14, 30}
 )
 
-// adminMetricsConfig names the GCP project and the two Cloud Run resources to
-// query. nil (from newAdminMetricsConfig) means "no project" → the page shows a
-// disabled state instead of erroring.
+// adminMetricsConfig names the GCP project, Cloud Run resources, and Cloud SQL
+// instance to query. nil (from newAdminMetricsConfig) means "no project" → the
+// page shows a disabled state instead of erroring.
 type adminMetricsConfig struct {
 	projectID string
 	service   string // Cloud Run service (serve)
 	job       string // Cloud Run job (scan)
+	database  string // Cloud SQL instance
 }
 
 func newAdminMetricsConfig() *adminMetricsConfig {
@@ -71,7 +72,8 @@ func newAdminMetricsConfig() *adminMetricsConfig {
 	// K_SERVICE is auto-set by Cloud Run to the running service name.
 	service := config.GetEnv("K_SERVICE", config.GetEnv("DEVRADAR_SERVICE_NAME", "devradar-saas-serve"))
 	job := config.GetEnv("DEVRADAR_SCAN_JOB_NAME", "devradar-saas-scan")
-	return &adminMetricsConfig{projectID: projectID, service: service, job: job}
+	database := config.GetEnv("DEVRADAR_CLOUD_SQL_INSTANCE", "thingzio-pg")
+	return &adminMetricsConfig{projectID: projectID, service: service, job: job, database: database}
 }
 
 // handleAdminMetrics renders GCP Cloud Monitoring series for the serve service
@@ -190,6 +192,7 @@ type metricQuery struct {
 func adminMetricQueries(cfg *adminMetricsConfig) []metricQuery {
 	align := "aggregation.alignmentPeriod=3600s"
 	svc, job := cfg.service, cfg.job
+	databaseID := cfg.projectID + ":" + cfg.database
 	return []metricQuery{
 		{
 			label:  "serve: request count (req/s by response class)",
@@ -207,6 +210,16 @@ func adminMetricQueries(cfg *adminMetricsConfig) []metricQuery {
 			params: align + "&aggregation.perSeriesAligner=ALIGN_MAX&aggregation.crossSeriesReducer=REDUCE_SUM",
 		},
 		{
+			label:  "serve: CPU utilization p95",
+			filter: fmt.Sprintf(`resource.type="cloud_run_revision" AND resource.labels.service_name="%s" AND metric.type="run.googleapis.com/container/cpu/utilizations"`, svc),
+			params: align + "&aggregation.perSeriesAligner=ALIGN_PERCENTILE_95&aggregation.crossSeriesReducer=REDUCE_MEAN",
+		},
+		{
+			label:  "serve: memory utilization p95",
+			filter: fmt.Sprintf(`resource.type="cloud_run_revision" AND resource.labels.service_name="%s" AND metric.type="run.googleapis.com/container/memory/utilizations"`, svc),
+			params: align + "&aggregation.perSeriesAligner=ALIGN_PERCENTILE_95&aggregation.crossSeriesReducer=REDUCE_MEAN",
+		},
+		{
 			label:  "scan job: completed executions (by result)",
 			filter: fmt.Sprintf(`resource.type="cloud_run_job" AND resource.labels.job_name="%s" AND metric.type="run.googleapis.com/job/completed_execution_count"`, job),
 			params: align + "&aggregation.perSeriesAligner=ALIGN_SUM&aggregation.crossSeriesReducer=REDUCE_SUM&aggregation.groupByFields=metric.labels.result",
@@ -215,6 +228,21 @@ func adminMetricQueries(cfg *adminMetricsConfig) []metricQuery {
 			label:  "scan job: running executions",
 			filter: fmt.Sprintf(`resource.type="cloud_run_job" AND resource.labels.job_name="%s" AND metric.type="run.googleapis.com/job/running_executions"`, job),
 			params: align + "&aggregation.perSeriesAligner=ALIGN_MAX&aggregation.crossSeriesReducer=REDUCE_SUM",
+		},
+		{
+			label:  "database: CPU utilization",
+			filter: fmt.Sprintf(`resource.type="cloudsql_database" AND resource.labels.database_id="%s" AND metric.type="cloudsql.googleapis.com/database/cpu/utilization"`, databaseID),
+			params: align + "&aggregation.perSeriesAligner=ALIGN_MEAN",
+		},
+		{
+			label:  "database: active connections",
+			filter: fmt.Sprintf(`resource.type="cloudsql_database" AND resource.labels.database_id="%s" AND metric.labels.state="active" AND metric.type="cloudsql.googleapis.com/database/postgresql/num_backends_by_state"`, databaseID),
+			params: align + "&aggregation.perSeriesAligner=ALIGN_MAX",
+		},
+		{
+			label:  "database: disk utilization",
+			filter: fmt.Sprintf(`resource.type="cloudsql_database" AND resource.labels.database_id="%s" AND metric.type="cloudsql.googleapis.com/database/disk/utilization"`, databaseID),
+			params: align + "&aggregation.perSeriesAligner=ALIGN_MAX",
 		},
 	}
 }

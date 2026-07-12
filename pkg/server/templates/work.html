@@ -1,0 +1,32 @@
+{{template "head" .}}
+{{template "nav" .}}
+<main class="page-content">
+  <h1 class="page-title">What should I fix?</h1>
+  <p class="sub">A deterministic queue: known exploitation, fix availability, severity, EPSS, blast radius, then age. Every reason stays visible.</p>
+
+  <div class="work-list">
+    {{range .Items}}
+    <article id="work-{{.CVE}}" class="work-item {{if .AllVEXd}}vexed{{end}}">
+      <div class="work-priority">
+        {{if .KEV}}<span class="kev-badge">KEV</span>{{end}}
+        <span class="sev-badge sev-b-{{.Severity}}">{{.Severity}}</span>
+        {{if .Fixable}}<span class="work-fix">Fix available</span>{{else}}<span class="muted">No fix reported</span>{{end}}
+      </div>
+      <div class="work-main">
+        <h2><a href="/cves/{{.CVE}}">{{.CVE}}</a></h2>
+        <p>{{if .KEV}}Known exploited{{else}}Not currently in CISA KEV{{end}} · {{if .EPSS}}EPSS {{.EPSS}}{{else}}No EPSS score{{end}} · affects {{.ImageCount}} image{{if ne .ImageCount 1}}s{{end}}</p>
+        <div class="work-context">
+          <span>{{.Agreement}}</span><span>{{.FindingCount}} canonical finding{{if ne .FindingCount 1}}s{{end}}</span><span>{{.Age}}</span>
+          {{if .AllVEXd}}<span>VEX suppresses all tracked occurrences</span>{{else if .Suppressed}}<span>VEX suppresses some tracked occurrences</span>{{end}}
+        </div>
+        {{if .Repositories}}<div class="work-repos">{{range .Repositories}}<a class="label-chip" href="/images?repo={{.}}">{{.}}</a>{{end}}</div>{{end}}
+      </div>
+      <a class="work-open" href="/cves/{{.CVE}}">Review →</a>
+    </article>
+    {{else}}
+    <div class="card"><p class="muted">No open vulnerabilities meet your tenant severity threshold.</p></div>
+    {{end}}
+  </div>
+  {{if .NextCursor}}<p class="loadmore"><a href="/work?cursor={{.NextCursor}}">Load more →</a></p>{{end}}
+</main>
+{{template "foot" .}}

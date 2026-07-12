@@ -36,6 +36,127 @@ type PlatformCounts struct {
 	VEXStatements    int
 }
 
+// AdminProductHealth is the aggregate product and pipeline health snapshot for
+// the operator console. It deliberately contains no tenant identity or detail
+// rows; every field is a bounded set-based count or timestamp.
+type AdminProductHealth struct {
+	EnabledAlertPolicies        int
+	Alerts24h                   int
+	UnreadAlerts                int
+	EvaluatorBacklog            int
+	OldestPendingAt             time.Time
+	EvaluatorFailures24h        int
+	SnapshotTenantsToday        int
+	ActiveSBOMTenants           int
+	CanonicalExposures          int
+	CanonicalFixableExposures   int
+	CanonicalKEVExposures       int
+	ComparisonReadyRepositories int
+	LicensePoliciesConfigured   int
+	LicensePoliciesEnforcing    int
+}
+
+// AdminProductHealth computes cross-tenant product and pipeline health for the
+// operator console. Each metric group is one bounded aggregate query; failures
+// return no partial snapshot.
+func (s *Store) AdminProductHealth(ctx context.Context) (*AdminProductHealth, error) {
+	health := &AdminProductHealth{}
+
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT
+			(SELECT count(*) FROM devradar_alert_policy WHERE enabled),
+			(SELECT count(*) FROM devradar_alert
+			 WHERE created_at > now() - interval '24 hours'),
+			(SELECT count(*) FROM devradar_alert WHERE read_at IS NULL),
+			(SELECT count(*) FROM devradar_alert_failure
+			 WHERE occurred_at > now() - interval '24 hours')`).Scan(
+		&health.EnabledAlertPolicies,
+		&health.Alerts24h,
+		&health.UnreadAlerts,
+		&health.EvaluatorFailures24h,
+	); err != nil {
+		return nil, fmt.Errorf("product health alerts: %w", err)
+	}
+
+	var oldestPending sql.NullTime
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT count(*), min(event_occurred_at)
+		FROM devradar_alert_event_queue
+		WHERE consumer=$1 AND processed_at IS NULL`,
+		"browser-alerts-v1").Scan(&health.EvaluatorBacklog, &oldestPending); err != nil {
+		return nil, fmt.Errorf("product health evaluator backlog: %w", err)
+	}
+	if oldestPending.Valid {
+		health.OldestPendingAt = oldestPending.Time
+	}
+
+	if err := s.db.QueryRowContext(ctx, `
+		WITH active_tenants AS (
+			SELECT DISTINCT tenant_id
+			FROM devradar_sbom
+			WHERE status = 'active'
+		)
+		SELECT count(p.tenant_id), count(a.tenant_id)
+		FROM active_tenants a
+		LEFT JOIN devradar_tenant_posture_snapshot p
+		  ON p.tenant_id = a.tenant_id
+		 AND p.snapshot_date = (now() AT TIME ZONE 'UTC')::date`).Scan(
+		&health.SnapshotTenantsToday,
+		&health.ActiveSBOMTenants,
+	); err != nil {
+		return nil, fmt.Errorf("product health posture coverage: %w", err)
+	}
+
+	if err := s.db.QueryRowContext(ctx, `
+		WITH canonical_findings AS (
+			SELECT sb.tenant_id, f.sbom_id, f.finding_id,
+			       bool_or(f.is_fixed) AS fixable,
+			       COALESCE(bool_or(e.kev), false) AS kev
+			FROM devradar_sbom sb
+			JOIN devradar_finding f ON f.sbom_id = sb.id
+			LEFT JOIN devradar_cve_enrichment e ON e.cve = f.exposure
+			WHERE sb.status = 'active'
+			  AND NOT `+vexSuppressedByDigestCVE+`
+			GROUP BY sb.tenant_id, f.sbom_id, f.finding_id
+		)
+		SELECT count(*),
+		       count(*) FILTER (WHERE fixable),
+		       count(*) FILTER (WHERE kev)
+		FROM canonical_findings`).Scan(
+		&health.CanonicalExposures,
+		&health.CanonicalFixableExposures,
+		&health.CanonicalKEVExposures,
+	); err != nil {
+		return nil, fmt.Errorf("product health canonical exposures: %w", err)
+	}
+
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM (
+			SELECT tenant_id, repository
+			FROM devradar_sbom
+			WHERE status = 'active'
+			GROUP BY tenant_id, repository
+			HAVING count(DISTINCT digest) >= 2
+		) ready`).Scan(&health.ComparisonReadyRepositories); err != nil {
+		return nil, fmt.Errorf("product health comparison readiness: %w", err)
+	}
+
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT count(*),
+		       count(*) FILTER (
+			   WHERE cardinality(denied_categories) > 0
+			      OR cardinality(deny_exceptions) > 0)
+		FROM devradar_license_policy`).Scan(
+		&health.LicensePoliciesConfigured,
+		&health.LicensePoliciesEnforcing,
+	); err != nil {
+		return nil, fmt.Errorf("product health license policies: %w", err)
+	}
+
+	return health, nil
+}
+
 // WarningStage is the scan_failure.stage recorded for the zero-findings tripwire.
 // It is a heuristic warning (a scanner returned nothing on a non-trivial SBOM,
 // usually cross-tool cataloger divergence — e.g. Trivy finds 0 where Grype finds

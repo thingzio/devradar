@@ -3,6 +3,7 @@ package server_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -20,19 +21,113 @@ func TestLanding_RendersMarketing(t *testing.T) {
 	}
 	body := rec.Body.String()
 	for _, want := range []string{
-		"SBOM vs Image", // the differentiator
-		"Daily rescans", // feature grid
-		"VEX suppression",
-		"How it works",
-		"coming soon",          // deferred features surfaced
-		`action="/auth/login"`, // sign-in form present
-		"honest note on trust", // trust-model note
+		"Continuous security posture for every image you ship",
+		"Submit", "Detect", "Prioritize", "Compare", "Trend",
+		"What changed, and why?",
+		"What should I fix next?",
+		"Is the next tracked digest better?",
+		"Is my fleet improving?",
+		"Opt-in browser alerts",
+		"Grype and Trivy",
+		"License policy", "OpenVEX", "tenant-scoped API",
+		"fleet posture trends", "repository change history",
+		"filter tracked images and scope browser alerts",
+		"identical SBOM inventory", "vulnerability database", "scanner version", "canonicalizer version",
+		"does not verify that a submitted SBOM faithfully represents the claimed image",
+		"Results reflect the submitted evidence.",
+		`aria-labelledby="trust-title"`, `id="trust-title">An honest note on trust`,
+		"Passwordless sign-in with GitHub or a one-time email link.",
+		`<meta name="description" content="Continuous SBOM security posture for container images — detect change, prioritize remediation, compare digests, and track vulnerability debt.">`,
+		`action="/auth/login"`,
+		"honest note on trust",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("landing page missing %q", want)
 		}
 	}
+	lowerBody := strings.ToLower(body)
+	for _, stale := range []string{
+		"coming soon", "push & email alerts", "webhook", "email alert", "email notification",
+		"universally safe", "universal safety", "repository trends", "filter image, work",
+		"free to start", "no credit card", "later release",
+	} {
+		if strings.Contains(lowerBody, stale) {
+			t.Errorf("landing page contains stale or unsafe claim %q", stale)
+		}
+	}
+	if !strings.Contains(body, "Enter your email") {
+		t.Error("landing page must retain sign-in email copy")
+	}
 	if strings.Contains(body, `class="tab `) {
 		t.Error("signed-out landing must not render authed nav tabs")
+	}
+
+	start := strings.Index(body, `<ol class="posture-loop">`)
+	if start < 0 {
+		t.Fatal("landing posture loop must be an ordered list")
+	}
+	end := strings.Index(body[start:], "</ol>")
+	if end < 0 {
+		t.Fatal("landing posture ordered list is not closed")
+	}
+	loop := body[start : start+end]
+	if got := strings.Count(loop, "<li>"); got != 5 {
+		t.Fatalf("posture loop stages = %d, want 5", got)
+	}
+	matches := regexp.MustCompile(`<span class="posture-step">([^<]+)</span>`).FindAllStringSubmatch(loop, -1)
+	stages := make([]string, 0, len(matches))
+	for _, match := range matches {
+		stages = append(stages, match[1])
+	}
+	if got, want := strings.Join(stages, ","), "Submit,Detect,Prioritize,Compare,Trend"; got != want {
+		t.Errorf("posture loop order = %q, want %q", got, want)
+	}
+}
+
+func TestLanding_RendersAuthStates(t *testing.T) {
+	srv, _ := testServer(t)
+	h := srv.Handler()
+
+	t.Run("error", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/?error=email", nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		body := rec.Body.String()
+		if rec.Code != http.StatusOK || !strings.Contains(body, "Please enter a valid email address.") ||
+			!strings.Contains(body, `action="/auth/login"`) {
+			t.Fatalf("error landing = %d body=%s", rec.Code, body)
+		}
+	})
+
+	t.Run("sent", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/?sent=1", nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		body := rec.Body.String()
+		if rec.Code != http.StatusOK || !strings.Contains(body, "Check your email — we sent you a sign-in link.") {
+			t.Fatalf("sent landing = %d body=%s", rec.Code, body)
+		}
+		if strings.Contains(body, `action="/auth/login"`) {
+			t.Error("sent landing must hide sign-in forms")
+		}
+	})
+}
+
+func TestLanding_NarrowEmailFormsStack(t *testing.T) {
+	srv, _ := testServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/static/css/app.css", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("stylesheet status = %d, want 200", rec.Code)
+	}
+	css := rec.Body.String()
+	stackRule := regexp.MustCompile(`(?s)\.landing \.hero-signin form\.row,\s*\.landing \.lp-cta-form\s*\{[^}]*flex-direction:\s*column;[^}]*align-items:\s*stretch;`)
+	if !stackRule.MatchString(css) {
+		t.Error("landing email forms need a narrow-screen stacking rule")
+	}
+	inputRule := regexp.MustCompile(`(?s)\.landing \.hero-signin form\.row input,\s*\.landing \.lp-cta-form input\s*\{[^}]*min-width:\s*0;[^}]*width:\s*100%;`)
+	if !inputRule.MatchString(css) {
+		t.Error("landing email inputs need a narrow-screen overflow guard")
 	}
 }

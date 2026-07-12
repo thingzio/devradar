@@ -10,6 +10,19 @@
       <button class="btn secondary" type="submit">Archive image</button>
     </form>
   </div>
+
+  {{if .CanCompare}}
+  <div class="card compare-picker">
+    <div class="card-head"><h2>Compare generations</h2></div>
+    <p class="muted">See exactly what changed between two immutable SBOM digests.</p>
+    <form class="row" method="get" action="/compare">
+      <select name="from" aria-label="Earlier generation">{{range .SBOMs}}<option value="{{.SBOMID}}" {{if .FromDefault}}selected{{end}}>{{if .Version}}{{.Version}}{{else}}{{.ShortDigest}}{{end}}</option>{{end}}</select>
+      <span class="muted">→</span>
+      <select name="to" aria-label="Later generation">{{range .SBOMs}}<option value="{{.SBOMID}}" {{if .ToDefault}}selected{{end}}>{{if .Version}}{{.Version}}{{else}}{{.ShortDigest}}{{end}}</option>{{end}}</select>
+      <button class="btn secondary" type="submit">Compare</button>
+    </form>
+  </div>
+  {{end}}
   <p class="sub repo-full">{{.Repository}}</p>
 
   <div class="chips">

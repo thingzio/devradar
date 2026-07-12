@@ -24,6 +24,77 @@ func tenantEmail(t *testing.T, st *postgres.Store, id string) string {
 	return tn.Email
 }
 
+func seedAdminProductHealth(t *testing.T, st *postgres.Store, tenantID string) {
+	t.Helper()
+	ctx := context.Background()
+	repository := "registry.test/admin-health-" + tenantID
+	sboms := []*postgres.SBOM{
+		{
+			ID: "admin-health-1-" + tenantID, TenantID: tenantID,
+			ImageRef: repository + ":v1", Repository: repository, Version: "v1",
+			Digest: "sha256:admin-health-1-" + tenantID, Format: "cyclonedx",
+			ObjectPath: "gs://test/admin-health-1-" + tenantID, Status: "active",
+		},
+		{
+			ID: "admin-health-2-" + tenantID, TenantID: tenantID,
+			ImageRef: repository + ":v2", Repository: repository, Version: "v2",
+			Digest: "sha256:admin-health-2-" + tenantID, Format: "cyclonedx",
+			ObjectPath: "gs://test/admin-health-2-" + tenantID, Status: "active",
+		},
+	}
+	for _, sb := range sboms {
+		if _, _, _, err := st.UpsertSBOM(ctx, sb); err != nil {
+			t.Fatalf("seed product-health SBOM: %v", err)
+		}
+	}
+
+	var policyID string
+	if err := st.DB().QueryRowContext(ctx, `
+		INSERT INTO devradar_alert_policy (tenant_id, enabled)
+		VALUES ($1, true) RETURNING id`, tenantID).Scan(&policyID); err != nil {
+		t.Fatalf("seed alert policy: %v", err)
+	}
+	eventID := time.Now().UnixNano()
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_alert
+		(tenant_id, policy_id, event_id, event_occurred_at, alert_kind, sbom_id,
+		 repository, digest, finding_id, exposure, package, version, severity, score, cause)
+		VALUES ($1,$2,$3,now(),'new_finding',$4,$5,$6,'finding-admin-health',
+		        'CVE-2099-9999','pkg','1','high',8,'image')`,
+		tenantID, policyID, eventID, sboms[0].ID, repository, sboms[0].Digest); err != nil {
+		t.Fatalf("seed alert: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_alert_failure
+		(consumer, event_id, event_occurred_at, error)
+		VALUES ($1,$2,now(),'test evaluator failure')`, "admin-test-"+tenantID, eventID); err != nil {
+		t.Fatalf("seed evaluator failure: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_tenant_posture_snapshot (tenant_id, snapshot_date, images)
+		VALUES ($1, (now() AT TIME ZONE 'UTC')::date, 2)`, tenantID); err != nil {
+		t.Fatalf("seed posture snapshot: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_finding
+		(sbom_id, scanner, finding_id, exposure, package, version, severity, score, is_fixed)
+		VALUES ($1,'grype','finding-admin-health','CVE-2099-9999','pkg','1','high',8,true)`,
+		sboms[0].ID); err != nil {
+		t.Fatalf("seed canonical exposure: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_cve_enrichment (cve, kev)
+		VALUES ('CVE-2099-9999', true)
+		ON CONFLICT (cve) DO UPDATE SET kev=true`); err != nil {
+		t.Fatalf("seed KEV enrichment: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_license_policy (tenant_id, denied_categories)
+		VALUES ($1, ARRAY['strong-copyleft'])`, tenantID); err != nil {
+		t.Fatalf("seed license policy: %v", err)
+	}
+}
+
 // TestAdmin_NonAdmin404 verifies the console is hidden: an authenticated but
 // non-allowlisted tenant gets 404 (not 403), and an unauthenticated request too.
 func TestAdmin_NonAdmin404(t *testing.T) {
@@ -51,12 +122,16 @@ func TestAdmin_NonAdmin404(t *testing.T) {
 	}
 }
 
-// TestAdmin_AdminSeesDashboard verifies an allowlisted tenant reaches the
-// dashboard (200).
-func TestAdmin_AdminSeesDashboard(t *testing.T) {
+// TestAdmin_AdminSeesProductHealth verifies an allowlisted tenant sees the
+// aggregate product-health section without tenant identities or unsafe claims.
+func TestAdmin_AdminSeesProductHealth(t *testing.T) {
 	srv, st := testServer(t)
 	tenantID, _ := seedTenantToken(t, st)
-	t.Setenv("DEVRADAR_ADMIN_USERS", tenantEmail(t, st, tenantID))
+	adminEmail := tenantEmail(t, st, tenantID)
+	t.Setenv("DEVRADAR_ADMIN_USERS", adminEmail)
+	observedTenantID, _ := seedTenantToken(t, st)
+	observedEmail := tenantEmail(t, st, observedTenantID)
+	seedAdminProductHealth(t, st, observedTenantID)
 	h := srv.Handler()
 	cookie := seedSession(t, st, tenantID)
 
@@ -67,8 +142,38 @@ func TestAdmin_AdminSeesDashboard(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("admin /admin: status = %d, want 200", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "Platform") {
+	body := rec.Body.String()
+	if !strings.Contains(body, "Platform") {
 		t.Error("dashboard body should contain the Platform heading")
+	}
+	for _, want := range []string{
+		"Product health", "Alert adoption", "Evaluator", "Posture coverage",
+		"Actionable exposure", "Comparison readiness", "License policy adoption",
+		"current UTC date", time.Now().UTC().Format("2006-01-02"),
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	start := strings.Index(body, `<section aria-labelledby="product-health-heading">`)
+	if start < 0 {
+		t.Fatal("missing product-health section")
+	}
+	end := strings.Index(body[start:], `</section>`)
+	if end < 0 {
+		t.Fatal("unterminated product-health section")
+	}
+	productHealth := body[start : start+end]
+	for _, identity := range []string{adminEmail, observedEmail} {
+		if strings.Contains(productHealth, identity) {
+			t.Errorf("product-health section contains tenant identity %q", identity)
+		}
+	}
+	lowerBody := strings.ToLower(body)
+	for _, forbidden := range []string{"safe", "compatible", "reachable", "compliant"} {
+		if strings.Contains(lowerBody, forbidden) {
+			t.Errorf("dashboard contains forbidden claim %q", forbidden)
+		}
 	}
 }
 

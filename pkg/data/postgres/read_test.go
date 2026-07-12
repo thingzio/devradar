@@ -16,11 +16,7 @@ import (
 // image but trims sub-threshold buckets to zero, keeps unknown, leaves Total as
 // the overall count, and sets Relevant to the sum of visible buckets.
 func TestListImages_ThresholdTrimsBreakdown(t *testing.T) {
-	st, err := postgres.NewFromEnv(context.Background())
-	if err != nil {
-		t.Skipf("skipping (no database): %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := testStore(t)
 	ctx := context.Background()
 
 	// Isolated tenant + one SBOM with one finding per severity.
@@ -101,11 +97,7 @@ func TestListImages_ThresholdTrimsBreakdown(t *testing.T) {
 // trivy (two devradar_finding rows sharing one finding_id) counts ONCE, not
 // twice — the fleet/image rollups count distinct finding_id, not raw rows.
 func TestListImages_DedupsAcrossScanners(t *testing.T) {
-	st, err := postgres.NewFromEnv(context.Background())
-	if err != nil {
-		t.Skipf("skipping (no database): %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := testStore(t)
 	ctx := context.Background()
 
 	b := make([]byte, 8)
@@ -163,11 +155,7 @@ func TestListImages_DedupsAcrossScanners(t *testing.T) {
 // the twin pair straddles the boundary, BOTH rows must appear across the pages —
 // a finding_id-only tiebreak would silently drop one.
 func TestFindingsBySBOM_DualScannerPaging(t *testing.T) {
-	st, err := postgres.NewFromEnv(context.Background())
-	if err != nil {
-		t.Skipf("skipping (no database): %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := testStore(t)
 	ctx := context.Background()
 
 	b := make([]byte, 8)
@@ -229,11 +217,7 @@ func TestFindingsBySBOM_DualScannerPaging(t *testing.T) {
 // severity-filtered, newest-first timeline; an unknown ref is 404; and the
 // timeline is tenant-scoped.
 func TestImageTimeline_AcrossDigests(t *testing.T) {
-	st, err := postgres.NewFromEnv(context.Background())
-	if err != nil {
-		t.Skipf("skipping (no database): %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := testStore(t)
 	ctx := context.Background()
 
 	b := make([]byte, 8)
@@ -314,11 +298,7 @@ func TestImageTimeline_AcrossDigests(t *testing.T) {
 // the default view (and from counts), is included when showSuppressed is set and
 // carries its status.
 func TestVEXSuppression(t *testing.T) {
-	st, err := postgres.NewFromEnv(context.Background())
-	if err != nil {
-		t.Skipf("skipping (no database): %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := testStore(t)
 	ctx := context.Background()
 
 	b := make([]byte, 8)
@@ -395,11 +375,7 @@ func TestVEXSuppression(t *testing.T) {
 // an image name) suppresses the CVE across every version of a matching
 // repository, correlating on the repo's last path segment.
 func TestVEXSuppression_RepoScoped(t *testing.T) {
-	st, err := postgres.NewFromEnv(context.Background())
-	if err != nil {
-		t.Skipf("skipping (no database): %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := testStore(t)
 	ctx := context.Background()
 
 	b := make([]byte, 8)
@@ -478,11 +454,7 @@ func TestVEXSuppression_RepoScoped(t *testing.T) {
 // ranked KEV-first then severity then blast radius, and that CVEDetail lists
 // every occurrence.
 func TestFleetCVEs_BlastRadiusRanking(t *testing.T) {
-	st, err := postgres.NewFromEnv(context.Background())
-	if err != nil {
-		t.Skipf("skipping (no database): %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := testStore(t)
 	ctx := context.Background()
 
 	b := make([]byte, 8)
@@ -573,15 +545,68 @@ func TestFleetCVEs_BlastRadiusRanking(t *testing.T) {
 	}
 }
 
+func TestFleetCVEs_WorkQueueOrder(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	suffix := hex.EncodeToString(randomBytes(t, 8))
+	var tenantID string
+	if err := st.DB().QueryRowContext(ctx,
+		`INSERT INTO devradar_tenant (email) VALUES ($1) RETURNING id`,
+		"work-"+suffix+"@example.com").Scan(&tenantID); err != nil {
+		t.Fatal(err)
+	}
+	sbomID := "work-" + suffix
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_sbom (id, tenant_id, image_ref, repository, digest, format, object_path)
+		VALUES ($1,$2,'reg/work','reg/work',$3,'cyclonedx','gs://x')`,
+		sbomID, tenantID, "sha256:"+suffix); err != nil {
+		t.Fatal(err)
+	}
+	insert := func(scanner, findingID, cve, severity string, fixed bool, updated time.Time) {
+		if _, err := st.DB().ExecContext(ctx, `
+			INSERT INTO devradar_finding
+			(sbom_id, scanner, finding_id, exposure, package, version, severity, score, is_fixed, updated_at)
+			VALUES ($1,$2,$3,$4,'pkg','1',$5,7,$6,$7)`,
+			sbomID, scanner, findingID, cve, severity, fixed, updated); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
+	fixable := "CVE-" + suffix + "-FIX"
+	critical := "CVE-" + suffix + "-CRIT"
+	insert("grype", "fix-id", fixable, "low", true, now)
+	insert("trivy", "fix-id", fixable, "low", true, now)
+	insert("grype", "crit-id", critical, "critical", false, now.Add(-24*time.Hour))
+
+	items, _, err := st.FleetCVEs(ctx, tenantID, "negligible", postgres.FleetCVEFilter{}, "", "", "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 || items[0].CVE != fixable || items[1].CVE != critical {
+		t.Fatalf("work order = %+v, want fixable before non-fixable critical", items)
+	}
+	if items[0].FindingCount != 1 || items[0].ScannerCount != 2 {
+		t.Fatalf("scanner dedup/agreement = %+v", items[0])
+	}
+	if items[0].FirstSeen.IsZero() {
+		t.Fatal("first seen must be populated")
+	}
+}
+
+func randomBytes(t *testing.T, n int) []byte {
+	t.Helper()
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
 // TestFleetCVEs_VEXAnnotationAndFilters verifies VEX'd CVEs are INCLUDED in the
 // fleet list (not dropped), annotated with status/justification/impact, and that
 // the VEX/justification/KEV/fixable filters work.
 func TestFleetCVEs_VEXAnnotationAndFilters(t *testing.T) {
-	st, err := postgres.NewFromEnv(context.Background())
-	if err != nil {
-		t.Skipf("skipping (no database): %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := testStore(t)
 	ctx := context.Background()
 
 	b := make([]byte, 8)
@@ -701,11 +726,7 @@ func TestFleetCVEs_VEXAnnotationAndFilters(t *testing.T) {
 // without gaps/overlaps, the fixable filter restricts the set, and the package
 // rollup groups worst-severity-first.
 func TestFindings_PagingFilterRollup(t *testing.T) {
-	st, err := postgres.NewFromEnv(context.Background())
-	if err != nil {
-		t.Skipf("skipping (no database): %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := testStore(t)
 	ctx := context.Background()
 
 	b := make([]byte, 8)
@@ -793,11 +814,7 @@ func TestFindings_PagingFilterRollup(t *testing.T) {
 // TestFindings_Sorting verifies server-side sort by different columns/directions
 // and that keyset pagination walks the sorted order without gaps or duplicates.
 func TestFindings_Sorting(t *testing.T) {
-	st, err := postgres.NewFromEnv(context.Background())
-	if err != nil {
-		t.Skipf("skipping (no database): %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := testStore(t)
 	ctx := context.Background()
 
 	b := make([]byte, 8)
@@ -873,11 +890,7 @@ func TestFindings_Sorting(t *testing.T) {
 // order without gaps or overlaps, and that FleetStats is a whole-tenant rollup
 // independent of the page.
 func TestListRepoImages_RiskOrderAndPaging(t *testing.T) {
-	st, err := postgres.NewFromEnv(context.Background())
-	if err != nil {
-		t.Skipf("skipping (no database): %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := testStore(t)
 	ctx := context.Background()
 
 	b := make([]byte, 8)
@@ -975,11 +988,7 @@ func TestListRepoImages_RiskOrderAndPaging(t *testing.T) {
 // TestSBOMLabels verifies grouping labels are stored at upsert (union on
 // re-submit), listed per tenant, and filter the image list.
 func TestSBOMLabels(t *testing.T) {
-	st, err := postgres.NewFromEnv(context.Background())
-	if err != nil {
-		t.Skipf("skipping (no database): %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := testStore(t)
 	ctx := context.Background()
 
 	b := make([]byte, 8)
@@ -1045,11 +1054,7 @@ func TestSBOMLabels(t *testing.T) {
 // an image's SBOMs newest-generation-first, the cross-digest repo timeline, and
 // keyset pagination on each.
 func TestRepoViews(t *testing.T) {
-	st, err := postgres.NewFromEnv(context.Background())
-	if err != nil {
-		t.Skipf("skipping (no database): %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := testStore(t)
 	ctx := context.Background()
 
 	b := make([]byte, 8)

@@ -4,7 +4,7 @@ How to deploy DevRadar to the shared Thingz GCP platform (`thingzio`) and how to
 ship updates afterward.
 
 > Design context: [README.md](README.md) · [IMPLEMENTATION.md](IMPLEMENTATION.md)
-> _Last updated: 2026-07-05._
+> _Last updated: 2026-07-11._
 
 ## What gets deployed
 
@@ -35,6 +35,143 @@ All shared identifiers are baked as variable defaults in `infra/saas/variables.t
 `db_name=thingz`, `git_repo=thingzio/devradar`). Override via an untracked
 `infra/saas/terraform.tfvars` only if a default is wrong — **do not commit
 secrets to tfvars.**
+
+---
+
+## Mandatory pre-release database rehearsal
+
+Migrations are forward-only and run at application startup. Before releasing a
+build that adds migrations, rehearse them against an isolated restore of the
+latest production backup. These commands are for a local PostgreSQL instance
+only. Verify every URL resolves to localhost before proceeding; never point
+`ADMIN_URL`, `PRE_URL`, or `TEST_URL` at Cloud SQL or another external system.
+
+The retained pre-migration database is immutable evidence. Restore it once,
+verify its schema version, and do not drop, migrate, or otherwise modify it.
+Only the disposable test clone may be dropped and recreated.
+
+```bash
+export ADMIN_URL='postgres://devradar:devradar@localhost:5432/postgres?sslmode=disable'
+export PRE_DB='devradar_prod_20260711_pre'
+export TEST_DB='devradar_prod_20260711_test'
+export PRE_URL="postgres://devradar:devradar@localhost:5432/${PRE_DB}?sslmode=disable"
+export TEST_URL="postgres://devradar:devradar@localhost:5432/${TEST_DB}?sslmode=disable"
+export PROD_BACKUP='/Users/mchmarny/dev/thingz/db/thingz-20260711-104921.sql.gz'
+
+# Confirm all targets are local before any destructive command.
+psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -c \
+  "SELECT inet_server_addr(), inet_server_port(), current_database()"
+
+# The plain-SQL backup references these production roles. They must exist
+# locally as NOLOGIN roles before restore; create them with a local PostgreSQL
+# superuser if this query does not return both rows with rolcanlogin=false.
+psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -c \
+  "SELECT rolname, rolcanlogin FROM pg_roles
+   WHERE rolname IN ('devpulse','cloudsqlsuperuser') ORDER BY rolname"
+
+# Restore the gzip-compressed plain-SQL baseline once. Skip this block when
+# PRE_DB already exists; never overwrite or migrate the retained baseline.
+createdb --maintenance-db="$ADMIN_URL" --template=template0 "$PRE_DB"
+gzip -dc "$PROD_BACKUP" | psql "$PRE_URL" -v ON_ERROR_STOP=1
+
+# The 2026-07-11 release baseline must remain exactly at versions 1..18.
+psql "$PRE_URL" -v ON_ERROR_STOP=1 -c \
+  "SELECT count(*), min(version), max(version) FROM devradar_schema_version"
+```
+
+Record baseline counts for every existing DevRadar business table. Partition
+rows are intentionally reported both through the parent and per-partition; the
+comparison is still exact because the same query runs against both databases.
+
+```bash
+for table in $(psql "$PRE_URL" -Atqc \
+  "SELECT tablename FROM pg_tables
+   WHERE schemaname='public' AND tablename LIKE 'devradar_%'
+     AND tablename <> 'devradar_schema_version'
+   ORDER BY tablename"); do
+  psql "$PRE_URL" -Atqc "SELECT '$table|' || count(*) FROM \"$table\""
+done
+```
+
+Recreate only the migrated clone, then apply migrations 19 through 26 through
+the real advisory-locked Go migration runner. `TestMigrate_Idempotent` opens the
+store (which applies pending migrations) and calls `Migrate` again, proving the
+second pass is a no-op.
+
+```bash
+psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -c \
+  "DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)"
+psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -c \
+  "CREATE DATABASE ${TEST_DB} WITH TEMPLATE ${PRE_DB} OWNER devradar"
+
+DATABASE_URL="$TEST_URL" go test ./pkg/data/postgres \
+  -run '^TestMigrate_Idempotent$' -count=1 -v
+
+# A separate invocation must log no migration applies.
+DATABASE_URL="$TEST_URL" go test ./pkg/data/postgres \
+  -run '^TestMigrate_Idempotent$' -count=1 -v
+```
+
+Validate the migrated contract and compare every baseline table count. The
+version query must report `26 | 1 | 26 | true`; all count pairs must match.
+
+```bash
+psql "$TEST_URL" -v ON_ERROR_STOP=1 -c \
+  "SELECT count(*), min(version), max(version),
+          array_agg(version ORDER BY version) =
+            ARRAY(SELECT generate_series(1,26)) AS contiguous
+   FROM devradar_schema_version"
+
+psql "$TEST_URL" -v ON_ERROR_STOP=1 -c \
+  "SELECT column_name, is_nullable
+   FROM information_schema.columns
+   WHERE table_schema='public'
+     AND table_name='devradar_alert_event_queue'
+     AND column_name='tenant_id'"
+
+for table in $(psql "$PRE_URL" -Atqc \
+  "SELECT tablename FROM pg_tables
+   WHERE schemaname='public' AND tablename LIKE 'devradar_%'
+     AND tablename <> 'devradar_schema_version'
+   ORDER BY tablename"); do
+  pre=$(psql "$PRE_URL" -Atqc "SELECT count(*) FROM \"$table\"")
+  test=$(psql "$TEST_URL" -Atqc "SELECT count(*) FROM \"$table\"")
+  test "$pre" = "$test" || { echo "$table: $pre != $test"; exit 1; }
+  echo "$table|$pre|$test"
+done
+```
+
+Run `EXPLAIN (ANALYZE, BUFFERS)` on the migrated clone using the exact SQL from
+`NextAlertEvents`, `AdminProductHealth`, and the Overview `FleetStats` / top
+images paths. Use real tenant IDs from the clone and cover both the rollup fast
+path and a VEX-aware fallback tenant. Record execution time, buffer and temp
+usage, row estimates, scan type, and the indexes selected. Add an index only
+when the measured plan demonstrates the need; any correction must be a new
+forward migration, never an edit to an applied migration.
+
+Rollback during rehearsal means recloning from the preserved baseline—never
+running down-migrations:
+
+```bash
+psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -c \
+  "DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)"
+psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -c \
+  "CREATE DATABASE ${TEST_DB} WITH TEMPLATE ${PRE_DB} OWNER devradar"
+```
+
+After successful validation, retain the migrated test clone for owner UI
+verification:
+
+```bash
+make serve DEV_DB="$TEST_URL"
+```
+
+**No-release gate:** do not tag, push, deploy, enable a production feature, or
+run production Terraform until all migrations are contiguous through 26, the
+idempotent rerun is clean, baseline business-table counts match, query plans are
+reviewed, `make qualify` and `go build ./...` pass, and the owner validates the
+complete local workflow. A failed check returns to the preserved baseline via
+reclone. Production rollout still requires explicit owner approval.
 
 ---
 

@@ -18,6 +18,7 @@ import (
 
 	"github.com/thingzio/devradar/pkg/config"
 	"github.com/thingzio/devradar/pkg/data"
+	"github.com/thingzio/devradar/pkg/data/postgres"
 	"github.com/thingzio/devradar/pkg/middleware"
 	"github.com/thingzio/devradar/pkg/oauth"
 	"github.com/thingzio/devradar/pkg/ratelimit"
@@ -39,7 +40,7 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 	"signed": signed,     // format a delta int as "+N" / "-N" / "0"
 }).ParseFS(templateFS, "templates/*.html"))
 
-// signed renders a delta as a leading-sign string for the admin trend row.
+// signed renders a delta as a leading-sign string for trend views.
 func signed(n int) string {
 	if n > 0 {
 		return fmt.Sprintf("+%d", n)
@@ -108,13 +109,19 @@ func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
 	mux.Handle("GET /overview", authed(http.HandlerFunc(s.handleOverview)))
 	mux.Handle("GET /search", authed(http.HandlerFunc(s.handleSearch)))
 	mux.Handle("GET /dashboard", authed(http.HandlerFunc(s.handleDashboard)))
+	mux.Handle("GET /trends", authed(http.HandlerFunc(s.handleTrends)))
 	mux.Handle("GET /images", authed(http.HandlerFunc(s.handleImageDetail)))
+	mux.Handle("GET /compare", authed(http.HandlerFunc(s.handleCompare)))
 	mux.Handle("GET /sboms/{id}", authed(http.HandlerFunc(s.handleSBOMDetail)))
 	mux.Handle("POST /sboms/{id}/archive", authed(csrf(http.HandlerFunc(s.handleArchiveSBOMUI))))
 	mux.Handle("POST /images/archive", authed(csrf(http.HandlerFunc(s.handleArchiveRepoUI))))
 	mux.Handle("GET /cves", authed(http.HandlerFunc(s.handleCVEList)))
+	mux.Handle("GET /work", authed(http.HandlerFunc(s.handleWorkQueue)))
 	mux.Handle("GET /cves/{cve}", authed(http.HandlerFunc(s.handleCVEDetail)))
 	mux.Handle("GET /licenses", authed(http.HandlerFunc(s.handleLicensesPage)))
+	mux.Handle("GET /alerts", authed(http.HandlerFunc(s.handleAlerts)))
+	mux.Handle("GET /alerts/{id}", authed(http.HandlerFunc(s.handleAlertDetail)))
+	mux.Handle("POST /alerts/{id}/read", authed(csrf(http.HandlerFunc(s.handleMarkAlertRead))))
 	mux.Handle("POST /settings/license-policy", authed(csrf(http.HandlerFunc(s.handleSetLicensePolicy))))
 	mux.Handle("GET /submit", authed(http.HandlerFunc(s.handleSubmitGuide)))
 	// VEX upload is a multipart file POST: it cannot use the ValidateCSRF wrapper
@@ -125,6 +132,7 @@ func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
 	mux.Handle("POST /tokens", authed(csrf(http.HandlerFunc(s.handleCreateToken))))
 	mux.Handle("POST /tokens/{id}/revoke", authed(csrf(http.HandlerFunc(s.handleRevokeToken))))
 	mux.Handle("POST /settings/min-severity", authed(csrf(http.HandlerFunc(s.handleSetMinSeverity))))
+	mux.Handle("POST /settings/alerts", authed(csrf(http.HandlerFunc(s.handleSetAlertPolicy))))
 
 	s.registerAdmin(mux, db)
 }
@@ -162,7 +170,7 @@ func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	render(w, "landing.html", map[string]any{
-		"Title":       "Sign in",
+		"Title":       "Continuous SBOM security posture",
 		"SignedIn":    false,
 		"Error":       r.URL.Query().Get("error"),
 		"Sent":        r.URL.Query().Get("sent") == "1",
@@ -382,6 +390,25 @@ func (s *Server) handleTokensPage(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		slog.Error("consume token flash", "error", err)
 	}
+	alertPolicy, err := s.store.EnsureAlertPolicy(r.Context(), tn.ID)
+	if err != nil {
+		http.Error(w, "failed to load alert settings", http.StatusInternalServerError)
+		return
+	}
+	labels, err := s.store.TenantLabels(r.Context(), tn.ID)
+	if err != nil {
+		http.Error(w, "failed to load alert settings", http.StatusInternalServerError)
+		return
+	}
+	selected := make(map[string]struct{}, len(alertPolicy.Labels))
+	for _, label := range alertPolicy.Labels {
+		selected[label] = struct{}{}
+	}
+	labelOptions := make([]alertLabelOption, 0, len(labels))
+	for _, label := range labels {
+		_, ok := selected[label]
+		labelOptions = append(labelOptions, alertLabelOption{Label: label, Selected: ok})
+	}
 	render(w, "tokens.html", map[string]any{
 		"Title":       "Tokens & settings",
 		"SignedIn":    true,
@@ -392,8 +419,16 @@ func (s *Server) handleTokensPage(w http.ResponseWriter, r *http.Request) {
 		"CSRFToken":   issueCSRF(w),
 		"MinSeverity": tenantMinSeverity(tn),
 		"Severities":  []string{"critical", "high", "medium", "low", "negligible"},
+		"AlertPolicy": alertPolicy,
+		"AlertLabels": labelOptions,
+		"AlertsSaved": r.URL.Query().Get("alerts") == "saved",
 		"Version":     s.opts.Version,
 	})
+}
+
+type alertLabelOption struct {
+	Label    string
+	Selected bool
 }
 
 func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
@@ -453,6 +488,49 @@ func (s *Server) handleSetMinSeverity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/tokens", http.StatusSeeOther)
+}
+
+func (s *Server) handleSetAlertPolicy(w http.ResponseWriter, r *http.Request) {
+	tn := middleware.TenantFromContext(r.Context())
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	minSeverity := r.FormValue("min_severity")
+	if !data.ValidMinSeverity(minSeverity) {
+		http.Error(w, "invalid min_severity", http.StatusBadRequest)
+		return
+	}
+	knownLabels, err := s.store.TenantLabels(r.Context(), tn.ID)
+	if err != nil {
+		http.Error(w, "failed to update alert settings", http.StatusInternalServerError)
+		return
+	}
+	known := make(map[string]struct{}, len(knownLabels))
+	for _, label := range knownLabels {
+		known[label] = struct{}{}
+	}
+	labels := normalizeLabels(r.Form["labels"])
+	allowed := labels[:0]
+	for _, label := range labels {
+		if _, ok := known[label]; ok {
+			allowed = append(allowed, label)
+		}
+	}
+	policy := postgres.AlertPolicy{
+		Enabled:           r.FormValue("enabled") == "on",
+		MinSeverity:       minSeverity,
+		AlertKEV:          r.FormValue("alert_kev") == "on",
+		AlertFixAvailable: r.FormValue("alert_fix_available") == "on",
+		IncludeImage:      r.FormValue("include_image") == "on",
+		IncludeDB:         r.FormValue("include_db") == "on",
+		Labels:            allowed,
+	}
+	if err := s.store.UpdateAlertPolicy(r.Context(), tn.ID, policy); err != nil {
+		http.Error(w, "failed to update alert settings", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/tokens?alerts=saved", http.StatusSeeOther)
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

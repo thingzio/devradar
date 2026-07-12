@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Jeffail/gabs/v2"
+	"github.com/thingzio/devradar/pkg/alert"
 	"github.com/thingzio/devradar/pkg/config"
 	"github.com/thingzio/devradar/pkg/converter"
 	"github.com/thingzio/devradar/pkg/data"
@@ -220,6 +221,31 @@ func (r *Runner) Execute(ctx context.Context) error {
 	// distinct-CVE target set includes anything this run just discovered. Additive
 	// overlay: a failure here degrades context, never the scan — log and move on.
 	r.refreshEnrichment(ctx)
+
+	// Browser alerts consume the committed event stream after enrichment so KEV
+	// matching sees the freshest available overlay. This boundary is optional for
+	// focused scan fakes and strictly best-effort: alert failures never change the
+	// scan result or couple notification concerns to ApplyScan.
+	if alertStore, ok := r.store.(alert.Store); ok {
+		result, err := (alert.Evaluator{Store: alertStore}).Evaluate(ctx)
+		if err != nil {
+			slog.Warn("alert evaluation failed", "error", err)
+		} else {
+			slog.Info("alert evaluation complete", "examined", result.Examined,
+				"matched", result.Matched, "failures", result.Failures)
+		}
+	}
+
+	// Capture exact daily tenant vulnerability debt after findings, enrichment,
+	// and alerts have converged. The optional boundary keeps focused scan fakes
+	// small; snapshot failure is best-effort and never changes the scan result.
+	if snapshotter, ok := r.store.(interface {
+		SnapshotTenantPosture(context.Context) error
+	}); ok {
+		if err := snapshotter.SnapshotTenantPosture(ctx); err != nil {
+			slog.Warn("tenant posture snapshot failed", "error", err)
+		}
+	}
 
 	// Record a daily platform snapshot for the admin dashboard's trend deltas, so
 	// they accrue even on days with no dashboard visit. Best-effort and optional:

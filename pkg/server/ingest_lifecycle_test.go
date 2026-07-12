@@ -51,11 +51,7 @@ func sbomStatus(t *testing.T, st *postgres.Store, id string) string {
 // inject storage failures. Mirrors testServer's DB skip behavior.
 func serverWithBlob(t *testing.T, blobs server.BlobStore) (*server.Server, *postgres.Store) {
 	t.Helper()
-	st, err := postgres.NewFromEnv(context.Background())
-	if err != nil {
-		t.Skipf("skipping (no database): %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := testPostgresStore(t)
 	return server.New(st, blobs, nil, nil, server.Options{Version: "test"}), st
 }
 
