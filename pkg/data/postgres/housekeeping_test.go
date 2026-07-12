@@ -1,0 +1,61 @@
+package postgres_test
+
+import (
+	"context"
+	"testing"
+)
+
+// TestPurgeExpiredAuth verifies the janitor deletes expired login tokens and
+// sessions while leaving live ones intact.
+func TestPurgeExpiredAuth(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+
+	var tenantID string
+	if err := st.DB().QueryRowContext(ctx,
+		`INSERT INTO devradar_tenant (email) VALUES ($1) RETURNING id`,
+		"purge-"+randID(t)[:8]+"@example.com").Scan(&tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	// Unique per run so the live login token doesn't accumulate across reruns
+	// (the login_token table has no tenant FK to scope by).
+	liveEmail := "purge-live-" + randID(t)[:8] + "@example.com"
+
+	// Two sessions: one already expired, one live.
+	if _, err := st.DB().ExecContext(ctx,
+		`INSERT INTO devradar_session (id, tenant_id, expires_at) VALUES
+		 ($1, $2, now() - interval '1 hour'),
+		 ($3, $2, now() + interval '1 hour')`,
+		randID(t), tenantID, randID(t)); err != nil {
+		t.Fatalf("seed sessions: %v", err)
+	}
+	// Two login tokens: one expired, one live.
+	if _, err := st.DB().ExecContext(ctx,
+		`INSERT INTO devradar_login_token (id, email, expires_at) VALUES
+		 ($1, $2, now() - interval '1 hour'),
+		 ($3, $2, now() + interval '1 hour')`,
+		randID(t), liveEmail, randID(t)); err != nil {
+		t.Fatalf("seed login tokens: %v", err)
+	}
+
+	if err := st.PurgeExpiredAuth(ctx); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+
+	// Only the live rows survive.
+	var sessions, tokens int
+	if err := st.DB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM devradar_session WHERE tenant_id=$1`, tenantID).Scan(&sessions); err != nil {
+		t.Fatalf("count sessions: %v", err)
+	}
+	if sessions != 1 {
+		t.Errorf("live sessions after purge = %d, want 1", sessions)
+	}
+	if err := st.DB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM devradar_login_token WHERE email=$1`, liveEmail).Scan(&tokens); err != nil {
+		t.Fatalf("count tokens: %v", err)
+	}
+	if tokens != 1 {
+		t.Errorf("live login tokens after purge = %d, want 1", tokens)
+	}
+}

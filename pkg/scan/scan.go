@@ -275,6 +275,19 @@ func (r *Runner) Execute(ctx context.Context) error {
 			slog.Warn("platform stats snapshot failed", "error", err)
 		}
 	}
+
+	// Reclaim dead ephemeral auth rows (expired login tokens + sessions). There is
+	// no cron, so the frequent scan job is the natural home for this bounded
+	// housekeeping. Optional boundary + best-effort: expired rows are already
+	// rejected at read time, so a failure here only defers reclamation and never
+	// affects auth correctness or the scan outcome.
+	if purger, ok := r.store.(interface {
+		PurgeExpiredAuth(context.Context) error
+	}); ok {
+		if err := purger.PurgeExpiredAuth(ctx); err != nil {
+			slog.Warn("purge expired auth rows failed", "error", err)
+		}
+	}
 	return nil
 }
 

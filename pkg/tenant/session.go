@@ -54,6 +54,17 @@ func DestroySession(ctx context.Context, db *sql.DB, rawToken string) error {
 	return nil
 }
 
+// PurgeExpiredSessions deletes sessions whose TTL has passed (best-effort
+// housekeeping). Expired sessions are already rejected by ValidateSession's
+// `expires_at > NOW()` guard, so this only reclaims dead rows — it can never log
+// out a live session. Mirrors PurgeExpiredLoginTokens.
+func PurgeExpiredSessions(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, `DELETE FROM devradar_session WHERE expires_at <= NOW()`); err != nil {
+		return fmt.Errorf("purge expired sessions: %w", err)
+	}
+	return nil
+}
+
 // prefixed returns the tenant column list qualified with a table alias. Must
 // match tenantColumns' order (scanTenant depends on it).
 func prefixed(a string) string {

@@ -51,7 +51,7 @@ func (f *fakeStore) RecordScanFailure(_ context.Context, sbomID, _, stage string
 	f.failures = append(f.failures, stage)
 	f.failedIDs = append(f.failedIDs, sbomID)
 }
-func (f *fakeStore) DistinctActiveCVEs(context.Context) ([]string, error)       { return nil, nil }
+func (f *fakeStore) DistinctActiveCVEs(context.Context) ([]string, error)             { return nil, nil }
 func (f *fakeStore) UpsertCVEEnrichment(context.Context, []enrich.Record, bool) error { return nil }
 func (f *fakeStore) HasSBOMPackages(_ context.Context, sbomID string) (bool, error) {
 	return f.hasPkgs[sbomID], nil
@@ -397,8 +397,8 @@ func TestRunner_EnrichmentRefresh(t *testing.T) {
 }
 
 type enrichStore struct {
-	cves         []string
-	upserted     int
+	cves                 []string
+	upserted             int
 	lastKEVAuthoritative bool // captured from the most recent UpsertCVEEnrichment
 }
 
