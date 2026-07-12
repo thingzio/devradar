@@ -9,8 +9,11 @@ source before inclusion here.
 > **Status update:** Priority-1 items **A1–A4 are FIXED** (`pkg/attest`,
 > `pkg/config`, `pkg/server`; keyless now pins SAN×issuer, empty/absent
 > predicates fail closed, and a configured-but-unusable trust policy is fatal at
-> startup). Priority-2 (B1–B4) and Priority-3 (C1–C10) are planned for a single
-> follow-up release.
+> startup). Priority-2 **B1–B4** and Priority-3 **C1–C10 are also FIXED** in the
+> follow-up release: posture-snapshot throttling + hot-path indexes (migration
+> 028) + race-safe partitions, bounded untrusted-input reads, XFF client-IP fix,
+> encrypted token flash, optional token TTL, logout CSRF, attestation
+> binding-policy flag, and DevMode decoupling. See the per-item notes below.
 
 ## TL;DR
 
