@@ -506,6 +506,14 @@ components:
           type: string
           format: date-time
           description: RFC3339 override for the SBOM's generation time.
+        attestation:
+          type: string
+          description: >-
+            Base64-encoded sigstore/cosign bundle. When the service has a trust
+            policy configured, it is verified and bound to the SBOM's subject
+            digest; the outcome sets verification_status. Optional — omitting it
+            leaves the SBOM unverified. A verification failure never rejects the
+            submission.
 
     SubmitResponse:
       type: object
@@ -515,6 +523,12 @@ components:
         digest: { type: string, description: "sha256:..." }
         format: { type: string, enum: [cyclonedx, spdx] }
         existing: { type: boolean, description: True if this SBOM was already stored }
+        verification_status:
+          type: string
+          enum: [unverified, verified, failed]
+          description: >-
+            Attestation verification outcome. `unverified` when no attestation
+            was submitted or verification is not configured.
 
     SeverityCounts:
       type: object
@@ -566,9 +580,41 @@ components:
         tool: { type: string }
         tool_version: { type: string }
         status: { type: string, enum: [active, archived] }
+        verification_status:
+          type: string
+          enum: [unverified, verified, failed]
+          description: Attestation verification outcome for this SBOM.
         submitted_at: { type: string, format: date-time }
         generated_at: { type: string, format: date-time }
         counts: { $ref: "#/components/schemas/SeverityCounts" }
+        attestation:
+          $ref: "#/components/schemas/Attestation"
+
+    Attestation:
+      type: object
+      description: >-
+        Cryptographic verification evidence for the SBOM, present only when an
+        attestation has been submitted and evaluated.
+      properties:
+        result: { type: string, enum: [verified, failed] }
+        mode: { type: string, enum: [keyless, key] }
+        binding:
+          type: string
+          enum: [sbom-bytes, image-digest]
+          description: >-
+            Which subject binding held. `sbom-bytes` (strongest) proves the exact
+            stored bytes were signed; `image-digest` proves the attestation names
+            the resolved image digest.
+        subject_digest: { type: string, description: "sha256:... that was bound" }
+        predicate_type: { type: string }
+        cert_identity: { type: string, description: "Fulcio SAN (keyless)" }
+        oidc_issuer: { type: string, description: "OIDC issuer (keyless)" }
+        key_id: { type: string, description: "public-key fingerprint (key mode)" }
+        transparency_log_ref: { type: string, description: "Rekor reference" }
+        verifier_version: { type: string }
+        policy_version: { type: string }
+        failure_reason: { type: string, description: "populated when result is failed" }
+        verified_at: { type: string, format: date-time }
 
     Finding:
       type: object
