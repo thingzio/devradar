@@ -35,12 +35,12 @@
 
     <div class="endpoint">
       <p class="ep-line"><span class="ep-m ep-post">POST</span><code class="ep-path">/v1/sboms</code> — submit an SBOM</p>
-      <p class="muted">Body fields (JSON): <code>sbom</code> (required, base64 bytes), <code>image_ref</code>, <code>version</code> (image tag), <code>labels</code> (grouping), <code>generated_at</code>. Idempotent per digest; returns <code>202</code> with <code>existing:true</code> if already stored. See the <a href="/submit">guide</a> for a full example.</p>
+      <p class="muted">Body fields (JSON): <code>sbom</code> (required, base64 bytes), <code>image_ref</code>, <code>version</code> (image tag), <code>labels</code> (grouping), <code>generated_at</code>, <code>attestation</code> (base64 sigstore/cosign bundle — optional). Idempotent per digest; returns <code>202</code> with <code>existing:true</code> if already stored, plus <code>verification_status</code> (<code>unverified</code> | <code>verified</code> | <code>failed</code>). See the <a href="/submit">guide</a> for a full example.</p>
     </div>
 
     <div class="endpoint">
       <p class="ep-line"><span class="ep-m ep-get">GET</span><code class="ep-path">/v1/sboms/{id}</code> — SBOM metadata</p>
-      <p class="muted">Metadata + severity breakdown. Params: <code>min_severity</code>.</p>
+      <p class="muted">Metadata + severity breakdown, plus <code>verification_status</code> and attestation evidence when present. Params: <code>min_severity</code>.</p>
     </div>
 
     <div class="endpoint">
