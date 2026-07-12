@@ -37,18 +37,18 @@ func TestUpsertSBOMWithLimit_ActiveCap(t *testing.T) {
 		}
 	}
 
-	// Fill to the cap with distinct digests.
+	// Fill to the cap with distinct digests (repo cap disabled: all one repo).
 	var lastDigest, lastFormat string
 	for i := range cap {
 		sb := mk()
 		lastDigest, lastFormat = sb.Digest, sb.Format
-		if _, inserted, _, err := st.UpsertSBOMWithLimit(ctx, sb, cap); err != nil || !inserted {
+		if _, inserted, _, err := st.UpsertSBOMWithLimit(ctx, sb, cap, 0); err != nil || !inserted {
 			t.Fatalf("submit %d under cap: inserted=%v err=%v", i, inserted, err)
 		}
 	}
 
 	// A brand-new digest past the cap is rejected.
-	if _, _, _, err := st.UpsertSBOMWithLimit(ctx, mk(), cap); !errors.Is(err, postgres.ErrSBOMLimit) {
+	if _, _, _, err := st.UpsertSBOMWithLimit(ctx, mk(), cap, 0); !errors.Is(err, postgres.ErrSBOMLimit) {
 		t.Fatalf("over-cap submit: err = %v, want ErrSBOMLimit", err)
 	}
 
@@ -56,12 +56,54 @@ func TestUpsertSBOMWithLimit_ActiveCap(t *testing.T) {
 	// growth) — resolves to the existing row (inserted=false), no error.
 	resub := mk()
 	resub.Digest, resub.Format = lastDigest, lastFormat
-	if _, inserted, _, err := st.UpsertSBOMWithLimit(ctx, resub, cap); err != nil || inserted {
+	if _, inserted, _, err := st.UpsertSBOMWithLimit(ctx, resub, cap, 0); err != nil || inserted {
 		t.Fatalf("re-submit at cap: inserted=%v err=%v, want inserted=false nil", inserted, err)
 	}
 
 	// A cap of 0 disables enforcement.
-	if _, inserted, _, err := st.UpsertSBOMWithLimit(ctx, mk(), 0); err != nil || !inserted {
+	if _, inserted, _, err := st.UpsertSBOMWithLimit(ctx, mk(), 0, 0); err != nil || !inserted {
 		t.Fatalf("cap disabled: inserted=%v err=%v", inserted, err)
+	}
+}
+
+// TestUpsertSBOMWithLimit_RepoCap verifies the per-tenant repository cap:
+// distinct repositories are admitted up to maxRepos, a brand-new repository past
+// it returns ErrImageLimit, but a NEW digest under an already-tracked repository
+// is always admitted (not new-repo growth).
+func TestUpsertSBOMWithLimit_RepoCap(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+
+	var tenantID string
+	if err := st.DB().QueryRowContext(ctx,
+		`INSERT INTO devradar_tenant (email) VALUES ($1) RETURNING id`,
+		"repocap-"+randID(t)[:8]+"@example.com").Scan(&tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+
+	const maxRepos = 2
+	mk := func(repo string) *postgres.SBOM {
+		return &postgres.SBOM{
+			ID: randID(t) + randID(t), TenantID: tenantID,
+			ImageRef: repo, Repository: repo,
+			Digest: "sha256:" + randID(t) + randID(t), Format: "cyclonedx",
+			ObjectPath: "gs://test/" + tenantID + "/" + randID(t), Status: "active",
+		}
+	}
+
+	for i, repo := range []string{"registry.test/a", "registry.test/b"} {
+		if _, inserted, _, err := st.UpsertSBOMWithLimit(ctx, mk(repo), 0, maxRepos); err != nil || !inserted {
+			t.Fatalf("repo %d under cap: inserted=%v err=%v", i, inserted, err)
+		}
+	}
+
+	// A brand-new repository past the cap is rejected.
+	if _, _, _, err := st.UpsertSBOMWithLimit(ctx, mk("registry.test/c"), 0, maxRepos); !errors.Is(err, postgres.ErrImageLimit) {
+		t.Fatalf("over-cap new repo: err = %v, want ErrImageLimit", err)
+	}
+
+	// A NEW digest under an ALREADY-TRACKED repository is admitted even at the cap.
+	if _, inserted, _, err := st.UpsertSBOMWithLimit(ctx, mk("registry.test/a"), 0, maxRepos); err != nil || !inserted {
+		t.Fatalf("new digest under tracked repo at cap: inserted=%v err=%v", inserted, err)
 	}
 }

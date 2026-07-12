@@ -15,9 +15,27 @@ import (
 //
 // Suppression: a finding is suppressed when vex_status IN ('not_affected','fixed').
 // vexSuppressed is the predicate; vexNotSuppressed its negation-including-null.
-// vexRepoKeyExpr is the last path segment of an sbom's repository, lowercased —
+//
+// vexRepoKeyExpr is the LAST path segment of an sbom's repository, lowercased —
 // the key a digest-less (repository-scoped) VEX statement matches against.
+//
+// DELIBERATE TRADE-OFF (do not "fix" to full-path matching): real published
+// vendor VEX documents name their product by bare image name — e.g. NVIDIA's
+// AICR OpenVEX uses "pkg:oci/aicr", not the full "ghcr.io/nvidia/aicr" pull path
+// we track internally. Matching on the last path segment is what lets those
+// documents apply drop-in, which is the headline VEX capability. The cost is that
+// two of ONE tenant's repositories sharing a last segment (e.g. "a/api" and
+// "b/api") would share a repo-scoped statement. That is possible but unlikely
+// (a tenant rarely tracks two same-named images from different namespaces), and
+// bounded to a single tenant. Precision when it matters is available via a
+// digest-scoped statement, which always wins over a repo-scoped one (see
+// vexSpecificityOrder). We accept the basename collision to keep vendor docs working.
 const vexRepoKeyExpr = `lower(split_part(sb.repository, '/', array_length(string_to_array(sb.repository,'/'),1)))`
+
+// vexSpecificityOrder ranks a digest-pinned statement above a repository-scoped
+// one so a precise statement is never overridden by a broad one that merely
+// happens to be newer. Applied before recency in every LATERAL/subquery.
+const vexSpecificityOrder = `(vs.product_digest IS NOT NULL) DESC, vs.created_at DESC, vs.id DESC`
 
 const (
 	vexStatusJoin = `
@@ -29,7 +47,7 @@ const (
 			  AND vs.vulnerability = f.exposure
 			  AND (vs.product_digest = sb.digest
 			       OR vs.product_repo = ` + vexRepoKeyExpr + `)
-			ORDER BY vs.created_at DESC, vs.id DESC
+			ORDER BY ` + vexSpecificityOrder + `
 			LIMIT 1
 		) vex ON true`
 
@@ -47,7 +65,7 @@ const (
 		WHERE vs.tenant_id = sb.tenant_id
 		  AND vs.vulnerability = f.exposure
 		  AND (vs.product_digest = sb.digest OR vs.product_repo = ` + vexRepoKeyExpr + `)
-		ORDER BY vs.created_at DESC, vs.id DESC
+		ORDER BY ` + vexSpecificityOrder + `
 		LIMIT 1), false)`
 )
 
@@ -64,8 +82,9 @@ func (s *Store) SaveVEXDocument(ctx context.Context, tenantID string, doc *vex.D
 	defer func() { _ = tx.Rollback() }()
 
 	// Count how many statements hit a real finding in one of the tenant's SBOMs.
-	// A statement matches by exact digest, or (digest-less) by repository key —
-	// the last path segment of the tracked repository.
+	// A statement matches by exact digest, or (digest-less) by repository key — the
+	// last path segment of the tracked repository. Mirrors vexRepoKeyExpr on the
+	// read side (see the deliberate basename trade-off documented there).
 	for _, st := range doc.Statements {
 		var hit bool
 		if err := tx.QueryRowContext(ctx, `

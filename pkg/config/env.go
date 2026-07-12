@@ -184,6 +184,24 @@ func EnrichEnabled() bool {
 	return GetEnv("DEVRADAR_ENRICH", "true") != "false"
 }
 
+// RequireCompleteToolchain, when true, makes the scan job REFUSE TO START unless
+// the full pinned toolchain is present (grype + trivy + syft). Off by default so
+// local/dev runs work with a partial toolchain; production should set
+// DEVRADAR_REQUIRE_COMPLETE_TOOLCHAIN=true so a mis-provisioned image fails loudly
+// at boot rather than silently under-covering (one scanner, or SPDX-blind).
+func RequireCompleteToolchain() bool {
+	return GetEnvBool("DEVRADAR_REQUIRE_COMPLETE_TOOLCHAIN")
+}
+
+// EnrichMinInterval is the minimum time between enrichment refreshes. EPSS and
+// KEV publish about daily, but the scan job runs every ~15 min; this gate keeps
+// it from re-fetching the whole fleet's enrichment every tick. Default 20h (a
+// little under a day, so a daily cron-aligned run is never skipped). 0 disables
+// the gate (refresh every run). Tunable via DEVRADAR_ENRICH_MIN_INTERVAL.
+func EnrichMinInterval() time.Duration {
+	return GetEnvAsDuration("DEVRADAR_ENRICH_MIN_INTERVAL", 20*time.Hour)
+}
+
 // AdminUsers returns the set of emails authorized for the operator admin console
 // (DEVRADAR_ADMIN_USERS, comma-separated), lower-cased and trimmed for
 // case-insensitive matching against the verified tenant email. Empty ⇒ nobody is

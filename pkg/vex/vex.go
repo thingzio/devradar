@@ -191,6 +191,13 @@ func vulnName(raw json.RawMessage) string {
 // "pkg:oci/ghcr.io/nvidia/aicr" -> "aicr". The key is the last path segment with
 // any tag/version stripped, lowercased. The store matches it against the last
 // segment of a tracked repository, so registry-prefix differences don't matter.
+//
+// DELIBERATE (see vexRepoKeyExpr in pkg/data/postgres/vex.go): last-segment
+// matching is what lets real published vendor VEX documents apply drop-in — e.g.
+// NVIDIA's AICR OpenVEX names "pkg:oci/aicr", not the full "ghcr.io/nvidia/aicr"
+// pull path. The accepted cost is that one tenant's two repos sharing a last
+// segment would share a repo-scoped statement (unlikely; digest-scoped statements
+// remain exact).
 func repoKeyOf(p rawProduct) string {
 	id := p.ID
 	if id == "" {

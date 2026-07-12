@@ -15,6 +15,11 @@ import (
 // format) never hits this — it resolves to the existing row via ON CONFLICT.
 var ErrSBOMLimit = errors.New("active SBOM limit reached for tenant")
 
+// ErrImageLimit is returned by UpsertSBOMWithLimit when a brand-new repository
+// would exceed the tenant's distinct-repository cap. A new digest under an
+// already-tracked repository never hits this (it is not new-repo growth).
+var ErrImageLimit = errors.New("image (repository) limit reached for tenant")
+
 // UpsertSBOM inserts a submitted SBOM, or returns the existing one. The natural
 // identity is (tenant_id, digest, format): an image digest is an immutable
 // package inventory, so there is one SBOM per digest+format per tenant. Both
@@ -31,24 +36,28 @@ var ErrSBOMLimit = errors.New("active SBOM limit reached for tenant")
 // that resolves to an existing but still-'pending' row (inserted=false,
 // status="pending") re-drives the upload+activate instead of skipping it.
 func (s *Store) UpsertSBOM(ctx context.Context, sb *SBOM) (id string, inserted bool, status string, err error) {
-	return s.UpsertSBOMWithLimit(ctx, sb, 0)
+	return s.UpsertSBOMWithLimit(ctx, sb, 0, 0)
 }
 
-// UpsertSBOMWithLimit is UpsertSBOM with a per-tenant active-SBOM cap enforced
-// ATOMICALLY in the same statement (maxSBOMs <= 0 disables it). The cap counts
-// non-archived SBOMs (active + pending — a pending row is in-flight growth); a
-// re-submit of an already-stored (tenant, digest, format) is always admitted
-// (the EXISTS branch), so a tenant at the cap can still update what they have. A
-// brand-new digest past the cap inserts zero rows and returns ErrSBOMLimit.
+// UpsertSBOMWithLimit is UpsertSBOM with per-tenant quotas: maxSBOMs caps
+// active+pending SBOMs (distinct digests+formats), maxRepos caps distinct active
+// repositories. Either <= 0 disables that cap. A re-submit of an already-stored
+// (tenant, digest, format) is always admitted (an update, not growth), as is a
+// new digest under an already-tracked repository (only new repositories count
+// against maxRepos). A brand-new digest past maxSBOMs returns ErrSBOMLimit; a
+// brand-new repository past maxRepos returns ErrImageLimit.
 //
-// Folding the count into the INSERT...SELECT...WHERE removes the check-then-insert
-// race the previous two-round-trip (RepoAdmissible then UpsertSBOM) design had:
-// the count and the insert now share one statement snapshot. (A hard, fully
-// serialized cap would need a per-tenant advisory lock; this soft abuse guard
-// deliberately trades that for one cheap statement, so two truly-simultaneous
-// brand-new inserts on one tenant may overshoot by the in-flight count — bounded
-// and self-correcting, never unbounded.)
-func (s *Store) UpsertSBOMWithLimit(ctx context.Context, sb *SBOM, maxSBOMs int) (id string, inserted bool, status string, err error) {
+// SOFT LIMITS — DELIBERATE (do not add locking to make them exact): the caps are
+// enforced in a single INSERT...SELECT...WHERE whose count subquery shares the
+// statement's snapshot. Under READ COMMITTED this does NOT serialize two truly
+// simultaneous brand-new submits from the SAME tenant — both can see count < cap
+// and both insert, overshooting by the in-flight count. That is accepted: these
+// are abuse/runaway guards, not billing-exact quotas; a single tenant issuing
+// genuinely concurrent submits is unlikely, and a bounded overshoot of a few past
+// (e.g.) 5000 is harmless. Making them exact would require a per-tenant advisory
+// lock + transaction on every ingest — real complexity and contention for a case
+// that virtually never happens. The folded repo-cap guard is likewise soft.
+func (s *Store) UpsertSBOMWithLimit(ctx context.Context, sb *SBOM, maxSBOMs, maxRepos int) (id string, inserted bool, status string, err error) {
 	var generatedAt any
 	if !sb.GeneratedAt.IsZero() {
 		generatedAt = sb.GeneratedAt.UTC()
@@ -57,6 +66,7 @@ func (s *Store) UpsertSBOMWithLimit(ctx context.Context, sb *SBOM, maxSBOMs int)
 	if labels == nil {
 		labels = []string{} // pq.Array(nil) sends SQL NULL; the column is NOT NULL
 	}
+
 	// The SBOM bytes are immutable and content-addressed, so on conflict we never
 	// touch content-derived columns (digest/format/package_count/tool/…). But the
 	// version (image tag) is a caller-supplied label: a re-submit that now carries
@@ -67,21 +77,30 @@ func (s *Store) UpsertSBOMWithLimit(ctx context.Context, sb *SBOM, maxSBOMs int)
 	// reflects the post-conflict row so the caller can detect a stuck 'pending'.
 	// Labels union on conflict so a re-submit adds labels without dropping prior ones.
 	//
-	// The SELECT...WHERE admits the row only when: the cap is disabled ($17 <= 0),
-	// OR this (tenant, digest, format) already exists (a re-submit, never counts as
-	// growth), OR the tenant is below the cap. If none hold, no row is inserted and
-	// no conflict fires, so RETURNING is empty → ErrSBOMLimit.
+	// The SELECT...WHERE admits the row when EITHER cap allows it: a re-submit of an
+	// existing (tenant,digest,format) always passes; otherwise a new digest is
+	// admitted only if under the SBOM cap AND (its repo already exists OR under the
+	// repo cap). We distinguish which cap blocked a rejection with a cheap follow-up
+	// probe (only on the rare rejection path), so the caller can return the right
+	// error/message. See the SOFT LIMITS note above re: concurrency.
 	err = s.db.QueryRowContext(ctx, `
 		INSERT INTO devradar_sbom
 			(id, tenant_id, image_ref, repository, version, digest, format, spec_version,
 			 tool, tool_version, package_count, object_path, verification_status, status,
 			 labels, generated_at)
 		SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16
-		WHERE $17 <= 0
-		   OR EXISTS (SELECT 1 FROM devradar_sbom
+		WHERE EXISTS (SELECT 1 FROM devradar_sbom
 		              WHERE tenant_id = $2 AND digest = $6 AND format = $7)
-		   OR (SELECT count(*) FROM devradar_sbom
-		       WHERE tenant_id = $2 AND status IN ('active','pending')) < $17
+		   OR (
+		        ($17 <= 0 OR (SELECT count(*) FROM devradar_sbom
+		                      WHERE tenant_id = $2 AND status IN ('active','pending')) < $17)
+		        AND
+		        ($18 <= 0
+		         OR EXISTS (SELECT 1 FROM devradar_sbom
+		                    WHERE tenant_id = $2 AND repository = $4 AND status = 'active')
+		         OR (SELECT count(DISTINCT repository) FROM devradar_sbom
+		             WHERE tenant_id = $2 AND status = 'active') < $18)
+		      )
 		ON CONFLICT (tenant_id, digest, format) DO UPDATE
 		SET version = COALESCE(EXCLUDED.version, devradar_sbom.version),
 		    labels = (SELECT COALESCE(array_agg(DISTINCT l), '{}')
@@ -91,9 +110,21 @@ func (s *Store) UpsertSBOMWithLimit(ctx context.Context, sb *SBOM, maxSBOMs int)
 		sb.Digest, sb.Format, sb.SpecVersion,
 		nullStr(sb.Tool), nullStr(sb.ToolVersion), sb.PackageCount, sb.ObjectPath,
 		defaultStr(sb.VerificationStatus, "unverified"), defaultStr(sb.Status, "pending"),
-		pq.Array(labels), generatedAt, maxSBOMs,
+		pq.Array(labels), generatedAt, maxSBOMs, maxRepos,
 	).Scan(&id, &inserted, &status)
 	if errors.Is(err, sql.ErrNoRows) {
+		// Rejected by a cap. Probe which one so the caller reports the right limit —
+		// a brand-new repository past the repo cap is ErrImageLimit; otherwise the
+		// SBOM cap. Cheap and only on the (rare) rejection path.
+		if maxRepos > 0 {
+			var repoExists bool
+			if perr := s.db.QueryRowContext(ctx,
+				`SELECT EXISTS (SELECT 1 FROM devradar_sbom
+				               WHERE tenant_id = $1 AND repository = $2 AND status = 'active')`,
+				sb.TenantID, sb.Repository).Scan(&repoExists); perr == nil && !repoExists {
+				return "", false, "", ErrImageLimit
+			}
+		}
 		return "", false, "", ErrSBOMLimit
 	}
 	if err != nil {

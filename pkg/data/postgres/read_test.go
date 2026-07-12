@@ -405,7 +405,9 @@ func TestVEXSuppression_RepoScoped(t *testing.T) {
 		}
 	}
 
-	// Repo-scoped VEX (no digest, repo key = "aicr-<suffix>" — the repo's last segment).
+	// Repo-scoped VEX (no digest). The product key is the repo's last path segment
+	// ("aicr-<suffix>"), which matches the tracked ghcr.io/nvidia/aicr-<suffix> —
+	// the deliberate basename match that lets real vendor VEX docs apply drop-in.
 	doc := &vex.Document{Author: "nvidia", Raw: []byte(`{}`), Statements: []vex.Statement{
 		{ProductRepo: "aicr-" + suffix, Vulnerability: cve, Status: vex.StatusNotAffected,
 			Justification: "vulnerable_code_not_in_execute_path"},

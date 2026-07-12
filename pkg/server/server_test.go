@@ -185,9 +185,11 @@ func TestIngest_OversizedBody413(t *testing.T) {
 	_, tok := seedTenantToken(t, st)
 	h := srv.Handler()
 
-	// Just over the (maxSBOMBytes*4/3)+1024 body cap (~26.7 MiB). Content is
+	// Just over the body cap, which budgets for the base64 SBOM (~4/3 of 20 MiB)
+	// PLUS the base64 attestation (~4/3 of 1 MiB) plus envelope overhead. Content is
 	// irrelevant — the reader trips the cap before any decode.
-	huge := strings.Repeat("A", (20<<20)*4/3+1024+4096)
+	maxBody := (20<<20)*4/3 + (1<<20)*4/3 + 4096
+	huge := strings.Repeat("A", maxBody+4096)
 	req := httptest.NewRequest(http.MethodPost, "/v1/sboms", strings.NewReader(`{"sbom":"`+huge+`"}`))
 	req.Header.Set("Authorization", "Bearer "+tok)
 	rec := httptest.NewRecorder()

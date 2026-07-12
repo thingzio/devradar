@@ -55,7 +55,18 @@ type Store interface {
 	// whole SBOM has been scanned by every expected scanner.
 	ClearRescanRequested(ctx context.Context, sbomID string) error
 	RecordScanFailure(ctx context.Context, sbomID, scanner, stage string, cause error)
+	// Per-(SBOM, scanner) failure backoff: ScannerAttemptDue gates whether a pair
+	// may be scanned this tick; RecordScannerAttemptFailure schedules the next
+	// attempt with exponential backoff (and quarantines past a threshold);
+	// ClearScannerAttempt resets the state after a success.
+	ScannerAttemptDue(ctx context.Context, sbomID, scanner string) (bool, error)
+	RecordScannerAttemptFailure(ctx context.Context, sbomID, scanner, errMsg string) error
+	ClearScannerAttempt(ctx context.Context, sbomID, scanner string) error
 	DistinctActiveCVEs(ctx context.Context) ([]string, error)
+	// EnrichmentFreshWithin reports whether any enrichment row was updated within
+	// the window — the cadence gate so the daily-updating EPSS/KEV feeds are not
+	// re-fetched on every ~15-min scan tick.
+	EnrichmentFreshWithin(ctx context.Context, within time.Duration) (bool, error)
 	// UpsertCVEEnrichment writes enrichment records. kevAuthoritative gates whether
 	// a KEV=false in a record may clear a stored KEV flag — false (a KEV feed
 	// outage) preserves existing flags rather than wiping them.
@@ -157,12 +168,24 @@ func Run(ctx context.Context, opts Options) error {
 	// Prefer the syft-backed canonicalizer (SPDX -> CycloneDX); fall back to
 	// pass-through (CycloneDX-only) if syft isn't installed.
 	var canon sbom.Canonicalizer
-	if sc, ok := sbom.NewSyftCanonicalizer(); ok {
-		slog.Info("canonicalizer ready", "backend", sc.Version())
-		canon = sc
+	syftCanon, syftOK := sbom.NewSyftCanonicalizer()
+	if syftOK {
+		slog.Info("canonicalizer ready", "backend", syftCanon.Version())
+		canon = syftCanon
 	} else {
 		slog.Warn("syft not found; canonicalizer is pass-through (SPDX SBOMs will fail to scan)")
 		canon = sbom.NewPassthroughCanonicalizer()
+	}
+
+	// Complete-toolchain gate (opt-in, for production). A partial toolchain scans
+	// but silently under-covers: one scanner loses the cross-check, and a missing
+	// syft makes every SPDX SBOM fail. When required, refuse to start on anything
+	// less than grype + trivy + syft, so a mis-provisioned image fails loudly at
+	// boot instead of quietly degrading. Default off keeps local/dev flexible.
+	if config.RequireCompleteToolchain() {
+		if err := requireCompleteToolchain(scanners, syftOK); err != nil {
+			return err
+		}
 	}
 
 	var enricher Enricher
@@ -173,16 +196,42 @@ func Run(ctx context.Context, opts Options) error {
 	return NewRunner(store, blobs, canon, scanners, converter.DefaultRegistry(), enricher, opts).Execute(ctx)
 }
 
-// Execute runs one full pass over all active SBOMs. It returns an error only for
-// whole-run failures (DB prep for ALL scanners, listing); per-SBOM and
-// per-scanner failures are recorded to the failure surface and do not abort the
-// run.
-func (r *Runner) Execute(ctx context.Context) error {
-	// Freeze each scanner's DB once, up front: refresh if stale, then every scan
-	// in this run shares that version — which is what keeps cause attribution
-	// honest (no DB drift mid-run). A scanner whose DB refresh fails (e.g. a
-	// transient network blip) is DROPPED for this run, not fatal: the healthy
-	// scanner(s) still scan the whole corpus. We abort only if none survive.
+// requireCompleteToolchain returns an error unless the full pinned toolchain is
+// present: both grype and trivy (running two is what gives the cross-scanner
+// cataloger-disagreement signal) and a working syft canonicalizer (SPDX support).
+// It reports every missing component in one error so an operator fixes the image
+// in a single pass.
+func requireCompleteToolchain(available []scanner.Scanner, syftOK bool) error {
+	have := make(map[string]bool, len(available))
+	for _, sc := range available {
+		have[sc.Name()] = true
+	}
+	var missing []string
+	for _, want := range []string{"grype", "trivy"} {
+		if !have[want] {
+			missing = append(missing, want)
+		}
+	}
+	if !syftOK {
+		missing = append(missing, "syft")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("incomplete scanner toolchain: missing %v "+
+			"(DEVRADAR_REQUIRE_COMPLETE_TOOLCHAIN is set); check the scan-job image", missing)
+	}
+	return nil
+}
+
+// scanDue refreshes each scanner's vuln DB and scans the due SBOMs. It is called
+// only when the cheap pre-check found work, so the expensive DB refresh never
+// runs on an idle tick. `pending` is the work list computed with the full scanner
+// name set; `allNames` is that set.
+//
+// Freezing each scanner's DB once, up front, is what keeps cause attribution
+// honest (no DB drift mid-run). A scanner whose DB refresh fails (a transient
+// blip) is DROPPED for this run, not fatal: the healthy scanner(s) still scan the
+// whole corpus. We abort only if none survive.
+func (r *Runner) scanDue(ctx context.Context, pending []*postgres.SBOM, allNames []string) error {
 	canonVer := r.canon.Version()
 	ready := make([]readyScanner, 0, len(r.scanners))
 	for _, sc := range r.scanners {
@@ -206,17 +255,21 @@ func (r *Runner) Execute(ctx context.Context) error {
 		return fmt.Errorf("no scanners available after db refresh (%d attempted)", len(r.scanners))
 	}
 
-	// Freshness is evaluated per scanner, so pass the names of the scanners that
-	// actually became ready this run: an SBOM is due until every one of them has a
-	// recent run. If a scanner was dropped at EnsureDB, it isn't expected this run
-	// (the SBOM won't be held due for a scanner that can't run).
-	expected := make([]string, len(ready))
-	for i, sc := range ready {
-		expected[i] = sc.Name()
-	}
-	sboms, err := r.store.ListScannableSBOMs(ctx, r.opts.ScanMaxAge, expected)
-	if err != nil {
-		return fmt.Errorf("list scannable sboms: %w", err)
+	// The pre-check used the full name set. If every configured scanner became
+	// ready, that work list is exactly right. If a scanner DROPPED at EnsureDB, the
+	// due set may have shrunk (an SBOM held due only for the now-absent scanner is
+	// no longer expected this run), so re-list with the precise ready set to keep
+	// per-scanner freshness exact. Only pay the extra query on the (rare) drop path.
+	sboms := pending
+	if len(ready) < len(allNames) {
+		expected := make([]string, len(ready))
+		for i, sc := range ready {
+			expected[i] = sc.Name()
+		}
+		var err error
+		if sboms, err = r.store.ListScannableSBOMs(ctx, r.opts.ScanMaxAge, expected); err != nil {
+			return fmt.Errorf("list scannable sboms: %w", err)
+		}
 	}
 	slog.Info("scan run starting", "sbom_count", len(sboms), "scanners", len(ready),
 		"scan_max_age", r.opts.ScanMaxAge)
@@ -230,6 +283,44 @@ func (r *Runner) Execute(ctx context.Context) error {
 		scanned++
 	}
 	slog.Info("scan run complete", "scanned", scanned)
+	return nil
+}
+
+// Execute runs one full pass over all active SBOMs. It returns an error only for
+// whole-run failures (DB prep for ALL scanners, listing); per-SBOM and
+// per-scanner failures are recorded to the failure surface and do not abort the
+// run.
+func (r *Runner) Execute(ctx context.Context) error {
+	// Cheap pre-check BEFORE touching any scanner DB: is anything due for ANY
+	// configured scanner? This uses only scanner NAMES (no EnsureDB), so on an idle
+	// tick we skip the expensive vulnerability-DB refresh (grype+trivy each pull a
+	// large DB) entirely. The scheduler fires ~96×/day but few ticks have work;
+	// downloading the DBs only when there is actual work removes almost all of that
+	// egress and startup cost. Safe because ListScannableSBOMs is monotonic in the
+	// expected set — an SBOM is due if ANY expected scanner lacks a recent run — so
+	// the full-name set is a SUPERSET of what any ready subset would return: empty
+	// here means empty for certain. (GCS-cached DBs are a possible later upgrade.)
+	allNames := make([]string, len(r.scanners))
+	for i, sc := range r.scanners {
+		allNames[i] = sc.Name()
+	}
+	pending, err := r.store.ListScannableSBOMs(ctx, r.opts.ScanMaxAge, allNames)
+	if err != nil {
+		return fmt.Errorf("list scannable sboms: %w", err)
+	}
+
+	if len(pending) > 0 {
+		if err := r.scanDue(ctx, pending, allNames); err != nil {
+			return err
+		}
+	} else {
+		slog.Info("scan run: no SBOMs due; skipping vulnerability DB refresh")
+	}
+
+	// Fleet-wide maintenance runs every tick regardless of scan work — each has its
+	// own cadence gate where relevant (enrichment is daily-gated; posture snapshots
+	// are interval-gated). These are cheap and do not download scanner DBs, so they
+	// stay on every tick even when nothing was scanned.
 
 	// Refresh CVE risk enrichment (EPSS + KEV) after findings are written, so the
 	// distinct-CVE target set includes anything this run just discovered. Additive
@@ -297,6 +388,18 @@ func (r *Runner) Execute(ctx context.Context) error {
 func (r *Runner) refreshEnrichment(ctx context.Context) {
 	if r.enricher == nil {
 		return
+	}
+	// Cadence gate: EPSS and KEV publish about once a day, but the scan job runs
+	// every ~15 min. Re-fetching the whole fleet's enrichment every tick is wasted
+	// work and needless feed load, so skip when enrichment was refreshed within the
+	// min-interval. Mirrors the posture-snapshot gate. 0 disables the gate.
+	if iv := config.EnrichMinInterval(); iv > 0 {
+		fresh, err := r.store.EnrichmentFreshWithin(ctx, iv)
+		if err != nil {
+			slog.Warn("enrichment freshness check failed; refreshing anyway", "error", err)
+		} else if fresh {
+			return // refreshed recently enough
+		}
 	}
 	cves, err := r.store.DistinctActiveCVEs(ctx)
 	if err != nil {
@@ -422,11 +525,26 @@ func (r *Runner) backfillLicenses(ctx context.Context, sb *postgres.SBOM, raw []
 }
 
 func (r *Runner) scanWith(ctx context.Context, sb *postgres.SBOM, sc readyScanner, sbomPath string) {
+	// Skip a pair that is currently backing off (recent repeated failures) or
+	// quarantined. This is the fix for the retry storm: a persistently-failing
+	// (SBOM, scanner) pair would otherwise be re-attempted every ~15-min tick
+	// forever — and drag the healthy scanner along, since work selection is
+	// per-SBOM. On a DB error we fail OPEN (attempt anyway): backoff is an
+	// optimization, never a correctness gate.
+	if due, err := r.store.ScannerAttemptDue(ctx, sb.ID, sc.Name()); err != nil {
+		slog.Warn("scanner backoff check failed; attempting anyway",
+			"sbom_id", sb.ID, "scanner", sc.Name(), "error", err)
+	} else if !due {
+		slog.Debug("scanner skipped (backing off)", "sbom_id", sb.ID, "scanner", sc.Name())
+		return
+	}
+
 	// Recover per-scanner so a fault in one scanner (or its converter) is a
-	// recorded failure that still lets the other scanner run on this SBOM.
+	// recorded failure that still lets the other scanner run on this SBOM. A panic
+	// also counts as a failure for backoff.
 	defer func() {
 		if rec := recover(); rec != nil {
-			r.recordFailure(ctx, sb.ID, sc.Name(), "panic", fmt.Errorf("panic: %v", rec))
+			r.recordScannerFailure(ctx, sb.ID, sc.Name(), "panic", fmt.Errorf("panic: %v", rec))
 		}
 	}()
 
@@ -442,28 +560,28 @@ func (r *Runner) scanWith(ctx context.Context, sb *postgres.SBOM, sc readyScanne
 
 	out, cleanup, err := tempOut(sb.ID, sc.Name())
 	if err != nil {
-		r.recordFailure(ctx, sb.ID, sc.Name(), "scan", err)
+		r.recordScannerFailure(ctx, sb.ID, sc.Name(), "scan", err)
 		return
 	}
 	defer cleanup()
 
 	if err := sc.ScanSBOM(scanCtx, sbomPath, out); err != nil {
-		r.recordFailure(ctx, sb.ID, sc.Name(), "scan", err)
+		r.recordScannerFailure(ctx, sb.ID, sc.Name(), "scan", err)
 		return
 	}
 	doc, err := parseJSONBounded(out, maxScannerOutputBytes)
 	if err != nil {
-		r.recordFailure(ctx, sb.ID, sc.Name(), "parse", err)
+		r.recordScannerFailure(ctx, sb.ID, sc.Name(), "parse", err)
 		return
 	}
 	conv, err := r.convs.Detect(doc)
 	if err != nil {
-		r.recordFailure(ctx, sb.ID, sc.Name(), "detect", err)
+		r.recordScannerFailure(ctx, sb.ID, sc.Name(), "detect", err)
 		return
 	}
 	vulns, err := conv.Convert(scanCtx, doc)
 	if err != nil {
-		r.recordFailure(ctx, sb.ID, sc.Name(), "convert", err)
+		r.recordScannerFailure(ctx, sb.ID, sc.Name(), "convert", err)
 		return
 	}
 
@@ -472,11 +590,8 @@ func (r *Runner) scanWith(ctx context.Context, sb *postgres.SBOM, sc readyScanne
 	// missing DB). But it can equally be a genuinely clean image (distroless,
 	// minimal, well-patched bases routinely carry >5 packages and 0 CVEs). So we
 	// record the anomaly for ops visibility but STILL persist the scan below —
-	// a clean result is a valid result. Suppressing the ApplyScan here (the old
-	// behavior) meant no scan_run row was written, so ListScannableSBOMs kept the
-	// SBOM perpetually "due": it re-scanned every tick and re-failed forever,
-	// never converging. Cross-scanner disagreement (grype finds >0, trivy finds 0)
-	// remains queryable via this failure surface for a real regression signal.
+	// a clean result is a valid result. NOTE: this is NOT counted as a backoff
+	// failure (it does not gate retries) — a clean image must keep converging.
 	if len(vulns) == 0 && sb.PackageCount > zeroFindingFloor {
 		r.recordFailure(ctx, sb.ID, sc.Name(), "zero-findings",
 			fmt.Errorf("0 findings on sbom with %d packages (recorded; may be a clean image)", sb.PackageCount))
@@ -484,7 +599,29 @@ func (r *Runner) scanWith(ctx context.Context, sb *postgres.SBOM, sc readyScanne
 
 	// ver was captured once at job start (DB is frozen for the run).
 	if err := r.store.ApplyScan(ctx, sb, sc.Name(), sc.ver, vulns); err != nil {
-		r.recordFailure(ctx, sb.ID, sc.Name(), "persist", err)
+		r.recordScannerFailure(ctx, sb.ID, sc.Name(), "persist", err)
+		return
+	}
+
+	// Success: clear any backoff state so a recovered pair returns to the normal
+	// cadence immediately. Best-effort.
+	if err := r.store.ClearScannerAttempt(ctx, sb.ID, sc.Name()); err != nil {
+		slog.Warn("clear scanner backoff", "sbom_id", sb.ID, "scanner", sc.Name(), "error", err)
+	}
+}
+
+// recordScannerFailure records a per-scanner failure to BOTH the queryable
+// failure log (recordFailure) and the backoff state machine, so a persistently
+// failing (SBOM, scanner) pair backs off and eventually quarantines instead of
+// being retried every tick.
+func (r *Runner) recordScannerFailure(ctx context.Context, sbomID, scanner, stage string, cause error) {
+	r.recordFailure(ctx, sbomID, scanner, stage, cause)
+	msg := ""
+	if cause != nil {
+		msg = cause.Error()
+	}
+	if err := r.store.RecordScannerAttemptFailure(ctx, sbomID, scanner, stage+": "+msg); err != nil {
+		slog.Warn("record scanner backoff", "sbom_id", sbomID, "scanner", scanner, "error", err)
 	}
 }
 

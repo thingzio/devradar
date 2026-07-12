@@ -32,9 +32,20 @@ const maxStderrBytes = 64 << 10
 // cross-package import.
 const maxOutputBytes = 256 << 20
 
+// outputPollInterval is how often runCmd samples the growing report file to
+// enforce the size cap DURING execution (not just after exit).
+const outputPollInterval = 250 * time.Millisecond
+
 // runCmd runs cmd under ctx, killing the process if ctx is cancelled, then
 // verifies outPath exists and contains parseable JSON. A scanner that dies on a
 // malformed SBOM surfaces as a clean error rather than corrupt downstream data.
+//
+// The scanner writes its report directly to outPath, which on Cloud Run lives on
+// tmpfs (RAM). A hostile SBOM can drive an arbitrarily large report, so we must
+// bound it DURING the write, not only after: a post-exit stat is too late — the
+// file could already have exhausted the job's memory. A watcher polls the file
+// size and KILLS the process the moment it exceeds maxOutputBytes, so peak size
+// is bounded to roughly the cap plus one write burst.
 func runCmd(ctx context.Context, cmd *exec.Cmd, outPath string) error {
 	stderr := &cappedBuffer{limit: maxStderrBytes}
 	cmd.Stderr = stderr
@@ -46,22 +57,57 @@ func runCmd(ctx context.Context, cmd *exec.Cmd, outPath string) error {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 
+	// Watch the output file grow; kill on overflow. `oversized` is read only after
+	// the watcher goroutine has returned (we wait on watchDone), so no data race.
+	// stopWatch (close of `stop`) tells the watcher to exit; the watcher owns the
+	// close of watchDone, so there is no double-close.
+	var oversized bool
+	stop := make(chan struct{})
+	watchDone := make(chan struct{})
+	go func() {
+		defer close(watchDone)
+		t := time.NewTicker(outputPollInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+				if info, err := os.Stat(outPath); err == nil && info.Size() > maxOutputBytes {
+					oversized = true
+					if cmd.Process != nil {
+						_ = cmd.Process.Kill()
+					}
+					return
+				}
+			}
+		}
+	}()
+	stopWatch := func() {
+		close(stop)
+		<-watchDone
+	}
+
 	select {
 	case <-ctx.Done():
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
 		}
 		<-done // reap
+		stopWatch()
 		return ctx.Err()
 	case waitErr := <-done:
+		stopWatch()
+		if oversized {
+			return fmt.Errorf("%s output exceeded %d bytes during execution (killed)", cmd.Path, int64(maxOutputBytes))
+		}
 		info, statErr := os.Stat(outPath)
 		if statErr != nil || info.Size() < 2 {
 			return fmt.Errorf("%s produced no output (stderr=%s): %w",
 				cmd.Path, truncate(stderr.String(), 500), waitErr)
 		}
-		// Reject an oversized report BEFORE reading it — the file lives on tmpfs
-		// (RAM) on Cloud Run, so a huge attacker-driven report must not be pulled
-		// into memory for validation.
+		// Belt-and-suspenders: reject an oversized report the watcher may have
+		// missed between polls, BEFORE reading it into memory.
 		if info.Size() > maxOutputBytes {
 			return fmt.Errorf("%s output exceeds %d bytes (%d)", cmd.Path, int64(maxOutputBytes), info.Size())
 		}

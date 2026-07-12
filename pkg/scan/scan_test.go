@@ -20,16 +20,19 @@ import (
 // ── fakes ─────────────────────────────────────────────────────────────────────
 
 type fakeStore struct {
-	sboms      []*postgres.SBOM
-	applied    int
-	appliedIDs []string        // SBOM ids that reached ApplyScan
-	failures   []string        // "stage" per recorded failure
-	failedIDs  []string        // SBOM ids that recorded a failure
-	hasPkgs    map[string]bool // SBOM ids already carrying a license inventory
-	backfilled []string        // SBOM ids that reached UpsertSBOMPackages
-	scanMaxAge time.Duration   // staleness window passed to ListScannableSBOMs
-	expected   []string        // expected-scanner set passed to ListScannableSBOMs
-	cleared    []string        // SBOM ids that reached ClearRescanRequested
+	sboms           []*postgres.SBOM
+	applied         int
+	appliedIDs      []string        // SBOM ids that reached ApplyScan
+	failures        []string        // "stage" per recorded failure
+	failedIDs       []string        // SBOM ids that recorded a failure
+	hasPkgs         map[string]bool // SBOM ids already carrying a license inventory
+	backfilled      []string        // SBOM ids that reached UpsertSBOMPackages
+	scanMaxAge      time.Duration   // staleness window passed to ListScannableSBOMs
+	expected        []string        // expected-scanner set passed to ListScannableSBOMs
+	cleared         []string        // SBOM ids that reached ClearRescanRequested
+	backoff         bool            // when true, ScannerAttemptDue reports NOT due (backing off)
+	attemptFailures int             // count of RecordScannerAttemptFailure calls
+	attemptClears   int             // count of ClearScannerAttempt calls
 }
 
 func (f *fakeStore) ListActiveSBOMs(context.Context) ([]*postgres.SBOM, error) { return f.sboms, nil }
@@ -51,7 +54,21 @@ func (f *fakeStore) RecordScanFailure(_ context.Context, sbomID, _, stage string
 	f.failures = append(f.failures, stage)
 	f.failedIDs = append(f.failedIDs, sbomID)
 }
-func (f *fakeStore) DistinctActiveCVEs(context.Context) ([]string, error)             { return nil, nil }
+func (f *fakeStore) ScannerAttemptDue(context.Context, string, string) (bool, error) {
+	return !f.backoff, nil // due unless the test marks the pair as backing off
+}
+func (f *fakeStore) RecordScannerAttemptFailure(_ context.Context, _, _, _ string) error {
+	f.attemptFailures++
+	return nil
+}
+func (f *fakeStore) ClearScannerAttempt(_ context.Context, _, _ string) error {
+	f.attemptClears++
+	return nil
+}
+func (f *fakeStore) DistinctActiveCVEs(context.Context) ([]string, error) { return nil, nil }
+func (f *fakeStore) EnrichmentFreshWithin(context.Context, time.Duration) (bool, error) {
+	return false, nil // never fresh → tests always refresh
+}
 func (f *fakeStore) UpsertCVEEnrichment(context.Context, []enrich.Record, bool) error { return nil }
 func (f *fakeStore) HasSBOMPackages(_ context.Context, sbomID string) (bool, error) {
 	return f.hasPkgs[sbomID], nil
@@ -383,6 +400,21 @@ func TestRunner_EnrichmentRefresh(t *testing.T) {
 		t.Error("a KEV outage must propagate kevAuthoritative=false so flags are preserved")
 	}
 
+	// Cadence gate: when enrichment is already fresh within the interval, the
+	// refresh is skipped (no fetch, no upsert) — the daily feeds aren't re-pulled
+	// every tick.
+	store4 := &enrichStore{cves: []string{"CVE-2025-1"}, fresh: true}
+	en4 := &fakeEnricher{recs: []enrich.Record{{CVE: "CVE-2025-1"}}, kevAuthoritative: true}
+	r4 := NewRunner(store4, fakeFetcher{}, sbom.NewPassthroughCanonicalizer(),
+		[]scanner.Scanner{&fakeScanner{name: "grype", out: grypeDoc}},
+		converter.DefaultRegistry(), en4, DefaultOptions())
+	if err := r4.Execute(context.Background()); err != nil {
+		t.Fatalf("run (fresh gate): %v", err)
+	}
+	if len(en4.gotCVEs) != 0 || store4.upserted != 0 {
+		t.Errorf("fresh enrichment must skip refresh; fetched=%d upserted=%d", len(en4.gotCVEs), store4.upserted)
+	}
+
 	// Nil enricher: enrichment skipped, no calls.
 	store2 := &enrichStore{cves: []string{"CVE-2025-1"}}
 	r2 := NewRunner(store2, fakeFetcher{}, sbom.NewPassthroughCanonicalizer(),
@@ -400,6 +432,7 @@ type enrichStore struct {
 	cves                 []string
 	upserted             int
 	lastKEVAuthoritative bool // captured from the most recent UpsertCVEEnrichment
+	fresh                bool // returned by EnrichmentFreshWithin (cadence gate)
 }
 
 func (s *enrichStore) ListActiveSBOMs(context.Context) ([]*postgres.SBOM, error) { return nil, nil }
@@ -416,6 +449,16 @@ func (s *enrichStore) UpsertSBOMPackages(context.Context, string, []data.Package
 	return nil
 }
 func (s *enrichStore) DistinctActiveCVEs(context.Context) ([]string, error) { return s.cves, nil }
+func (s *enrichStore) EnrichmentFreshWithin(context.Context, time.Duration) (bool, error) {
+	return s.fresh, nil
+}
+func (s *enrichStore) ScannerAttemptDue(context.Context, string, string) (bool, error) {
+	return true, nil
+}
+func (s *enrichStore) RecordScannerAttemptFailure(context.Context, string, string, string) error {
+	return nil
+}
+func (s *enrichStore) ClearScannerAttempt(context.Context, string, string) error { return nil }
 func (s *enrichStore) UpsertCVEEnrichment(_ context.Context, recs []enrich.Record, kevAuthoritative bool) error {
 	s.upserted += len(recs)
 	s.lastKEVAuthoritative = kevAuthoritative
@@ -436,17 +479,19 @@ func (f *fakeEnricher) Fetch(_ context.Context, cves []string) ([]enrich.Record,
 // ── fake scanner plumbing ─────────────────────────────────────────────────────
 
 type fakeScanner struct {
-	name      string
-	out       string
-	panicOn   string // if non-empty, ScanSBOM panics when the SBOM's id appears in the temp path
-	ensureErr error  // if non-nil, EnsureDB fails (simulates a DB-refresh outage)
-	hang      bool   // if true, ScanSBOM blocks until ctx is cancelled (simulates a hung scan)
+	name        string
+	out         string
+	panicOn     string // if non-empty, ScanSBOM panics when the SBOM's id appears in the temp path
+	ensureErr   error  // if non-nil, EnsureDB fails (simulates a DB-refresh outage)
+	hang        bool   // if true, ScanSBOM blocks until ctx is cancelled (simulates a hung scan)
+	ensureCalls int    // number of EnsureDB calls (asserts the DB refresh is skipped on idle ticks)
 }
 
 func (f *fakeScanner) Name() string      { return f.name }
 func (f *fakeScanner) Version() string   { return "test-1.0" }
 func (f *fakeScanner) DBVersion() string { return "db-test" }
 func (f *fakeScanner) EnsureDB(context.Context, time.Duration) error {
+	f.ensureCalls++
 	return f.ensureErr
 }
 func (f *fakeScanner) IsAvailable() bool     { return true }
@@ -463,4 +508,130 @@ func (f *fakeScanner) ScanSBOM(ctx context.Context, sbomPath, outPath string) er
 		return ctx.Err()
 	}
 	return os.WriteFile(outPath, []byte(f.out), 0o600)
+}
+
+func TestRequireCompleteToolchain(t *testing.T) {
+	grype := &fakeScanner{name: "grype"}
+	trivy := &fakeScanner{name: "trivy"}
+
+	cases := []struct {
+		name    string
+		scan    []scanner.Scanner
+		syftOK  bool
+		wantErr bool
+	}{
+		{"complete", []scanner.Scanner{grype, trivy}, true, false},
+		{"missing trivy", []scanner.Scanner{grype}, true, true},
+		{"missing grype", []scanner.Scanner{trivy}, true, true},
+		{"missing syft", []scanner.Scanner{grype, trivy}, false, true},
+		{"missing all but grype", []scanner.Scanner{grype}, false, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := requireCompleteToolchain(c.scan, c.syftOK)
+			if (err != nil) != c.wantErr {
+				t.Errorf("requireCompleteToolchain = %v, wantErr=%v", err, c.wantErr)
+			}
+		})
+	}
+}
+
+// TestRunner_SkipsBackingOffScanner verifies a pair marked as backing off is not
+// scanned (no ApplyScan, no failure recorded for it).
+func TestRunner_SkipsBackingOffScanner(t *testing.T) {
+	store := &fakeStore{
+		sboms:   []*postgres.SBOM{{ID: "s1", TenantID: "t1", Format: "cyclonedx", PackageCount: 50, ObjectPath: "x"}},
+		backoff: true, // ScannerAttemptDue → not due
+	}
+	sc := &fakeScanner{name: "grype", out: grypeDoc}
+	r := NewRunner(store, fakeFetcher{data: []byte(`{"bomFormat":"CycloneDX"}`)},
+		sbom.NewPassthroughCanonicalizer(), []scanner.Scanner{sc},
+		converter.DefaultRegistry(), nil, DefaultOptions())
+
+	if err := r.Execute(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if store.applied != 0 {
+		t.Errorf("backing-off scanner must be skipped, ApplyScan calls = %d", store.applied)
+	}
+}
+
+// TestRunner_RecordsBackoffOnFailureAndClearsOnSuccess verifies a scan failure
+// records a backoff attempt, and a success clears it.
+func TestRunner_RecordsBackoffOnFailureAndClearsOnSuccess(t *testing.T) {
+	// Failure path: scanner returns unparseable output → parse failure.
+	failStore := &fakeStore{
+		sboms: []*postgres.SBOM{{ID: "s1", TenantID: "t1", Format: "cyclonedx", PackageCount: 50, ObjectPath: "x"}},
+	}
+	failSc := &fakeScanner{name: "grype", out: "not json"}
+	rf := NewRunner(failStore, fakeFetcher{data: []byte(`{"bomFormat":"CycloneDX"}`)},
+		sbom.NewPassthroughCanonicalizer(), []scanner.Scanner{failSc},
+		converter.DefaultRegistry(), nil, DefaultOptions())
+	if err := rf.Execute(context.Background()); err != nil {
+		t.Fatalf("run (fail): %v", err)
+	}
+	if failStore.attemptFailures != 1 {
+		t.Errorf("failure should record one backoff attempt, got %d", failStore.attemptFailures)
+	}
+
+	// Success path: clears backoff.
+	okStore := &fakeStore{
+		sboms: []*postgres.SBOM{{ID: "s1", TenantID: "t1", Format: "cyclonedx", PackageCount: 50, ObjectPath: "x"}},
+	}
+	okSc := &fakeScanner{name: "grype", out: grypeDoc}
+	ro := NewRunner(okStore, fakeFetcher{data: []byte(`{"bomFormat":"CycloneDX"}`)},
+		sbom.NewPassthroughCanonicalizer(), []scanner.Scanner{okSc},
+		converter.DefaultRegistry(), nil, DefaultOptions())
+	if err := ro.Execute(context.Background()); err != nil {
+		t.Fatalf("run (ok): %v", err)
+	}
+	if okStore.attemptClears != 1 {
+		t.Errorf("success should clear backoff once, got %d", okStore.attemptClears)
+	}
+	if okStore.attemptFailures != 0 {
+		t.Errorf("success should not record a backoff failure, got %d", okStore.attemptFailures)
+	}
+}
+
+// TestRunner_SkipsDBRefreshWhenNoWork verifies the DB-download optimization: on a
+// tick with no due SBOMs, no scanner's EnsureDB (the expensive vuln-DB refresh) is
+// called, while the fleet-wide post-scan maintenance still runs.
+func TestRunner_SkipsDBRefreshWhenNoWork(t *testing.T) {
+	store := &fakeStore{sboms: nil} // nothing due
+	sc := &fakeScanner{name: "grype", out: grypeDoc}
+	r := NewRunner(store, fakeFetcher{data: []byte(`{"bomFormat":"CycloneDX"}`)},
+		sbom.NewPassthroughCanonicalizer(), []scanner.Scanner{sc},
+		converter.DefaultRegistry(), nil, DefaultOptions())
+
+	if err := r.Execute(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if sc.ensureCalls != 0 {
+		t.Errorf("EnsureDB called %d times on an idle tick, want 0 (DB refresh must be skipped)", sc.ensureCalls)
+	}
+	if store.applied != 0 {
+		t.Errorf("nothing should scan, got %d applied", store.applied)
+	}
+}
+
+// TestRunner_RefreshesDBWhenWorkExists is the positive counterpart: with a due
+// SBOM, EnsureDB IS called and the SBOM is scanned.
+func TestRunner_RefreshesDBWhenWorkExists(t *testing.T) {
+	store := &fakeStore{sboms: []*postgres.SBOM{
+		{ID: "s1", TenantID: "t1", Format: "cyclonedx", PackageCount: 50, ObjectPath: "x"},
+	}}
+	sc := &fakeScanner{name: "grype", out: grypeDoc}
+	r := NewRunner(store, fakeFetcher{data: []byte(`{"bomFormat":"CycloneDX"}`)},
+		sbom.NewPassthroughCanonicalizer(), []scanner.Scanner{sc},
+		converter.DefaultRegistry(), nil, DefaultOptions())
+
+	if err := r.Execute(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if sc.ensureCalls != 1 {
+		t.Errorf("EnsureDB called %d times with work due, want 1", sc.ensureCalls)
+	}
+	if store.applied != 1 {
+		t.Errorf("ApplyScan calls = %d, want 1", store.applied)
+	}
 }

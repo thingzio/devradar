@@ -123,21 +123,24 @@ func validateURL(key string) error {
 // invalid DEVRADAR_TOKEN_FLASH_KEY (not base64, or not 32 bytes) would otherwise
 // make TokenFlashKey() return nil and the caller store the one-time API token in
 // PLAINTEXT — silently defeating the encryption the operator meant to enable.
-// Unset is always fine (dev default is plaintext by design). A set-but-invalid
-// key is a hard error outside dev; in DevMode it is downgraded to allow local
-// experimentation.
+// In DevMode anything goes (plaintext is the documented local default). OUTSIDE
+// dev the key is REQUIRED and must be valid: the one-time flash holds a live API
+// token, so an unset or invalid key silently stores that secret in plaintext at
+// rest — fail closed instead. This is stricter than before (unset used to be
+// allowed in prod); production deployments must provision the key.
 func validateTokenFlashKey() error {
-	v, ok := os.LookupEnv("DEVRADAR_TOKEN_FLASH_KEY")
-	if !ok || strings.TrimSpace(v) == "" {
-		return nil // unset ⇒ documented plaintext-in-dev default
+	if DevMode() {
+		return nil
 	}
-	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(v))
+	v := strings.TrimSpace(os.Getenv("DEVRADAR_TOKEN_FLASH_KEY"))
+	if v == "" {
+		return fmt.Errorf("DEVRADAR_TOKEN_FLASH_KEY is required outside DevMode " +
+			"(without it the one-time API-token flash is stored in plaintext at rest)")
+	}
+	key, err := base64.StdEncoding.DecodeString(v)
 	if err != nil || len(key) != 32 {
-		if DevMode() {
-			return nil
-		}
 		return fmt.Errorf("DEVRADAR_TOKEN_FLASH_KEY must be base64-encoded 32 bytes " +
-			"(set-but-invalid would silently store API tokens in plaintext)")
+			"(an invalid value would silently store API tokens in plaintext)")
 	}
 	return nil
 }

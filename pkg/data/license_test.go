@@ -155,6 +155,39 @@ func TestEvaluateExpression(t *testing.T) {
 	if ok, _ := EvaluateExpression("GPL-3.0-only WITH Classpath-exception-2.0", denied); ok {
 		t.Error("GPL-3.0 WITH exception should still violate (GPL-3.0 denied)")
 	}
+
+	// MIXED precedence — the case the old flatten-and-scan heuristic got WRONG.
+	// A mandatory (AND-ed) denied operand must NOT be masked by an OR elsewhere.
+	if ok, off := EvaluateExpression("(MIT OR Apache-2.0) AND GPL-3.0", denied); ok || len(off) != 1 {
+		t.Errorf("(MIT OR Apache-2.0) AND GPL-3.0 must violate on GPL-3.0, got ok=%v off=%v", ok, off)
+	}
+	// The choice group is satisfied by MIT and the mandatory operand is allowed →
+	// whole expression allowed.
+	if ok, _ := EvaluateExpression("(MIT OR GPL-3.0) AND Apache-2.0", denied); !ok {
+		t.Error("(MIT OR GPL-3.0) AND Apache-2.0 should be allowed (MIT satisfies the OR, Apache allowed)")
+	}
+	// Nested: an inner AND with a denied operand, OR'd with an allowed leaf → the
+	// allowed leaf satisfies the top-level OR.
+	if ok, _ := EvaluateExpression("(GPL-3.0 AND MIT) OR Apache-2.0", denied); !ok {
+		t.Error("(GPL-3.0 AND MIT) OR Apache-2.0 should be allowed (Apache satisfies the OR)")
+	}
+	// Same shape, but the only alternative is also denied → violation.
+	if ok, _ := EvaluateExpression("(GPL-3.0 AND MIT) OR GPL-2.0", denied); ok {
+		t.Error("(GPL-3.0 AND MIT) OR GPL-2.0 should violate (both branches denied)")
+	}
+}
+
+// TestEvaluateExpression_WithExceptionPair verifies a license+exception pair can
+// be denied as a unit without denying the bare license.
+func TestEvaluateExpression_WithExceptionPair(t *testing.T) {
+	// Deny only the specific pair, not bare GPL-2.0.
+	denied := map[string]struct{}{"gpl-2.0 with classpath-exception-2.0": {}}
+	if ok, _ := EvaluateExpression("GPL-2.0-only WITH Classpath-exception-2.0", denied); ok {
+		t.Error("the denied license+exception pair should violate")
+	}
+	if ok, _ := EvaluateExpression("GPL-2.0-only", denied); !ok {
+		t.Error("bare GPL-2.0 should be allowed when only the pair is denied")
+	}
 }
 
 func TestPolicyEvaluate(t *testing.T) {

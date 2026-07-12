@@ -247,29 +247,6 @@ func (s *Store) TenantLabels(ctx context.Context, tenantID string) ([]string, er
 	return out, rows.Err()
 }
 
-// RepoAdmissible reports whether a submission for `repository` is allowed under
-// the per-tenant image cap. It returns true when the cap is disabled (max <= 0),
-// when the repository is already tracked (a re-submit/update never counts against
-// the cap), or when the tenant is still below max distinct active repositories.
-// One round-trip: counts active repos and checks membership together.
-func (s *Store) RepoAdmissible(ctx context.Context, tenantID, repository string, max int) (bool, error) {
-	if max <= 0 {
-		return true, nil
-	}
-	var repoCount int
-	var exists bool
-	err := s.db.QueryRowContext(ctx, `
-		SELECT COUNT(DISTINCT repository),
-		       COALESCE(bool_or(repository = $2), false)
-		FROM devradar_sbom
-		WHERE tenant_id = $1 AND status = 'active'`,
-		tenantID, repository).Scan(&repoCount, &exists)
-	if err != nil {
-		return false, fmt.Errorf("repo admissible: %w", err)
-	}
-	return exists || repoCount < max, nil
-}
-
 // FleetStats is the tenant-wide rollup for the dashboard headline. It is
 // deliberately independent of the paginated image list: summing one page would
 // undercount once a tenant has more images than fit on a page.

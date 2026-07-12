@@ -88,10 +88,16 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Bound the request body before decode (base64 inflates ~4/3).
-	// MaxBytesReader (not LimitReader) so an over-cap body is a real error we can
-	// map to 413, rather than a silent truncation that later fails as bad JSON.
-	r.Body = http.MaxBytesReader(w, r.Body, (maxSBOMBytes*4/3)+1024)
+	// Bound the request body before decode. The JSON envelope carries BOTH the
+	// base64 SBOM (inflates ~4/3) AND, optionally, a base64 attestation bundle
+	// (also ~4/3, capped at maxAttestationBytes decoded). The cap must budget for
+	// both plus JSON key overhead, or a legitimate near-max SBOM submitted WITH an
+	// attestation is wrongly rejected 413. MaxBytesReader (not LimitReader) so an
+	// over-cap body is a real error we can map to 413, not a silent truncation that
+	// later fails as bad JSON.
+	const envelopeOverhead = 4096 // JSON keys, quoting, other small fields
+	maxBody := int64(maxSBOMBytes)*4/3 + int64(maxAttestationBytes)*4/3 + envelopeOverhead
+	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		var maxErr *http.MaxBytesError
@@ -160,21 +166,6 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 		version = refTag
 	}
 
-	// Abuse guard: cap the number of distinct images a tenant may track. A
-	// re-submit of an already-tracked repository is always allowed (it's an update,
-	// not growth); only a brand-new repository past the cap is rejected. See
-	// config.MaxImagesPerTenant.
-	ok, err := s.store.RepoAdmissible(r.Context(), tn.ID, repository, config.MaxImagesPerTenant())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to check image quota")
-		return
-	}
-	if !ok {
-		writeError(w, http.StatusTooManyRequests, fmt.Sprintf(
-			"image limit reached (%d images per tenant); archive an image or contact support to raise the limit",
-			config.MaxImagesPerTenant()))
-		return
-	}
 	generatedAt := subj.GeneratedAt
 	if req.GeneratedAt != "" {
 		if t, perr := time.Parse(time.RFC3339, req.GeneratedAt); perr == nil {
@@ -198,11 +189,12 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 	// The store keys on (tenant_id, digest, format): one SBOM per digest+format
 	// per tenant, first submission canonical. A new row is created 'pending' — it
 	// is not scannable or readable until the bytes are stored and the row is
-	// promoted to 'active' below. The active-SBOM (digest) cap is enforced
-	// ATOMICALLY inside the upsert: the repo cap above bounds distinct
-	// repositories, but without this a tenant could accrue unbounded digests under
-	// one repo (every rebuild is a new digest). A re-submit of an existing digest
-	// is always admitted; only a brand-new digest past the cap returns ErrSBOMLimit.
+	// promoted to 'active' below. Both quotas are enforced ATOMICALLY (serialized
+	// per tenant with an advisory lock) inside the upsert: the repository cap bounds
+	// distinct images, and the SBOM cap bounds distinct digests (a tenant could
+	// otherwise accrue unbounded digests under one repo — every rebuild is a new
+	// digest). A re-submit of an existing digest, or a new digest under a tracked
+	// repository, is always admitted; only brand-new growth past a cap is rejected.
 	effID, inserted, status, err := s.store.UpsertSBOMWithLimit(ctx, &postgres.SBOM{
 		ID:           id,
 		TenantID:     tn.ID,
@@ -218,7 +210,13 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 		ObjectPath:   objectPath,
 		Labels:       normalizeLabels(req.Labels),
 		GeneratedAt:  generatedAt,
-	}, config.MaxSBOMsPerTenant())
+	}, config.MaxSBOMsPerTenant(), config.MaxImagesPerTenant())
+	if errors.Is(err, postgres.ErrImageLimit) {
+		writeError(w, http.StatusTooManyRequests, fmt.Sprintf(
+			"image limit reached (%d images per tenant); archive an image or contact support to raise the limit",
+			config.MaxImagesPerTenant()))
+		return
+	}
 	if errors.Is(err, postgres.ErrSBOMLimit) {
 		writeError(w, http.StatusTooManyRequests, fmt.Sprintf(
 			"SBOM limit reached (%d active SBOMs per tenant); archive an SBOM or contact support to raise the limit",

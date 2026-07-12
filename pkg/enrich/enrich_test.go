@@ -72,6 +72,42 @@ func TestFetch_MergesKEVandEPSS(t *testing.T) {
 	}
 }
 
+// TestFetch_AuthoritativeEmitsRecordForEveryRequestedCVE asserts KEV
+// convergence: when the KEV catalog is fetched successfully, a requested CVE with
+// NO KEV and NO EPSS entry still gets a record (KEV=false, no KEVAdded). That
+// explicit false is what lets the store clear a stale KEV flag for a CVE that has
+// been de-listed from the catalog.
+func TestFetch_AuthoritativeEmitsRecordForEveryRequestedCVE(t *testing.T) {
+	// KEV catalog returned successfully but EMPTY; EPSS returns nothing.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "known_exploited") {
+			_, _ = w.Write([]byte(`{"vulnerabilities":[]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	defer srv.Close()
+
+	f := &Fetcher{
+		KEVURL:     srv.URL + "/known_exploited_vulnerabilities.json",
+		EPSSAPIURL: srv.URL + "/epss",
+		Client:     srv.Client(),
+	}
+	recs, kevAuthoritative, err := f.Fetch(context.Background(), []string{"CVE-2025-9999"})
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if !kevAuthoritative {
+		t.Fatal("kevAuthoritative should be true when the KEV fetch succeeds")
+	}
+	if len(recs) != 1 || recs[0].CVE != "CVE-2025-9999" {
+		t.Fatalf("want a convergence record for the requested CVE, got %+v", recs)
+	}
+	if recs[0].KEV || recs[0].KEVAdded != "" {
+		t.Errorf("de-listed CVE record = %+v, want KEV=false and empty KEVAdded", recs[0])
+	}
+}
+
 // TestFetch_KEVOutageNotAuthoritative asserts that when the KEV feed is down but
 // EPSS succeeds, Fetch rides through (returns records) but reports
 // kevAuthoritative=false — the signal the store uses to preserve existing KEV

@@ -101,6 +101,18 @@ func (f *Fetcher) Fetch(ctx context.Context, cves []string) (recs []Record, kevA
 		merged[cve] = r
 		return r
 	}
+	// When the KEV catalog was authoritatively fetched, emit a record for EVERY
+	// requested CVE — even those with no EPSS and no KEV entry. This is what lets a
+	// KEV DE-listing CONVERGE: a CVE that dropped out of the catalog gets an
+	// explicit KEV=false record that the (authoritative) upsert applies, clearing
+	// the stale true. Without this, a de-listed CVE with no EPSS row produced no
+	// record and kept its old KEV=true forever. On a KEV outage we skip this (no
+	// record for a bare CVE) so we never write spurious false during a blip.
+	if kevAuthoritative := kevErr == nil; kevAuthoritative {
+		for cve := range want {
+			_ = rec(cve) // KEV defaults false, KEVAdded empty → clears stale flag
+		}
+	}
 	for cve, added := range kev {
 		r := rec(cve)
 		r.KEV = true

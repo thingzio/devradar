@@ -322,55 +322,29 @@ func isSimpleExpr(expr string) bool {
 
 // EvaluateExpression decides whether a license expression is allowed given a set
 // of denied license IDs (already lowercased/normalized keys — see the policy
-// evaluator). Semantics:
+// evaluator). It parses the SPDX expression into a boolean AST and evaluates it
+// with correct precedence:
 //
-//   - OR  → allowed if ANY operand is allowed (the licensee may choose).
-//   - AND → allowed only if ALL operands are allowed.
+//   - OR   → allowed if ANY operand is allowed (the licensee may choose).
+//   - AND  → allowed only if ALL operands are allowed.
+//   - WITH → binds a license to an exception as a single leaf.
+//   - parentheses group as written.
 //
-// Precedence simplification (documented): a mixed AND/OR expression is treated as
-// disjunctive-normal-friendly only at the top level — nested parentheses are
-// flattened, so "(A AND B) OR C" is evaluated as "at least one of {A,B,C}
-// allowed" rather than strict boolean algebra. This is intentionally permissive
-// (favors the licensee) and covers the expressions seen in real SBOMs; a full
-// parser is a documented later upgrade. Returns the allowing/violating decision
-// and, on violation, the specific denied IDs.
+// So "(MIT OR GPL-3.0) AND Proprietary" is correctly DENIED when Proprietary is
+// denied — the mandatory AND-ed operand is not masked by the OR (the bug in the
+// prior flatten-and-scan heuristic). Returns the decision and, on violation, the
+// specific denied IDs. An expression with no resolvable license is vacuously
+// allowed here (the caller handles the unknown category separately).
 func EvaluateExpression(expr string, denied map[string]struct{}) (allowed bool, offending []string) {
-	ids := ParseExpression(expr)
-	if len(ids) == 0 {
-		// No resolvable license → treat as not-allowed only if "unknown"-style is
-		// denied; the caller (Evaluate) handles unknown via category, so here an
-		// empty parse is vacuously allowed.
+	root := parseLicenseExpression(expr)
+	if root == nil {
 		return true, nil
 	}
-
-	hasOR := false
-	for f := range strings.FieldsSeq(expr) {
-		if strings.EqualFold(f, "or") {
-			hasOR = true
-			break
-		}
+	var off []string
+	if root.eval(denied, &off) {
+		return true, nil
 	}
-
-	var deniedIDs []string
-	for _, id := range ids {
-		if _, bad := denied[normalizeLicenseID(id)]; bad {
-			deniedIDs = append(deniedIDs, id)
-		}
-	}
-
-	if hasOR {
-		// Allowed if at least one operand is not denied.
-		allowedCount := len(ids) - len(deniedIDs)
-		if allowedCount > 0 {
-			return true, nil
-		}
-		return false, deniedIDs
-	}
-	// Pure AND (or a single ID): any denied operand violates.
-	if len(deniedIDs) > 0 {
-		return false, deniedIDs
-	}
-	return true, nil
+	return false, off
 }
 
 // LicensePolicy is a tenant's opt-in compliance policy. An empty policy denies

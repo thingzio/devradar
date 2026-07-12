@@ -77,6 +77,9 @@ func TestParse_RepoScopedProduct(t *testing.T) {
 }
 
 func TestRepoKeyOf(t *testing.T) {
+	// The key is the last path segment (lowercased) — a deliberate choice so real
+	// vendor VEX docs that name a bare image (pkg:oci/aicr) match a tracked
+	// ghcr.io/nvidia/aicr. See repoKeyOf's doc for the accepted trade-off.
 	cases := map[string]string{
 		"pkg:oci/aicr":                "aicr",
 		"pkg:oci/ghcr.io/nvidia/aicr": "aicr",

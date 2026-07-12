@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"time"
 )
 
 // SyftCanonicalizer converts SPDX to CycloneDX by shelling out to the pinned
@@ -123,17 +124,25 @@ func (c *cappedBuffer) Write(p []byte) (int, error) {
 
 func (c *cappedBuffer) String() string { return c.buf.String() }
 
+// syftVersionProbeTimeout bounds the syft version probe so a wedged binary can't
+// stall job startup.
+const syftVersionProbeTimeout = 30 * time.Second
+
 func syftVersion() string {
-	var out bytes.Buffer
-	cmd := exec.Command("syft", "version", "-o", "json")
-	cmd.Stdout = &out
+	ctx, cancel := context.WithTimeout(context.Background(), syftVersionProbeTimeout)
+	defer cancel()
+	// Bound stdout: even a trusted subprocess should not be able to drive an
+	// unbounded allocation on a startup probe. cappedBuffer discards past the cap.
+	out := &cappedBuffer{limit: maxSyftStderrBytes}
+	cmd := exec.CommandContext(ctx, "syft", "version", "-o", "json")
+	cmd.Stdout = out
 	if err := cmd.Run(); err != nil {
 		return ""
 	}
 	var v struct {
 		Version string `json:"version"`
 	}
-	if json.Unmarshal(out.Bytes(), &v) == nil && v.Version != "" {
+	if json.Unmarshal([]byte(out.String()), &v) == nil && v.Version != "" {
 		return "syft-" + v.Version
 	}
 	return ""

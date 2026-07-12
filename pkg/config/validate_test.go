@@ -6,7 +6,9 @@ import (
 )
 
 func TestValidate_OK(t *testing.T) {
-	// A fully valid (or entirely unset) environment passes.
+	// A fully valid (or entirely unset) environment passes. DevMode on so the
+	// production-only flash-key requirement doesn't apply here (covered separately).
+	t.Setenv("DEVRADAR_DEV_MODE", "true")
 	t.Setenv("DEVRADAR_MAX_IMAGES_PER_TENANT", "500")
 	t.Setenv("DB_MAX_OPEN_CONNS", "10")
 	t.Setenv("SERVER_SHUTDOWN_TIMEOUT_SEC", "5")
@@ -35,6 +37,7 @@ func TestValidate_RejectsInvalid(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("DEVRADAR_DEV_MODE", "true") // isolate to the validator under test
 			t.Setenv(c.key, c.val)
 			err := Validate()
 			if err == nil {
@@ -48,9 +51,16 @@ func TestValidate_RejectsInvalid(t *testing.T) {
 }
 
 func TestValidate_TokenFlashKeyFailsClosed(t *testing.T) {
-	// A set-but-invalid encryption key must FAIL in production (it would otherwise
-	// silently store API tokens in plaintext), be ACCEPTED in dev, and an unset
-	// key is always fine (documented plaintext-in-dev default).
+	// Outside dev the key is REQUIRED and must be valid (an unset or invalid key
+	// would silently store API tokens in plaintext). In dev anything goes.
+	t.Run("unset in prod is rejected", func(t *testing.T) {
+		t.Setenv("DEVRADAR_DEV_MODE", "false")
+		t.Setenv("DEVRADAR_TOKEN_FLASH_KEY", "")
+		err := Validate()
+		if err == nil || !strings.Contains(err.Error(), "DEVRADAR_TOKEN_FLASH_KEY") {
+			t.Fatalf("expected token-flash-key required error in prod, got %v", err)
+		}
+	})
 	t.Run("invalid in prod is rejected", func(t *testing.T) {
 		t.Setenv("DEVRADAR_DEV_MODE", "false")
 		t.Setenv("DEVRADAR_TOKEN_FLASH_KEY", "not-base64-!!") // invalid
@@ -85,6 +95,9 @@ func TestValidate_TokenFlashKeyFailsClosed(t *testing.T) {
 
 func TestValidate_UnsetIsFine(t *testing.T) {
 	// Explicitly clear the bounded vars: unset must not error (defaults apply).
+	// DevMode on so the production-only flash-key requirement doesn't apply (the
+	// flash key is unset here, which is the documented dev default).
+	t.Setenv("DEVRADAR_DEV_MODE", "true")
 	for _, k := range []string{
 		"DEVRADAR_MAX_IMAGES_PER_TENANT", "DB_MAX_OPEN_CONNS", "DB_MAX_IDLE_CONNS",
 		"SERVER_SHUTDOWN_TIMEOUT_SEC", "PORT", "DEVRADAR_SCAN_MAX_AGE", "BASE_URL", "DATABASE_URL",
