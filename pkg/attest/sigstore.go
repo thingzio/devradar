@@ -106,25 +106,39 @@ func (c *Client) Verify(_ context.Context, sbomBytes []byte, subjectDigest strin
 		return nil, fmt.Errorf("attest: build verifier: %w", err)
 	}
 
-	// Try sbom-bytes binding first (strongest), then image-digest.
+	// Try the strong sbom-bytes binding first: the attestation subject is the
+	// sha256 of the exact bytes we stored. The two bindings differ ONLY in the
+	// artifact digest, so a signature/identity/tlog failure fails both identically
+	// — the image-digest fallback can only ever *succeed* on the specific case
+	// where the bytes differ but the claimed image digest matches. We therefore
+	// keep the primary (sbom-bytes) failure reason when both fail, so the operator
+	// sees the real cause rather than a misleading digest mismatch.
 	sbomSum := sha256.Sum256(sbomBytes)
-	res, verr := sev.Verify(b, verify.NewPolicy(
+	res, primaryErr := sev.Verify(b, verify.NewPolicy(
 		verify.WithArtifactDigest("sha256", sbomSum[:]), identityPolicies...))
 	binding := BindingSBOMBytes
-	if verr != nil {
+	if primaryErr != nil {
+		// Strong binding failed. If the policy requires it, stop here — do not
+		// accept the weaker image-digest binding.
+		if c.policy.RequireSBOMBytes {
+			//nolint:nilerr // a rejected verification is a recorded failed Result, not a Go error
+			return c.failed(mode, binding, subjectDigest, bundleJSON, primaryErr.Error()), nil
+		}
 		digestBytes, derr := decodeDigest(subjectDigest)
 		if derr != nil {
-			// A rejected verification is a recorded failed Result, not a Go error:
-			// only an inability to run the check returns err (see the doc comment).
-			//nolint:nilerr // verr is surfaced as the failure reason, not returned
-			return c.failed(mode, binding, subjectDigest, bundleJSON, verr.Error()), nil
+			//nolint:nilerr // primaryErr is surfaced as the failure reason, not returned
+			return c.failed(mode, binding, subjectDigest, bundleJSON, primaryErr.Error()), nil
 		}
-		res, verr = sev.Verify(b, verify.NewPolicy(
+		var fallbackErr error
+		res, fallbackErr = sev.Verify(b, verify.NewPolicy(
 			verify.WithArtifactDigest("sha256", digestBytes), identityPolicies...))
+		if fallbackErr != nil {
+			// Both failed → report the primary (sbom-bytes) reason; the fallback
+			// fails for the same underlying cause unless it was a pure byte mismatch.
+			//nolint:nilerr // recorded failed Result, not a Go error
+			return c.failed(mode, binding, subjectDigest, bundleJSON, primaryErr.Error()), nil
+		}
 		binding = BindingImageDigest
-	}
-	if verr != nil {
-		return c.failed(mode, binding, subjectDigest, bundleJSON, verr.Error()), nil
 	}
 
 	out := c.result(mode, binding, subjectDigest, bundleJSON, res)

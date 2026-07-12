@@ -33,6 +33,11 @@ func TestPolicyVersionStableAndOrderIndependent(t *testing.T) {
 	if a.Version() == (attest.Policy{}).Version() {
 		t.Fatal("configured and empty policies should differ")
 	}
+	// RequireSBOMBytes changes the verification outcome, so it must change the hash.
+	strict := attest.Policy{Identities: []string{"a", "b"}, Issuers: []string{"x"}, RequireSBOMBytes: true}
+	if a.Version() == strict.Version() {
+		t.Fatal("RequireSBOMBytes should change the policy version")
+	}
 }
 
 func TestFakeVerifierPaths(t *testing.T) {

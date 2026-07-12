@@ -34,6 +34,11 @@ type Policy struct {
 	// TUFEnabled allows fetching the public sigstore trust root via TUF when no
 	// TrustedRoot is provided. Off by default to keep ingest network-free.
 	TUFEnabled bool
+	// RequireSBOMBytes, when true, only accepts the strong sbom-bytes binding (the
+	// attestation signed the exact stored SBOM bytes) and rejects the weaker
+	// image-digest fallback. Off by default: image-digest binding matches common
+	// `cosign attest` image flows.
+	RequireSBOMBytes bool
 }
 
 // Configured reports whether the policy has enough material to verify anything.
@@ -65,6 +70,9 @@ func (p Policy) Version() string {
 	buf = appendSorted(buf, keys)
 	if p.TUFEnabled {
 		buf = append(buf, "tuf\x00"...)
+	}
+	if p.RequireSBOMBytes {
+		buf = append(buf, "require-sbom-bytes\x00"...)
 	}
 	// The trusted root affects verification outcome; fold in a digest of it.
 	if len(p.TrustedRoot) > 0 {
