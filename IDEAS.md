@@ -31,58 +31,48 @@ Anchore Enterprise and Aqua emphasize integrations, prioritization, policy gates
 
 EPSS, KEV, and OpenVEX are no longer roadmap features; they are inputs to prioritization and alerting. Scanner divergence is a useful confidence and evidence-quality signal, but scanner agreement is not proof of correctness.
 
-## Release 1 — Actionable alerts and posture intelligence ✅ SHIPPED (v0.11.0, 2026-07-12)
+## Shipped
 
-Shipped, deployed, and validated in production. Detailed design: `docs/superpowers/specs/2026-07-11-actionable-alerts-and-posture-design.md`.
+Condensed changelog of delivered roadmap items. Details live in the design specs
+under `docs/superpowers/specs/` and the security review at
+`docs/2026-07-12-security-review.md`.
 
-Browser-only, tenant-scoped, and opt-in, as scoped. Email and webhook delivery reuse the same durable alert model later (Release 3, item 9). All three items below landed, plus an admin product/system-health dashboard and a public continuous-posture landing page that were built alongside them.
+- **Release 1 — actionable alerts + posture intelligence (v0.11.0).** Browser-first
+  durable alerts via a transactional outbox (`devradar_alert_event_queue`); the
+  deterministic `/work` remediation queue; `/compare` + `/trends` cross-digest
+  comparison, fleet/repo trends, and conservative upgrade guidance. Plus an admin
+  product/system-health dashboard and the public continuous-posture landing page.
+- **Release 2 item 4 — cryptographic attestation verification (v0.12.0–v0.13.0).**
+  Inline `attestation` on `POST /v1/sboms`; `pkg/attest` (nil-safe, `sigstore-go`);
+  keyless (Fulcio SAN×issuer + Rekor) and public-key modes; subject binding
+  (sbom-bytes strongest, image-digest fallback, optional `REQUIRE_SBOM_BYTES`);
+  predicate allow-list (fail-closed); full evidence row in
+  `devradar_sbom_attestation`; surfaced on `GET /v1/sboms/{id}` + SBOM detail UI;
+  `devradarctl submit --attestation`.
+- **Security + performance hardening (v0.12.1–v0.13.0)** from the full-codebase
+  review: keyless issuer pinning, empty-predicate fail-closed, fail-closed attest
+  config; posture-snapshot throttling + hot-path indexes (migration 028);
+  race-safe partition creation; bounded untrusted-input reads (feed / syft-convert
+  / scanner output); XFF client-IP fix; AES-GCM-encrypted token flash; optional
+  API-token TTL; logout CSRF; DevMode decoupled from the storage selector.
 
-### 1. Browser-first actionable alerts ✅
+### Open follow-ups carried from shipped work (non-blocking)
 
-Delivered. Actionable `image`- and `db`-caused finding events are evaluated into durable, idempotent tenant alerts via a transactional outbox (`devradar_alert_event_queue`): `ApplyScan` enqueues each event in the same transaction that writes it, so commit visibility — not event-tuple order — gates readiness. The dashboard shows recent unread alerts; `/alerts` is the history; `/alerts/{id}` is the canonical detail page and future email landing page.
+- **Attestation re-verification** on trust-policy change — user-triggered only,
+  never automatic; schema's `policy_version` already supports the diff.
+- **Multiple attestations per SBOM** (today: one inline bundle).
+- **Fixture-based e2e crypto test** for real bundle verification in CI (today:
+  pure-unit + injected fake + a documented manual check).
+- **Admin dashboard** scans `devradar_finding` a few times per GET, uncached
+  (admin-only QPS; add a short TTL cache or serve from the daily snapshot before
+  the fleet grows).
+- **Fleet CVE risk key** is approximately (not strictly) lexicographic at the
+  EPSS→image-reach boundary — intentional heuristic, documented in `read_cve.go`.
 
-Alert kinds shipped: new KEV exposure, new finding at/above threshold, fix now available, repository posture regression. One tenant-scoped policy controls opt-in, severity, KEV behavior, newly fixable findings, causes, and labels. Policy changes are prospective (events before `updated_at` are skipped); enabling alerts does not backfill history.
+## Next up — Release 2 (cont.): trustworthy automated coverage
 
-Still deferred: email, webhooks, digests, quiet periods, escalations, acknowledgements, delivery history, and per-user state.
-
-### 2. Deterministic “What should I fix?” work queue ✅
-
-Delivered at `/work`. Duplicate scanner rows are merged by canonical finding identity with scanner agreement preserved as metadata. Ordering is a transparent, non-overlapping numeric key: KEV → fix availability → severity → EPSS → affected-image blast radius → finding age. `first_seen` uses a fixed epoch inverse so pagination cursors do not drift between requests. No opaque synthetic score; no runtime-context claims.
-
-### 3. Cross-digest comparison, trends, and conservative upgrade guidance ✅
-
-Delivered at `/compare` and `/trends`. Compares any two tenant-owned digests in one repository (vulnerabilities added/resolved/newly-fixable/re-rated; packages and licenses added/removed; license-policy regressions; net change in relevant findings; transparent improvement/regression verdict). Comparisons include archived SBOMs so a new active digest compares against its retired predecessor. Time-bounded fleet and repository trends are backed by daily `SnapshotTenantPosture` snapshots (findings are mutable, so posture cannot be reconstructed after the fact). Conservative upgrade guidance identifies a newer tracked digest that strictly reduces relevant findings. Alerts link into the comparison or work item that explains the action, closing the loop: **what changed → what matters → whether a tracked upgrade helps**.
-
-### Follow-ups carried out of Release 1 (roadmap, non-blocking)
-
-- **`SnapshotTenantPosture` runs on every scan tick (~96×/day) but only the last write of the day survives.** Correct and serialized under a global advisory lock, but wasteful; gate on a freshness check when tenant count grows.
-- **`SnapshotTenantPosture` does a global `DELETE`+`INSERT` with no `ON CONFLICT`.** Safe in production (single serial scan-job instance under the advisory lock); add `ON CONFLICT DO UPDATE` as defense-in-depth against any future second writer.
-- **Admin dashboard scans `devradar_finding` (~90k rows) multiple times per GET, uncached, including a snapshot write on the read path.** Fine at current scale and admin-only QPS; add a short TTL cache or serve product-health from the daily snapshot before the fleet grows.
-- **Fleet CVE risk key is approximately, not strictly, lexicographic at the EPSS→image-reach boundary** (EPSS deltas below ~0.1 can be broken by image count). Intentional heuristic; documented in `read_cve.go`. Re-tier only if strict EPSS dominance is required.
-
-## Release 2 — Trustworthy automated coverage ← IN PROGRESS
-
-The approved release now underway. Build the trust primitives before adding a registry-facing discovery control plane. These land incrementally, not as one indivisible release. Item 4 (attestation verification) shipped first — a prerequisite for the repository subscriptions in item 6, and it needed no new network control plane.
-
-### 4. Cryptographic attestation verification ✅ SHIPPED
-
-Delivered. A tenant submits a sigstore/cosign attestation inline on `POST /v1/sboms` (`attestation` field); DevRadar verifies it and binds it to the SBOM's subject digest, then records durable evidence. Implementation: `pkg/attest` (nil-safe `Verifier` backed by `sigstore-go`), `devradar_sbom_attestation` (migration 027), config `DEVRADAR_ATTEST_*`, evidence surfaced on `GET /v1/sboms/{id}` + the SBOM detail UI.
-
-- ✅ Subject-digest binding — both SBOM-bytes (strongest) and image-digest, recorded per result.
-- ✅ Cosign key and keyless verification (Fulcio identity/issuer + Rekor).
-- ✅ Configurable trusted identities and issuers (`DEVRADAR_ATTEST_IDENTITIES` / `_ISSUERS`).
-- ✅ Predicate-type validation (allow-list; default CycloneDX + SPDX).
-- ✅ Signature and transparency-log evidence.
-- ✅ Verifier and policy versions, verification time, identity, and issuer — full evidence row, not just a status flag.
-
-Design constraints held: verification is additive and nil-safe (never blocks ingest, unconfigured ⇒ `unverified`); a failed check is a first-class recorded state; trusted root defaults to a config'd JSON (network-free) with opt-in TUF.
-
-Follow-ups (deferred, non-blocking):
-- **User-triggered re-verification** when the trust policy changes (schema's `policy_version` already supports the diff; verification is at-ingest for now, never automatic).
-- **Multiple attestations per SBOM** (v1 accepts one inline bundle).
-- **Fixture-based e2e crypto test** in CI (current unit tests cover the pure surface + inject a fake; real-bundle verification is covered by a documented manual check).
-
-> **Effort: medium–large.** Shipped.
+Item 4 (attestation verification) shipped. The rest of Release 2 builds the
+remaining trust primitives before any registry-facing discovery.
 
 ### 5. SBOM quality and coverage assessment
 
@@ -135,7 +125,14 @@ Add ownership, approval, expiration, evidence URLs, scope preview, reminders, au
 
 ### 9. Integrations and remediation handoff
 
-After the browser alert model proves useful, add email and generic webhooks, followed by integrations justified by customer workflows:
+The durable, channel-neutral alert model is already live (Release 1), so this
+splits into two slices:
+
+**9a — out-of-browser delivery (promoted, do early).** Email + generic webhooks
+riding the existing alert records. Reuses the Resend sender (`pkg/net`) already
+wired for magic links. Closes the "alerts you never see unless you log in" gap.
+
+**9b — workflow adapters (later, demand-driven):**
 
 - GitHub Issues and Checks
 - Jira
@@ -175,10 +172,21 @@ Accept signed attestations produced by purpose-built CI tools for misconfigurati
 
 ## Recommended sequence
 
-1. ✅ Browser alerts + deterministic work queue + cross-digest posture intelligence (v0.11.0)
-2. ✅ Attestation verification → ← **next:** quality assessment → repository subscriptions
-3. CI gates → governed VEX → integrations → deeper remediation
-4. Evidence packs → typed attestation inbox
+1. ✅ Browser alerts + work queue + cross-digest posture intelligence (v0.11.0)
+2. ✅ Attestation verification + security/perf hardening (v0.12.0–v0.13.0)
+3. ← **next:** SBOM quality assessment (#5) → integrations: email/webhooks first (#9) → CI assurance gates (#7)
+4. Repository subscriptions (#6) → governed VEX (#8) → deeper remediation (#10)
+5. Evidence packs (#11) → typed attestation inbox (#12)
+
+**Re-prioritization note (2026-07-12):** #5 (SBOM quality) is promoted — it reuses
+data already captured at ingest (generator/tool, PURLs, licenses, scanner
+divergence, zero-finding failures), needs no new infrastructure, and directly
+raises trust in every other signal. Email/webhook delivery (#9, first slice) is
+pulled earlier than the rest of #9 because the durable alert model is already
+live and "alerts you can't see unless you visit" is the biggest current gap.
+Repository subscriptions (#6) is deferred behind #5 and the delivery slice: it is
+the only large new untrusted-network control plane and should not precede a
+usable quality gate and out-of-browser delivery.
 
 Near-term product loop:
 
