@@ -181,7 +181,7 @@ reclone. Production rollout still requires explicit owner approval.
 
 ```bash
 make tf-init          # terraform init (GCS backend, state prefix "devradar")
-make tf-plan          # review — expect ~1 SQL user, 1 bucket, 3 secrets, SAs,
+make tf-plan          # review — expect ~1 SQL user, 1 bucket, 4 secrets, SAs,
                       #          WIF, AR repo, 1 service, 1 job, 1 scheduler
 make tf-apply         # run by hand with an operator identity
 ```
@@ -199,21 +199,40 @@ terraform -chdir=infra/saas output
 
 ### 2. Populate secret values
 
-Terraform creates the secret *containers*, assembles `devradar-saas-database-url`
-from the generated DB password, and seeds a **placeholder** version for
-`devradar-saas-send-api-key` (so the serve service can deploy before you have a
-real key — with the placeholder, magic-link emails are logged, not sent). Add the
-real values out-of-band; `ignore_changes` keeps them from being reverted:
+Terraform creates four secret *containers* and assembles `devradar-saas-database-url`
+from the generated DB password. The other three seed a **placeholder** version so
+the serve service can deploy before real values exist. They are populated two
+different ways — match each to its source of truth or the next `terraform apply`
+will revert it:
+
+**`devradar-saas-send-api-key` (Resend, required) — out-of-band.** It carries
+`ignore_changes`, so add the real key by hand and Terraform leaves it alone (with
+the placeholder, magic-link emails are logged, not sent):
 
 ```bash
-# Resend key — required for magic-link sign-in
 printf '%s' 'YOUR_RESEND_KEY' | \
   gcloud secrets versions add devradar-saas-send-api-key --data-file=- --project thingzio
-
-# Anthropic key — only for optional admin metrics analysis
-printf '%s' 'YOUR_ANTHROPIC_KEY' | \
-  gcloud secrets versions add devradar-saas-anthropic-api-key --data-file=- --project thingzio
 ```
+
+**`devradar-saas-anthropic-api-key` (optional admin metrics analysis) and
+`devradar-saas-oauth-client-secret` (optional GitHub sign-in) — tfvars-driven.**
+These have **no** `ignore_changes`; tfvars is the source of truth. Set them in the
+gitignored `infra/saas/terraform.tfvars` and re-apply — do **not** add versions with
+`gcloud`, as the next apply would overwrite them:
+
+```hcl
+# infra/saas/terraform.tfvars (gitignored — never committed)
+anthropic_api_key         = "YOUR_ANTHROPIC_KEY"
+github_oauth_client_id    = "YOUR_OAUTH_CLIENT_ID"      # public identifier (plain env var)
+github_oauth_client_secret = "YOUR_OAUTH_CLIENT_SECRET"
+```
+
+```bash
+make tf-apply          # rotates the tfvars-driven secrets to their real values
+```
+
+Leaving either var empty keeps the placeholder, which the app treats as unset (the
+AI summary stays off; the UI stays email-only).
 
 ### 3. Configure GitHub Actions (keyless deploy via WIF)
 
@@ -321,10 +340,17 @@ finding events after a scanner upgrade — these are recorded but never alerted 
 
 ### Rotate a secret
 
+The **Resend key** is out-of-band (`ignore_changes`) — add a version and refresh
+the service:
+
 ```bash
 printf '%s' 'NEW_VALUE' | gcloud secrets versions add devradar-saas-send-api-key --data-file=- --project thingzio
 gcloud run services update devradar-saas-serve --region us-west1   # pick up "latest" version
 ```
+
+The **Anthropic key** and **GitHub OAuth client secret** are tfvars-driven — edit
+their values in `infra/saas/terraform.tfvars` and `make tf-apply`. Do not rotate
+these with `gcloud`; the next apply would overwrite the hand-added version.
 
 (The DB password is managed by Terraform via `random_password`; rotate it with a
 `terraform apply -replace=random_password.db_password`, which also updates the

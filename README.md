@@ -399,6 +399,12 @@ curl -s http://localhost:8080/v1/sboms/<sbom_id>/events   -H "Authorization: Bea
 curl -s http://localhost:8080/v1/licenses                  -H "Authorization: Bearer $DR_TOKEN"  # fleet rollup
 curl -s http://localhost:8080/v1/sboms/<sbom_id>/licenses  -H "Authorization: Bearer $DR_TOKEN"  # per package, classified + policy verdict
 
+# VEX — suppress findings via an OpenVEX assertion (read-time overlay, never mutates findings)
+curl -s http://localhost:8080/v1/vex                       -H "Authorization: Bearer $DR_TOKEN"  # list submitted documents
+curl -s -X POST http://localhost:8080/v1/vex \
+  -H "Authorization: Bearer $DR_TOKEN" -H "Content-Type: application/json" \
+  --data @openvex.json                                                                           # submit (raw OpenVEX JSON, max 5 MiB)
+
 # stop tracking an image (archive — drops from scans + images; history kept)
 curl -s -X DELETE http://localhost:8080/v1/sboms/<sbom_id> -H "Authorization: Bearer $DR_TOKEN"
 ```
