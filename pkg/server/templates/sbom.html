@@ -20,6 +20,30 @@
     {{if .Tool}}· {{.Tool}} {{.ToolVersion}}{{end}}
   </p>
 
+  <div class="card">
+    <div class="card-head"><h2>Attestation</h2></div>
+    {{if eq .VerificationStatus "verified"}}
+      <p class="sub" style="margin-top:0"><span class="pill ok">&#10003; Verified</span> {{if .Attestation}}{{.Attestation.BindingLabel}}{{end}}</p>
+    {{else if eq .VerificationStatus "failed"}}
+      <p class="sub" style="margin-top:0"><span class="pill danger">&#10007; Verification failed</span> {{if .Attestation}}{{.Attestation.FailureReason}}{{end}}</p>
+    {{else}}
+      <p class="muted" style="margin-top:0">Unverified — no signed attestation was submitted with this SBOM. DevRadar guarantees determinism; authenticity is an optional overlay. <a href="/submit">How to attach one</a>.</p>
+    {{end}}
+    {{if .Attestation}}
+    <table>
+      <tbody>
+        {{if .Attestation.Mode}}<tr><th>Mode</th><td>{{if eq .Attestation.Mode "keyless"}}Keyless (Fulcio + Rekor){{else}}Public key{{end}}</td></tr>{{end}}
+        {{if .Attestation.Identity}}<tr><th>Signer identity</th><td class="mono">{{.Attestation.Identity}}</td></tr>{{end}}
+        {{if .Attestation.Issuer}}<tr><th>OIDC issuer</th><td class="mono">{{.Attestation.Issuer}}</td></tr>{{end}}
+        {{if .Attestation.KeyID}}<tr><th>Key ID</th><td class="mono">{{.Attestation.KeyID}}</td></tr>{{end}}
+        {{if .Attestation.PredicateType}}<tr><th>Predicate</th><td class="mono">{{.Attestation.PredicateType}}</td></tr>{{end}}
+        {{if .Attestation.LogRef}}<tr><th>Transparency log</th><td class="mono">{{.Attestation.LogRef}}</td></tr>{{end}}
+        {{if .Attestation.VerifiedAt}}<tr><th>Verified at</th><td class="nowrap">{{.Attestation.VerifiedAt}}</td></tr>{{end}}
+      </tbody>
+    </table>
+    {{end}}
+  </div>
+
   <section class="stats stats-sev">
     <div class="stat"><span class="stat-n">{{.Counts.Total}}</span><span class="stat-l">Findings</span></div>
     <div class="stat"><span class="stat-n danger-n">{{.Counts.Critical}}</span><span class="stat-l">Critical</span></div>

@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/thingzio/devradar/pkg/attest"
 	"github.com/thingzio/devradar/pkg/config"
 	"github.com/thingzio/devradar/pkg/data/postgres"
 	"github.com/thingzio/devradar/pkg/middleware"
@@ -59,15 +61,22 @@ type submitRequest struct {
 	Version     string   `json:"version,omitempty"`      // image tag (e.g. "v1.20.2"); else parsed from image_ref
 	Labels      []string `json:"labels,omitempty"`       // tenant grouping labels (e.g. "team-x","prod")
 	GeneratedAt string   `json:"generated_at,omitempty"` // RFC3339 override
+	Attestation string   `json:"attestation,omitempty"`  // base64 sigstore bundle; verified if trust policy configured
 }
 
 type submitResponse struct {
-	SBOMID   string `json:"sbom_id"`
-	ImageRef string `json:"image_ref"`
-	Digest   string `json:"digest"`
-	Format   string `json:"format"`
-	Existing bool   `json:"existing"` // true if this SBOM was already stored
+	SBOMID             string `json:"sbom_id"`
+	ImageRef           string `json:"image_ref"`
+	Digest             string `json:"digest"`
+	Format             string `json:"format"`
+	Existing           bool   `json:"existing"`            // true if this SBOM was already stored
+	VerificationStatus string `json:"verification_status"` // unverified | verified | failed
 }
+
+// maxAttestationBytes caps the decoded attestation bundle (untrusted input).
+// Sigstore bundles are small (signature + cert chain + inclusion proof); 1 MiB
+// is generous and keeps a hostile submitter from inflating the request.
+const maxAttestationBytes = 1 << 20
 
 // handleSubmitSBOM ingests an SBOM: validate, resolve subject, content-address,
 // store bytes + row. Thin and idempotent; no scanning or conversion here.
@@ -245,10 +254,58 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Verify an attestation if one was supplied and a trust policy is configured.
+	// Best-effort and fully isolated (like license extraction above): a verifier
+	// error or a failed verification is recorded as evidence and reflected in the
+	// response, but NEVER changes the 202 or fails ingest. DevRadar's guarantee is
+	// determinism; authenticity is an additive overlay.
+	verificationStatus := s.verifyAttestation(ctx, tn.ID, effID, raw, subj.Digest, req.Attestation)
+
 	writeJSON(w, http.StatusAccepted, submitResponse{
 		SBOMID: effID, ImageRef: imageRef, Digest: subj.Digest,
-		Format: string(subj.Format), Existing: !inserted,
+		Format: string(subj.Format), Existing: !inserted, VerificationStatus: verificationStatus,
 	})
+}
+
+// verifyAttestation runs attestation verification for a just-ingested SBOM and
+// persists the evidence, returning the resulting verification_status for the
+// response. It degrades to attest.StatusUnverified whenever verification is not
+// configured, not requested, or cannot be completed — it never returns an error
+// and never blocks ingest.
+func (s *Server) verifyAttestation(ctx context.Context, tenantID, sbomID string, sbomBytes []byte, subjectDigest, attestationB64 string) string {
+	if attestationB64 == "" || s.verifier == nil || !s.verifier.Available() {
+		return attest.StatusUnverified
+	}
+	bundle, err := base64.StdEncoding.DecodeString(attestationB64)
+	if err != nil {
+		slog.Warn("attestation not valid base64", "sbom_id", sbomID)
+		return attest.StatusUnverified
+	}
+	if len(bundle) > maxAttestationBytes {
+		slog.Warn("attestation exceeds size limit", "sbom_id", sbomID, "bytes", len(bundle))
+		return attest.StatusUnverified
+	}
+
+	res, err := s.verifier.Verify(ctx, sbomBytes, subjectDigest, bundle)
+	if err != nil {
+		// Could not run the check (malformed bundle, verifier fault): record a
+		// failed result so the outcome is auditable, but never fail ingest.
+		slog.Warn("attestation verification error", "sbom_id", sbomID, "error", err)
+		res = &attest.Result{
+			Outcome: attest.ResultFailed, Mode: attest.ModeKeyless,
+			Binding: attest.BindingImageDigest, SubjectDigest: subjectDigest,
+			VerifierVersion: "unknown", PolicyVersion: "unknown",
+			FailureReason: err.Error(), Envelope: bundle,
+		}
+	}
+	if res == nil {
+		return attest.StatusUnverified
+	}
+	if err := s.store.SaveAttestation(ctx, tenantID, sbomID, res); err != nil {
+		slog.Error("persist attestation evidence", "sbom_id", sbomID, "error", err)
+		return attest.StatusUnverified
+	}
+	return res.Outcome
 }
 
 // normalizeLabels cleans tenant-supplied grouping labels: trim, lowercase, drop

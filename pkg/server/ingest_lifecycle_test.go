@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/thingzio/devradar/pkg/attest"
 	"github.com/thingzio/devradar/pkg/data/postgres"
 	"github.com/thingzio/devradar/pkg/gcs"
 	"github.com/thingzio/devradar/pkg/server"
@@ -52,7 +53,16 @@ func sbomStatus(t *testing.T, st *postgres.Store, id string) string {
 func serverWithBlob(t *testing.T, blobs server.BlobStore) (*server.Server, *postgres.Store) {
 	t.Helper()
 	st := testPostgresStore(t)
-	return server.New(st, blobs, nil, nil, server.Options{Version: "test"}), st
+	return server.New(st, blobs, nil, nil, nil, server.Options{Version: "test"}), st
+}
+
+// serverWithVerifier builds a Server with an injected attestation verifier (and a
+// local blob store) so ingest tests can exercise the verified/failed/error paths
+// without real cryptography.
+func serverWithVerifier(t *testing.T, v attest.Verifier) (*server.Server, *postgres.Store) {
+	t.Helper()
+	st := testPostgresStore(t)
+	return server.New(st, gcs.LocalStore{Dir: t.TempDir()}, nil, nil, v, server.Options{Version: "test"}), st
 }
 
 func submitBody(t *testing.T) string {

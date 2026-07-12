@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -133,6 +134,13 @@ func (s *Server) handleGetSBOM(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeReadErr(w, err, "failed to load sbom")
 		return
+	}
+	// Attach verification evidence when present. A missing row is the normal
+	// "no attestation submitted" case, not an error.
+	if att, aerr := s.store.GetAttestation(r.Context(), tn.ID, sb.SBOMID); aerr == nil {
+		sb.Attestation = att
+	} else if !errors.Is(aerr, postgres.ErrNotFound) {
+		slog.Warn("load attestation evidence", "sbom_id", sb.SBOMID, "error", aerr)
 	}
 	writeJSON(w, http.StatusOK, sb)
 }

@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS devradar_sbom (
     tool_version        TEXT,                          -- bounds cataloging freshness
     package_count       INT NOT NULL DEFAULT 0,        -- for the zero-findings tripwire
     object_path         TEXT NOT NULL,                 -- gs://.../{tenant}/{id}
-    verification_status TEXT NOT NULL DEFAULT 'unverified', -- unverified | attested
+    verification_status TEXT NOT NULL DEFAULT 'unverified', -- unverified | verified | failed (see 027_attestation.sql)
     status              TEXT NOT NULL DEFAULT 'active',     -- active | archived
     generated_at        TIMESTAMPTZ,                   -- from SBOM; NULL → see submitted_at
     submitted_at        TIMESTAMPTZ NOT NULL DEFAULT now(),

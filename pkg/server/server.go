@@ -14,6 +14,7 @@ import (
 	"runtime/debug"
 	"time"
 
+	"github.com/thingzio/devradar/pkg/attest"
 	"github.com/thingzio/devradar/pkg/config"
 	"github.com/thingzio/devradar/pkg/data/postgres"
 	"github.com/thingzio/devradar/pkg/gcs"
@@ -31,11 +32,12 @@ type Options struct {
 
 // Server holds handler dependencies.
 type Server struct {
-	store  *postgres.Store
-	blobs  BlobStore
-	email  drnet.Sender  // nil in dev → magic links are logged, not sent
-	github OAuthProvider // nil when GitHub OAuth is not configured → button/routes hidden
-	opts   Options
+	store    *postgres.Store
+	blobs    BlobStore
+	email    drnet.Sender    // nil in dev → magic links are logged, not sent
+	github   OAuthProvider   // nil when GitHub OAuth is not configured → button/routes hidden
+	verifier attest.Verifier // nil when attestation verification is not configured → SBOMs stay 'unverified'
+	opts     Options
 }
 
 // BlobStore persists and retrieves raw SBOM bytes (GCS in production).
@@ -53,9 +55,10 @@ type OAuthProvider interface {
 
 // New builds a Server. email may be nil (development), in which case magic-link
 // URLs are logged instead of emailed. github may be nil, in which case GitHub
-// sign-in is disabled (no button, no routes).
-func New(store *postgres.Store, blobs BlobStore, email drnet.Sender, github OAuthProvider, opts Options) *Server {
-	return &Server{store: store, blobs: blobs, email: email, github: github, opts: opts}
+// sign-in is disabled (no button, no routes). verifier may be nil, in which case
+// submitted attestations are ignored and SBOMs remain 'unverified'.
+func New(store *postgres.Store, blobs BlobStore, email drnet.Sender, github OAuthProvider, verifier attest.Verifier, opts Options) *Server {
+	return &Server{store: store, blobs: blobs, email: email, github: github, verifier: verifier, opts: opts}
 }
 
 // Run is the entry point for the serve binary: it wires the store, blob store,
@@ -101,7 +104,24 @@ func Run(ctx context.Context, opts Options) error {
 		slog.Info("GitHub OAuth not configured; email-only sign-in")
 	}
 
-	return New(store, blobs, email, github, opts).Serve(ctx)
+	// Attestation verification. Optional: without trust material (identities or
+	// keys) the verifier is nil, submitted attestations are ignored, and SBOMs
+	// stay 'unverified'. A misconfiguration is logged but never fatal — ingest
+	// must keep working even if the trust policy is wrong.
+	var verifier attest.Verifier
+	if config.AttestConfigured() {
+		v, err := attest.New(config.AttestPolicy())
+		if err != nil {
+			slog.Error("attestation verification misconfigured; disabling", "error", err)
+		} else if v.Available() {
+			verifier = v
+			slog.Info("attestation verification enabled")
+		}
+	} else {
+		slog.Info("attestation verification not configured; SBOMs remain unverified")
+	}
+
+	return New(store, blobs, email, github, verifier, opts).Serve(ctx)
 }
 
 // Handler builds the routed, middleware-wrapped http.Handler.

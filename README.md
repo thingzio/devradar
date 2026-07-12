@@ -94,9 +94,9 @@ DevRadar operates on a **trust-on-submission** model. It guarantees:
 - **Determinism / reproducibility** — identical SBOM + identical scanner DB → identical findings, always.
 - **Clean change causality** — every delta on a fixed SBOM is DB-driven; a new SBOM for the same image is image-driven. The digest boundary is explicit in the data.
 
-It does **not** guarantee **authenticity** — that a submitted SBOM faithfully represents the image digest it claims. DevRadar cannot verify this without pulling the image. If a tenant submits an SBOM with the wrong digest or a stale inventory, the results reflect what they attested to. Garbage in, garbage out — by design, and clearly bounded.
+By default DevRadar does **not** guarantee **authenticity** — that a submitted SBOM faithfully represents the image digest it claims. Without an attestation it cannot verify this (it never pulls the image), so a wrong digest or stale inventory yields results that reflect what the tenant attested to. Garbage in, garbage out — by design, and clearly bounded.
 
-Signed SBOM attestations (cosign / in-toto / SLSA), where DevRadar verifies the signature and that its subject digest matches, are a planned upgrade for tenants who need authenticity. The v1 schema carries a `verification_status` field so this slots in without migration.
+**Authenticity is now available as an optional overlay.** A tenant may submit a sigstore/cosign attestation alongside the SBOM (an `attestation` field on `POST /v1/sboms`). When a trust policy is configured, DevRadar verifies the signature (keyless via Fulcio identity/issuer + Rekor, or a configured public key) and binds it to the SBOM's subject digest — either to the exact SBOM bytes (strongest) or to the resolved image digest. The outcome moves the SBOM's `verification_status` to `verified` or `failed`, and the full evidence (mode, identity/issuer or key, predicate type, transparency-log reference, verifier + policy versions) is retained in `devradar_sbom_attestation` for audit. Verification is strictly additive: it is never required, an unconfigured deployment leaves every SBOM `unverified`, and a verification failure never blocks ingest. DevRadar still guarantees determinism regardless.
 
 ### Is Scanning an SBOM as Accurate as Scanning the Image?
 

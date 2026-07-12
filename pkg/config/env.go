@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/thingzio/devradar/pkg/attest"
 )
 
 // MaxSBOMBytes caps the size of an SBOM anywhere it crosses a trust boundary:
@@ -216,4 +218,71 @@ func LoginRatePerHourIP() int {
 // every run. Tunable via DEVRADAR_SCAN_MAX_AGE (a Go duration, e.g. "12h").
 func ScanMaxAge() time.Duration {
 	return GetEnvAsDuration("DEVRADAR_SCAN_MAX_AGE", 12*time.Hour)
+}
+
+// AttestEnabled reports whether attestation verification is turned on. On by
+// default, but the feature still requires trust material (identities or keys) to
+// do anything — see AttestConfigured. Set DEVRADAR_ATTEST=false to hard-disable.
+func AttestEnabled() bool {
+	return GetEnv("DEVRADAR_ATTEST", "true") != "false"
+}
+
+// AttestConfigured reports whether attestation verification has enough trust
+// material to run (mirrors GitHubOAuthConfigured): enabled AND at least one
+// allowed identity or public key. When false, submitted attestations are ignored
+// and SBOMs stay 'unverified' — verification is never a hard dependency.
+func AttestConfigured() bool {
+	if !AttestEnabled() {
+		return false
+	}
+	p := AttestPolicy()
+	return p.Configured()
+}
+
+// AttestPolicy assembles the trust policy from the environment:
+//   - DEVRADAR_ATTEST_IDENTITIES   comma-separated Fulcio SAN identities (keyless)
+//   - DEVRADAR_ATTEST_ISSUERS      comma-separated OIDC issuers (keyless)
+//   - DEVRADAR_ATTEST_PUBLIC_KEYS  comma-separated paths to PEM public keys (key mode)
+//   - DEVRADAR_ATTEST_PREDICATE_TYPES comma-separated allow-list (empty ⇒ defaults)
+//   - DEVRADAR_ATTEST_TRUSTED_ROOT path to a sigstore trusted-root JSON
+//   - DEVRADAR_ATTEST_TUF          "true" to allow fetching the public sigstore
+//     TUF root when no trusted-root file is set (off by default: ingest stays
+//     network-free)
+//
+// A key path that cannot be read is skipped with the error left to the verifier
+// constructor to surface, so a single typo never silently weakens the policy
+// without a log line at startup.
+func AttestPolicy() attest.Policy {
+	p := attest.Policy{
+		Identities:     csvList("DEVRADAR_ATTEST_IDENTITIES"),
+		Issuers:        csvList("DEVRADAR_ATTEST_ISSUERS"),
+		PredicateTypes: csvList("DEVRADAR_ATTEST_PREDICATE_TYPES"),
+		TUFEnabled:     GetEnvBool("DEVRADAR_ATTEST_TUF"),
+	}
+	for _, path := range csvList("DEVRADAR_ATTEST_PUBLIC_KEYS") {
+		if pem, err := os.ReadFile(path); err == nil {
+			p.PublicKeys = append(p.PublicKeys, pem)
+		}
+	}
+	if root := GetEnv("DEVRADAR_ATTEST_TRUSTED_ROOT", ""); root != "" {
+		if data, err := os.ReadFile(root); err == nil {
+			p.TrustedRoot = data
+		}
+	}
+	return p
+}
+
+// csvList splits a comma-separated env var into trimmed, non-empty values.
+func csvList(key string) []string {
+	raw := GetEnv(key, "")
+	if raw == "" {
+		return nil
+	}
+	var out []string
+	for v := range strings.SplitSeq(raw, ",") {
+		if t := strings.TrimSpace(v); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }

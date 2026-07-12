@@ -117,3 +117,24 @@ type Alert struct {
 	ReadAt          *time.Time
 	CreatedAt       time.Time
 }
+
+// Attestation is a row in devradar_sbom_attestation: the durable evidence of one
+// cryptographic verification decision for an SBOM. Optional fields are empty when
+// not applicable to the mode/outcome (e.g. CertIdentity only on keyless).
+type Attestation struct {
+	ID                 string    `json:"id"`
+	SBOMID             string    `json:"sbom_id"`
+	Result             string    `json:"result"`  // verified | failed
+	Mode               string    `json:"mode"`    // keyless | key
+	Binding            string    `json:"binding"` // sbom-bytes | image-digest
+	SubjectDigest      string    `json:"subject_digest"`
+	PredicateType      string    `json:"predicate_type,omitempty"`
+	CertIdentity       string    `json:"cert_identity,omitempty"`
+	OIDCIssuer         string    `json:"oidc_issuer,omitempty"`
+	KeyID              string    `json:"key_id,omitempty"`
+	TransparencyLogRef string    `json:"transparency_log_ref,omitempty"`
+	VerifierVersion    string    `json:"verifier_version"`
+	PolicyVersion      string    `json:"policy_version"`
+	FailureReason      string    `json:"failure_reason,omitempty"`
+	VerifiedAt         time.Time `json:"verified_at"`
+}

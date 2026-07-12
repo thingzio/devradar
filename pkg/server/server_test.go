@@ -39,7 +39,7 @@ func testServer(t *testing.T) (*server.Server, *postgres.Store) {
 	t.Helper()
 	st := testPostgresStore(t)
 	// email + OAuth nil → API-only; local blob store under a temp dir.
-	srv := server.New(st, gcs.LocalStore{Dir: t.TempDir()}, nil, nil, server.Options{Version: "test"})
+	srv := server.New(st, gcs.LocalStore{Dir: t.TempDir()}, nil, nil, nil, server.Options{Version: "test"})
 	return srv, st
 }
 

@@ -458,18 +458,22 @@ func (s *Store) ImageTimeline(ctx context.Context, tenantID, imageRef, minSeveri
 
 // SBOMDetail is a tenant-facing view of one SBOM's metadata.
 type SBOMDetail struct {
-	SBOMID      string         `json:"sbom_id"`
-	ImageRef    string         `json:"image_ref"`
-	Digest      string         `json:"digest"`
-	Format      string         `json:"format"`
-	SpecVersion string         `json:"spec_version,omitempty"`
-	Tool        string         `json:"tool,omitempty"`
-	ToolVersion string         `json:"tool_version,omitempty"`
-	Status      string         `json:"status"`
-	SubmittedAt time.Time      `json:"submitted_at"`
-	GeneratedAt *time.Time     `json:"generated_at,omitempty"`
-	Labels      []string       `json:"labels,omitempty"`
-	Counts      SeverityCounts `json:"counts"`
+	SBOMID             string         `json:"sbom_id"`
+	ImageRef           string         `json:"image_ref"`
+	Digest             string         `json:"digest"`
+	Format             string         `json:"format"`
+	SpecVersion        string         `json:"spec_version,omitempty"`
+	Tool               string         `json:"tool,omitempty"`
+	ToolVersion        string         `json:"tool_version,omitempty"`
+	Status             string         `json:"status"`
+	VerificationStatus string         `json:"verification_status"`
+	SubmittedAt        time.Time      `json:"submitted_at"`
+	GeneratedAt        *time.Time     `json:"generated_at,omitempty"`
+	Labels             []string       `json:"labels,omitempty"`
+	Counts             SeverityCounts `json:"counts"`
+	// Attestation is the verification evidence, present only when an attestation
+	// has been submitted and evaluated (nil otherwise). Populated by the handler.
+	Attestation *Attestation `json:"attestation,omitempty"`
 }
 
 // GetSBOM returns one SBOM's metadata + full severity breakdown, tenant-scoped.
@@ -481,7 +485,7 @@ func (s *Store) GetSBOM(ctx context.Context, tenantID, sbomID, minSeverity strin
 	var gen sql.NullTime
 	err := s.db.QueryRowContext(ctx, `
 		SELECT sb.id, sb.image_ref, sb.digest, sb.format, sb.spec_version, sb.tool, sb.tool_version,
-		       sb.status, sb.submitted_at, sb.generated_at, sb.labels,
+		       sb.status, sb.verification_status, sb.submitted_at, sb.generated_at, sb.labels,
 		       COUNT(*) FILTER (WHERE f.severity='critical'),
 		       COUNT(*) FILTER (WHERE f.severity='high'),
 		       COUNT(*) FILTER (WHERE f.severity='medium'),
@@ -495,7 +499,7 @@ func (s *Store) GetSBOM(ctx context.Context, tenantID, sbomID, minSeverity strin
 		WHERE sb.id = $1 AND sb.tenant_id = $2
 		GROUP BY sb.id`, sbomID, tenantID).Scan(
 		&d.SBOMID, &d.ImageRef, &d.Digest, &d.Format, &spec, &tool, &toolVer,
-		&d.Status, &d.SubmittedAt, &gen, pq.Array(&d.Labels),
+		&d.Status, &d.VerificationStatus, &d.SubmittedAt, &gen, pq.Array(&d.Labels),
 		&c.Critical, &c.High, &c.Medium, &c.Low, &c.Negligible, &c.Unknown, &c.Total)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound

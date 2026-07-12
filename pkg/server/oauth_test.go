@@ -34,7 +34,7 @@ func (f fakeOAuth) Exchange(_ context.Context, _ string) (*oauth.Identity, error
 func oauthServer(t *testing.T, p server.OAuthProvider) (*server.Server, *postgres.Store) {
 	t.Helper()
 	_, st := testServer(t)
-	srv := server.New(st, gcs.LocalStore{Dir: t.TempDir()}, nil, p, server.Options{Version: "test"})
+	srv := server.New(st, gcs.LocalStore{Dir: t.TempDir()}, nil, p, nil, server.Options{Version: "test"})
 	return srv, st
 }
 

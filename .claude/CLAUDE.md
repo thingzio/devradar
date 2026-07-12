@@ -49,7 +49,7 @@ Split scanning into **matching** (packages → CVEs) and **cataloging** (image �
 
 ## Trust Model (important — don't overclaim)
 
-**Trust-on-submission.** DevRadar guarantees **determinism** (same SBOM + same scanner DB → same findings) and **clean change causality** — NOT **authenticity** (that the SBOM faithfully represents its claimed digest). A wrong/stale SBOM yields wrong results; that's on the submitter, by design. The `devradar_sbom.verification_status` field (`unverified` in v1) reserves space for signed-attestation verification later without migration.
+**Trust-on-submission, with optional cryptographic verification.** DevRadar always guarantees **determinism** (same SBOM + same scanner DB → same findings) and **clean change causality**. **Authenticity** (that the SBOM faithfully represents its claimed digest) is NOT guaranteed by default — a wrong/stale SBOM yields wrong results; that's on the submitter. But a tenant may now submit a sigstore/cosign attestation inline on `POST /v1/sboms`; when a trust policy is configured (`DEVRADAR_ATTEST_*`), `pkg/attest` verifies it (keyless Fulcio/Rekor or a configured public key) and binds it to the subject digest (to the exact SBOM bytes, strongest, or the image digest). The outcome sets `devradar_sbom.verification_status` (`unverified | verified | failed`) and the full auditable evidence lives in `devradar_sbom_attestation` (migration 027). **Non-negotiable**: verification is additive and nil-safe (Claude-client pattern) — an unconfigured verifier or a failed/errored verification NEVER blocks ingest and NEVER changes findings. Re-verification is user-triggered only, never automatic. Do not overclaim: a `verified` SBOM means the attestation checked out, not that the image is safe.
 
 ## Data Model
 

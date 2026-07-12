@@ -23,6 +23,7 @@ Roadmap items either monetize the event stream DevRadar already produces or wide
 - API-first ingestion
 - Low infrastructure and credential risk because images are never pulled
 - Browser-first actionable alerts, deterministic remediation work queue, and cross-digest posture intelligence (shipped in v0.11.0)
+- Optional cryptographic attestation verification (sigstore/cosign, keyless + key) binding an SBOM to its subject digest with retained, auditable evidence
 
 ### Competitive lesson
 
@@ -59,22 +60,29 @@ Delivered at `/compare` and `/trends`. Compares any two tenant-owned digests in 
 - **Admin dashboard scans `devradar_finding` (~90k rows) multiple times per GET, uncached, including a snapshot write on the read path.** Fine at current scale and admin-only QPS; add a short TTL cache or serve product-health from the daily snapshot before the fleet grows.
 - **Fleet CVE risk key is approximately, not strictly, lexicographic at the EPSS→image-reach boundary** (EPSS deltas below ~0.1 can be broken by image count). Intentional heuristic; documented in `read_cve.go`. Re-tier only if strict EPSS dominance is required.
 
-## Release 2 — Trustworthy automated coverage ← NEXT
+## Release 2 — Trustworthy automated coverage ← IN PROGRESS
 
-This is the approved next release now that Release 1 has shipped. Build the trust primitives before adding a registry-facing discovery control plane. These should land incrementally, not as one indivisible release. Item 4 (attestation verification) is the recommended starting point: it is a prerequisite for the repository subscriptions in item 6 and needs no new network control plane.
+The approved release now underway. Build the trust primitives before adding a registry-facing discovery control plane. These land incrementally, not as one indivisible release. Item 4 (attestation verification) shipped first — a prerequisite for the repository subscriptions in item 6, and it needed no new network control plane.
 
-### 4. Cryptographic attestation verification
+### 4. Cryptographic attestation verification ✅ SHIPPED
 
-- Subject-digest binding
-- Cosign key and keyless verification
-- Configurable trusted identities and issuers
-- Predicate-type validation
-- Signature and transparency-log evidence
-- Verifier and policy versions, verification time, identity, and issuer
+Delivered. A tenant submits a sigstore/cosign attestation inline on `POST /v1/sboms` (`attestation` field); DevRadar verifies it and binds it to the SBOM's subject digest, then records durable evidence. Implementation: `pkg/attest` (nil-safe `Verifier` backed by `sigstore-go`), `devradar_sbom_attestation` (migration 027), config `DEVRADAR_ATTEST_*`, evidence surfaced on `GET /v1/sboms/{id}` + the SBOM detail UI.
 
-An expanded status string alone is insufficient; retain evidence required to explain and audit every decision.
+- ✅ Subject-digest binding — both SBOM-bytes (strongest) and image-digest, recorded per result.
+- ✅ Cosign key and keyless verification (Fulcio identity/issuer + Rekor).
+- ✅ Configurable trusted identities and issuers (`DEVRADAR_ATTEST_IDENTITIES` / `_ISSUERS`).
+- ✅ Predicate-type validation (allow-list; default CycloneDX + SPDX).
+- ✅ Signature and transparency-log evidence.
+- ✅ Verifier and policy versions, verification time, identity, and issuer — full evidence row, not just a status flag.
 
-> **Effort: medium–large.**
+Design constraints held: verification is additive and nil-safe (never blocks ingest, unconfigured ⇒ `unverified`); a failed check is a first-class recorded state; trusted root defaults to a config'd JSON (network-free) with opt-in TUF.
+
+Follow-ups (deferred, non-blocking):
+- **User-triggered re-verification** when the trust policy changes (schema's `policy_version` already supports the diff; verification is at-ingest for now, never automatic).
+- **Multiple attestations per SBOM** (v1 accepts one inline bundle).
+- **Fixture-based e2e crypto test** in CI (current unit tests cover the pure surface + inject a fake; real-bundle verification is covered by a documented manual check).
+
+> **Effort: medium–large.** Shipped.
 
 ### 5. SBOM quality and coverage assessment
 
@@ -168,7 +176,7 @@ Accept signed attestations produced by purpose-built CI tools for misconfigurati
 ## Recommended sequence
 
 1. ✅ Browser alerts + deterministic work queue + cross-digest posture intelligence (v0.11.0)
-2. ← **next:** Verification → quality assessment → repository subscriptions
+2. ✅ Attestation verification → ← **next:** quality assessment → repository subscriptions
 3. CI gates → governed VEX → integrations → deeper remediation
 4. Evidence packs → typed attestation inbox
 

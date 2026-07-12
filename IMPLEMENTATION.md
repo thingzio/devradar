@@ -26,7 +26,7 @@ The scanner design (a `Scanner` interface to run the tool, a `Converter` interfa
 
 **Store change, not snapshots.** Day-over-day findings on a fixed SBOM are ~99% identical. DevRadar keeps *current state* (`devradar_finding`, UPSERT) plus an append-only *change log* (`devradar_finding_event`). The change log is the delta history — there is no nightly diff job and no snapshot table.
 
-**Trust on submission, but record provenance.** DevRadar cannot verify that an SBOM faithfully represents its claimed digest without pulling the image. It doesn't try. Every SBOM carries a `verification_status` (`unverified` in v1) so signed-attestation verification can be added later without migration.
+**Trust on submission, with optional cryptographic verification.** DevRadar cannot verify that an SBOM faithfully represents its claimed digest by pulling the image — it never pulls images. Instead a tenant may submit a sigstore/cosign attestation inline; when a trust policy is configured DevRadar verifies it (keyless Fulcio/Rekor or a configured key) and binds it to the subject digest, moving `verification_status` from `unverified` to `verified`/`failed` and retaining full evidence in `devradar_sbom_attestation` (`pkg/attest` + migration 027). Verification is additive and never blocks ingest; without it, SBOMs stay `unverified` as before.
 
 **Normalize across scanners.** No single scanner's output shape defines the data. Both Grype and Trivy run from day one, normalized into one `Vulnerability` type. New scanners register as converters.
 

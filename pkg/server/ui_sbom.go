@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -75,6 +76,24 @@ type sbomDetailView struct {
 	Packages       []pkgRow
 	PkgChart       template.HTML // inline SVG: findings-per-package bar chart
 	Failures       []failureRow
+
+	VerificationStatus string           // unverified | verified | failed
+	Attestation        *attestationView // nil when no attestation has been evaluated
+}
+
+// attestationView is the SBOM detail page's verification evidence panel.
+type attestationView struct {
+	Result        string // verified | failed
+	Mode          string // keyless | key
+	Binding       string // sbom-bytes | image-digest
+	BindingLabel  string // human phrase for the binding strength
+	Identity      string // Fulcio SAN (keyless)
+	Issuer        string // OIDC issuer (keyless)
+	KeyID         string // public-key fingerprint (key mode)
+	PredicateType string
+	LogRef        string // Rekor reference
+	FailureReason string
+	VerifiedAt    string
 }
 
 // handleSBOMDetail renders one SBOM: metadata + severity rollup, a paginated
@@ -151,6 +170,13 @@ func (s *Server) handleSBOMDetail(w http.ResponseWriter, r *http.Request) {
 		v.GeneratedAt = detail.GeneratedAt.Format("2006-01-02 15:04")
 	}
 
+	v.VerificationStatus = detail.VerificationStatus
+	if att, aerr := s.store.GetAttestation(r.Context(), tn.ID, id); aerr == nil {
+		v.Attestation = attestationPanel(att)
+	} else if !errors.Is(aerr, postgres.ErrNotFound) {
+		slog.Warn("load attestation evidence", "sbom_id", id, "error", aerr)
+	}
+
 	for _, f := range findings {
 		v.Findings = append(v.Findings, findingRow{
 			Severity:  f.Severity,
@@ -185,6 +211,27 @@ func (s *Server) handleSBOMDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	render(w, "sbom.html", v)
+}
+
+// attestationPanel maps stored verification evidence to its display view. The
+// binding label makes the strength explicit: sbom-bytes proves the exact stored
+// bytes were signed; image-digest proves only that the attestation names the
+// resolved image digest.
+func attestationPanel(a *postgres.Attestation) *attestationView {
+	bindingLabel := "Attestation binds the image digest"
+	if a.Binding == "sbom-bytes" {
+		bindingLabel = "Attestation signs the exact SBOM bytes"
+	}
+	v := &attestationView{
+		Result: a.Result, Mode: a.Mode, Binding: a.Binding, BindingLabel: bindingLabel,
+		Identity: a.CertIdentity, Issuer: a.OIDCIssuer, KeyID: a.KeyID,
+		PredicateType: a.PredicateType, LogRef: a.TransparencyLogRef,
+		FailureReason: a.FailureReason,
+	}
+	if !a.VerifiedAt.IsZero() {
+		v.VerifiedAt = a.VerifiedAt.Format("2006-01-02 15:04")
+	}
+	return v
 }
 
 func formatScore(f float32) string {
