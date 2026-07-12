@@ -67,17 +67,52 @@ func (c *SyftCanonicalizer) convert(ctx context.Context, raw []byte) ([]byte, er
 	}
 	_ = f.Close()
 
-	var out, errb bytes.Buffer
+	// Bound the converted output: the input is size-capped at ingest, but the
+	// CycloneDX form syft emits is not, and it is buffered fully in memory. A
+	// capped writer keeps an adversarial expansion from exhausting memory.
+	out := &cappedBuffer{limit: maxCanonicalizedBytes}
+	var errb bytes.Buffer
 	cmd := exec.CommandContext(ctx, "syft", "convert", f.Name(), "-q", "-o", "cyclonedx-json")
-	cmd.Stdout = &out
+	cmd.Stdout = out
 	cmd.Stderr = &errb
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("syft convert: %w (%s)", err, truncate(errb.String(), 300))
 	}
-	if !json.Valid(out.Bytes()) {
+	if out.overflow {
+		return nil, fmt.Errorf("syft convert output exceeds %d bytes", maxCanonicalizedBytes)
+	}
+	if !json.Valid(out.buf.Bytes()) {
 		return nil, fmt.Errorf("syft convert produced invalid JSON")
 	}
-	return out.Bytes(), nil
+	return out.buf.Bytes(), nil
+}
+
+// maxCanonicalizedBytes bounds the CycloneDX output buffered from `syft convert`.
+// A 20 MiB SPDX input converts to a comparable CycloneDX document; this cap sits
+// well above legitimate output while bounding adversarial expansion.
+const maxCanonicalizedBytes = 128 << 20
+
+// cappedBuffer is an io.Writer that stops accepting data past limit and records
+// the overflow, so a subprocess cannot drive an unbounded in-memory allocation.
+type cappedBuffer struct {
+	buf      bytes.Buffer
+	limit    int
+	overflow bool
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	if c.overflow {
+		return len(p), nil // discard; caller checks c.overflow after Run
+	}
+	if c.buf.Len()+len(p) > c.limit {
+		c.overflow = true
+		remaining := c.limit - c.buf.Len()
+		if remaining > 0 {
+			c.buf.Write(p[:remaining])
+		}
+		return len(p), nil
+	}
+	return c.buf.Write(p)
 }
 
 func syftVersion() string {

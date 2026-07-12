@@ -16,6 +16,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -30,6 +32,8 @@ const (
 	epssBatch      = 100
 	fetchTimeout   = 60 * time.Second
 	defaultTimeout = 30 * time.Second
+	// maxFeedResponseBytes caps a single EPSS/KEV feed response read into memory.
+	maxFeedResponseBytes = 64 << 20
 )
 
 // Record is the merged enrichment for one CVE. Zero values mean "no data":
@@ -154,14 +158,30 @@ type epssResponse struct {
 	} `json:"data"`
 }
 
+// cveIDPattern matches a well-formed CVE id. CVE strings originate from scanner
+// output over attacker-controllable SBOMs, so validate before putting them in a
+// request URL.
+var cveIDPattern = regexp.MustCompile(`^CVE-[0-9]{4}-[0-9]{4,}$`)
+
 // fetchEPSS requests EPSS for the given CVEs in batches and merges the results.
 func (f *Fetcher) fetchEPSS(ctx context.Context, client *http.Client, cves []string) (map[string]epssEntry, error) {
+	// Drop anything that isn't a syntactically valid CVE id: it can't have EPSS
+	// data and a crafted value must never corrupt the request URL.
+	valid := make([]string, 0, len(cves))
+	for _, c := range cves {
+		if cveIDPattern.MatchString(c) {
+			valid = append(valid, c)
+		}
+	}
+	cves = valid
+
 	out := map[string]epssEntry{}
 	var firstErr error
 	for start := 0; start < len(cves); start += epssBatch {
 		end := min(start+epssBatch, len(cves))
-		url := f.EPSSAPIURL + "?cve=" + strings.Join(cves[start:end], ",")
-		body, err := get(ctx, client, url)
+		q := url.Values{"cve": {strings.Join(cves[start:end], ",")}}
+		reqURL := f.EPSSAPIURL + "?" + q.Encode()
+		body, err := get(ctx, client, reqURL)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
@@ -203,7 +223,17 @@ func get(ctx context.Context, client *http.Client, url string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GET %s: status %d", url, resp.StatusCode)
 	}
-	return io.ReadAll(resp.Body)
+	// Bound the response: a misbehaving, redirected, or MITM'd feed endpoint must
+	// not OOM the scan job. The KEV catalog and an EPSS batch are a few MB each;
+	// this cap is far above that.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFeedResponseBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > maxFeedResponseBytes {
+		return nil, fmt.Errorf("GET %s: response exceeds %d bytes", url, maxFeedResponseBytes)
+	}
+	return body, nil
 }
 
 func parseFloat(s string) float32 {
