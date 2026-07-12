@@ -2,7 +2,7 @@
 
 _Stack-ranked roadmap synthesized from competitive review and DevRadar-specific opportunities._
 
-_Last updated: 2026-07-11._
+_Last updated: 2026-07-12._
 
 ## Framing
 
@@ -22,6 +22,7 @@ Roadmap items either monetize the event stream DevRadar already produces or wide
 - Cross-digest timelines
 - API-first ingestion
 - Low infrastructure and credential risk because images are never pulled
+- Browser-first actionable alerts, deterministic remediation work queue, and cross-digest posture intelligence (shipped in v0.11.0)
 
 ### Competitive lesson
 
@@ -29,67 +30,38 @@ Anchore Enterprise and Aqua emphasize integrations, prioritization, policy gates
 
 EPSS, KEV, and OpenVEX are no longer roadmap features; they are inputs to prioritization and alerting. Scanner divergence is a useful confidence and evidence-quality signal, but scanner agreement is not proof of correctness.
 
-## Release 1 — Actionable alerts and posture intelligence
+## Release 1 — Actionable alerts and posture intelligence ✅ SHIPPED (v0.11.0, 2026-07-12)
 
-This is the approved next release. Detailed design: `docs/superpowers/specs/2026-07-11-actionable-alerts-and-posture-design.md`.
+Shipped, deployed, and validated in production. Detailed design: `docs/superpowers/specs/2026-07-11-actionable-alerts-and-posture-design.md`.
 
-The release is browser-only, tenant-scoped, and opt-in. Email and webhook delivery reuse the same durable alert model later. Nothing is released until local validation and migration rehearsal against an isolated production database backup succeed and the owner explicitly approves deployment.
+Browser-only, tenant-scoped, and opt-in, as scoped. Email and webhook delivery reuse the same durable alert model later (Release 3, item 9). All three items below landed, plus an admin product/system-health dashboard and a public continuous-posture landing page that were built alongside them.
 
-### 1. Browser-first actionable alerts
+### 1. Browser-first actionable alerts ✅
 
-Evaluate eligible `image`- and `db`-caused finding events into durable, idempotent tenant alerts. The dashboard shows recent unread alerts; `/alerts` is the history; `/alerts/{id}` is the canonical detail page and future email landing page.
+Delivered. Actionable `image`- and `db`-caused finding events are evaluated into durable, idempotent tenant alerts via a transactional outbox (`devradar_alert_event_queue`): `ApplyScan` enqueues each event in the same transaction that writes it, so commit visibility — not event-tuple order — gates readiness. The dashboard shows recent unread alerts; `/alerts` is the history; `/alerts/{id}` is the canonical detail page and future email landing page.
 
-Initial alert kinds:
+Alert kinds shipped: new KEV exposure, new finding at/above threshold, fix now available, repository posture regression. One tenant-scoped policy controls opt-in, severity, KEV behavior, newly fixable findings, causes, and labels. Policy changes are prospective (events before `updated_at` are skipped); enabling alerts does not backfill history.
 
-- New KEV exposure
-- New finding at or above the tenant threshold
-- Fix now available
-- Repository posture regression
+Still deferred: email, webhooks, digests, quiet periods, escalations, acknowledgements, delivery history, and per-user state.
 
-One tenant-scoped policy controls opt-in, severity, KEV behavior, newly fixable findings, causes, and labels. Policy changes are prospective; enabling alerts does not backfill history.
+### 2. Deterministic “What should I fix?” work queue ✅
 
-The phrase **fix now available** means a scanner now reports a fix as available. It does not assert when an upstream project published the fix.
+Delivered at `/work`. Duplicate scanner rows are merged by canonical finding identity with scanner agreement preserved as metadata. Ordering is a transparent, non-overlapping numeric key: KEV → fix availability → severity → EPSS → affected-image blast radius → finding age. `first_seen` uses a fixed epoch inverse so pagination cursors do not drift between requests. No opaque synthetic score; no runtime-context claims.
 
-Deferred: email, webhooks, digests, quiet periods, escalations, acknowledgements, delivery history, and per-user state.
+### 3. Cross-digest comparison, trends, and conservative upgrade guidance ✅
 
-> Highest immediate operational value. **Effort: medium.**
+Delivered at `/compare` and `/trends`. Compares any two tenant-owned digests in one repository (vulnerabilities added/resolved/newly-fixable/re-rated; packages and licenses added/removed; license-policy regressions; net change in relevant findings; transparent improvement/regression verdict). Comparisons include archived SBOMs so a new active digest compares against its retired predecessor. Time-bounded fleet and repository trends are backed by daily `SnapshotTenantPosture` snapshots (findings are mutable, so posture cannot be reconstructed after the fact). Conservative upgrade guidance identifies a newer tracked digest that strictly reduces relevant findings. Alerts link into the comparison or work item that explains the action, closing the loop: **what changed → what matters → whether a tracked upgrade helps**.
 
-### 2. Deterministic “What should I fix?” work queue
+### Follow-ups carried out of Release 1 (roadmap, non-blocking)
 
-Present remediation units rather than a severity dump. Merge duplicate scanner rows by canonical finding identity while preserving scanner agreement as metadata.
+- **`SnapshotTenantPosture` runs on every scan tick (~96×/day) but only the last write of the day survives.** Correct and serialized under a global advisory lock, but wasteful; gate on a freshness check when tenant count grows.
+- **`SnapshotTenantPosture` does a global `DELETE`+`INSERT` with no `ON CONFLICT`.** Safe in production (single serial scan-job instance under the advisory lock); add `ON CONFLICT DO UPDATE` as defense-in-depth against any future second writer.
+- **Admin dashboard scans `devradar_finding` (~90k rows) multiple times per GET, uncached, including a snapshot write on the read path.** Fine at current scale and admin-only QPS; add a short TTL cache or serve product-health from the daily snapshot before the fleet grows.
+- **Fleet CVE risk key is approximately, not strictly, lexicographic at the EPSS→image-reach boundary** (EPSS deltas below ~0.1 can be broken by image count). Intentional heuristic; documented in `read_cve.go`. Re-tier only if strict EPSS dominance is required.
 
-Order transparently by:
+## Release 2 — Trustworthy automated coverage ← NEXT
 
-1. KEV
-2. Fix availability
-3. Severity
-4. EPSS
-5. Affected-image blast radius
-6. Finding age
-
-Explain the ordering directly, for example: _“Known exploited, fix available, affects 14 labeled production images.”_ Do not introduce an opaque synthetic score and do not claim runtime context.
-
-> **Effort: medium.**
-
-### 3. Cross-digest comparison, trends, and conservative upgrade guidance
-
-Compare any two tenant-owned SBOM digests in one repository:
-
-- Vulnerabilities added, resolved, newly fixable, or re-rated
-- Packages and licenses added or removed
-- License-policy regressions
-- Net change in relevant findings
-- Transparent posture improvement or regression
-
-Add time-bounded fleet/repository trends and identify a newer tracked digest that removes relevant findings or has fewer relevant findings. Describe observed evidence only; never claim that an image is universally safe or compatible.
-
-Alerts link into the comparison or work item that explains the action. This closes the release loop: **what changed → what matters → whether a tracked upgrade helps**.
-
-> Strongest near-term differentiator. **Effort: medium.**
-
-## Release 2 — Trustworthy automated coverage
-
-Build the trust primitives before adding a registry-facing discovery control plane. These should land incrementally, not as one indivisible release.
+This is the approved next release now that Release 1 has shipped. Build the trust primitives before adding a registry-facing discovery control plane. These should land incrementally, not as one indivisible release. Item 4 (attestation verification) is the recommended starting point: it is a prerequisite for the repository subscriptions in item 6 and needs no new network control plane.
 
 ### 4. Cryptographic attestation verification
 
@@ -195,8 +167,8 @@ Accept signed attestations produced by purpose-built CI tools for misconfigurati
 
 ## Recommended sequence
 
-1. Browser alerts + deterministic work queue + cross-digest posture intelligence
-2. Verification → quality assessment → repository subscriptions
+1. ✅ Browser alerts + deterministic work queue + cross-digest posture intelligence (v0.11.0)
+2. ← **next:** Verification → quality assessment → repository subscriptions
 3. CI gates → governed VEX → integrations → deeper remediation
 4. Evidence packs → typed attestation inbox
 
