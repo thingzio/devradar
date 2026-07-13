@@ -452,6 +452,49 @@ switch, use, revoke, and re-login workflow locally.
 - **Dependency:** reuse durable email delivery from roadmap item 2 rather than
   creating a second invitation-only delivery system.
 
+## 8. Track Non-Image Artifacts (Binaries, Filesystems)
+
+An SBOM generated for a standalone binary or a filesystem tree is byte-identical
+in format to a container-image SBOM, and DevRadar's engine is already
+subject-agnostic: scanners run `grype sbom:<file>` / `trivy sbom <file>` without
+inspecting the subject, and the delta-causality core keys on
+`(tenant, content-digest, format)` — not on anything image-specific. The
+`image`/`db`/`tooling` causality model holds for any digest-pinned artifact.
+
+The coupling to "container image" is almost entirely naming, not structure:
+
+- The only behavioral gate is the ingest digest requirement, and it already
+  accepts *any* `sha256:` content digest — not an OCI manifest digest
+  specifically. A binary SBOM carrying a content hash, or a caller supplying an
+  `@sha256:` override, passes today.
+- `image_ref`, `repository`, and `version` are free-text label and grouping
+  columns; nothing enforces registry grammar. `SplitRef` degrades gracefully on
+  a non-image string.
+- The `/v1/images*` endpoints, 20-odd UI templates, and product copy name the
+  subject "image" cosmetically.
+
+The work is therefore wide-but-shallow, in three separable tiers:
+
+| Tier | Outcome | Effort |
+|---|---|---:|
+| Functional | Broaden digest extraction to a binary/file component and reword the ingest rejection message; binaries already work with an `image_ref` override | XS |
+| Coherent | Rename the domain concept image → artifact/subject across API, UI, columns, and OpenAPI via expand/contract (alias old endpoints, keep columns) | M |
+| First-class | Add a `subject_type` discriminator and binary-appropriate grouping (binaries have no registry/tag grammar — group by name or a tenant-supplied identifier) | S–M |
+
+The decision is product scope, not engineering difficulty: whether DevRadar
+remains framed as container-image tracking or generalizes to any digest-pinned
+artifact. **Deferred until a submitter presents a binary/filesystem SBOM use
+case** — the current personas, positioning, and "images from private registries"
+pitch are image-framed, and the functional capability is cheap enough to add
+on demand rather than pre-build.
+
+- **User benefit:** one posture-tracking loop for binaries and images alike,
+  without a second tool.
+- **Effort:** XS functional, M for a coherent rename.
+- **Open questions:** does the digest come from the artifact hash the submitter
+  supplies or from a `file` component in the SBOM; and what is the grouping
+  identity for artifacts that have no repository/tag.
+
 ## Explicit Deferrals
 
 - Pulling images or holding registry credentials.
