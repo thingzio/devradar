@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 )
@@ -51,21 +52,19 @@ func TestValidate_RejectsInvalid(t *testing.T) {
 }
 
 func TestValidate_TokenFlashKeyFailsClosed(t *testing.T) {
-	// A set-but-invalid key is a HARD error in every mode. An UNSET key is allowed
-	// (degrades to a documented plaintext fallback with a startup warning) — it must
-	// NOT block startup, or a not-yet-provisioned secret becomes a deploy-blocking
-	// startup-probe failure.
-	t.Run("unset in prod is allowed (warns, not fatal)", func(t *testing.T) {
+	// Production requires a configured key. Development uses a process-ephemeral
+	// key so a raw token is never stored recoverably.
+	t.Run("unset in prod is rejected", func(t *testing.T) {
 		t.Setenv("DEVRADAR_DEV_MODE", "false")
 		t.Setenv("DEVRADAR_TOKEN_FLASH_KEY", "")
-		if err := Validate(); err != nil {
-			t.Fatalf("unset flash key must not fail startup in prod, got %v", err)
+		if err := ValidateServer(); err == nil {
+			t.Fatal("unset flash key must fail startup in prod")
 		}
 	})
 	t.Run("invalid in prod is rejected", func(t *testing.T) {
 		t.Setenv("DEVRADAR_DEV_MODE", "false")
 		t.Setenv("DEVRADAR_TOKEN_FLASH_KEY", "not-base64-!!") // invalid
-		err := Validate()
+		err := ValidateServer()
 		if err == nil || !strings.Contains(err.Error(), "DEVRADAR_TOKEN_FLASH_KEY") {
 			t.Fatalf("expected token-flash-key error in prod, got %v", err)
 		}
@@ -73,23 +72,23 @@ func TestValidate_TokenFlashKeyFailsClosed(t *testing.T) {
 	t.Run("wrong length in prod is rejected", func(t *testing.T) {
 		t.Setenv("DEVRADAR_DEV_MODE", "false")
 		t.Setenv("DEVRADAR_TOKEN_FLASH_KEY", "dG9vc2hvcnQ=") // valid base64, 8 bytes
-		if err := Validate(); err == nil {
+		if err := ValidateServer(); err == nil {
 			t.Fatal("expected error for wrong-length key in prod")
 		}
 	})
 	t.Run("invalid in dev is also rejected", func(t *testing.T) {
 		// A set-but-invalid value is unambiguously a mistake, so it is a hard error
-		// even in dev (unlike an UNSET key, which is the documented plaintext default).
+		// even in dev (where only an entirely unset key gets an ephemeral fallback).
 		t.Setenv("DEVRADAR_DEV_MODE", "true")
 		t.Setenv("DEVRADAR_TOKEN_FLASH_KEY", "not-base64-!!")
-		if err := Validate(); err == nil {
+		if err := ValidateServer(); err == nil {
 			t.Fatal("a set-but-invalid key should be rejected even in dev")
 		}
 	})
 	t.Run("unset in dev is fine", func(t *testing.T) {
 		t.Setenv("DEVRADAR_DEV_MODE", "true")
 		t.Setenv("DEVRADAR_TOKEN_FLASH_KEY", "")
-		if err := Validate(); err != nil {
+		if err := ValidateServer(); err != nil {
 			t.Fatalf("unset key in dev must pass, got %v", err)
 		}
 	})
@@ -97,10 +96,47 @@ func TestValidate_TokenFlashKeyFailsClosed(t *testing.T) {
 		t.Setenv("DEVRADAR_DEV_MODE", "false")
 		// base64 of 32 zero bytes.
 		t.Setenv("DEVRADAR_TOKEN_FLASH_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
-		if err := Validate(); err != nil {
+		if err := ValidateServer(); err != nil {
 			t.Fatalf("valid key rejected: %v", err)
 		}
 	})
+}
+
+func TestValidateDoesNotRequireServeOnlyTokenFlashKey(t *testing.T) {
+	t.Setenv("DEVRADAR_DEV_MODE", "false")
+	t.Setenv("DEVRADAR_TOKEN_FLASH_KEY", "")
+	if err := Validate(); err != nil {
+		t.Fatalf("shared scan validation requires serve-only token flash key: %v", err)
+	}
+}
+
+func TestTokenFlashKeyNeverSilentlyDowngradesInvalidConfiguration(t *testing.T) {
+	t.Setenv("DEVRADAR_DEV_MODE", "true")
+	t.Setenv("DEVRADAR_TOKEN_FLASH_KEY", "not-base64-!!")
+	if key, err := TokenFlashKey(); err == nil || key != nil {
+		t.Fatalf("TokenFlashKey invalid = %x, %v, want nil/error", key, err)
+	}
+	t.Setenv("DEVRADAR_TOKEN_FLASH_KEY", "")
+	first, err := TokenFlashKey()
+	if err != nil || len(first) != 32 {
+		t.Fatalf("TokenFlashKey dev fallback length = %d, %v, want 32/nil", len(first), err)
+	}
+	second, err := TokenFlashKey()
+	if err != nil || !bytes.Equal(first, second) {
+		t.Fatalf("TokenFlashKey dev fallback is not process-stable: %x/%x %v", first, second, err)
+	}
+	t.Setenv("DEVRADAR_TOKEN_FLASH_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	if key, err := TokenFlashKey(); err != nil || len(key) != 32 {
+		t.Fatalf("TokenFlashKey valid length = %d, %v, want 32/nil", len(key), err)
+	}
+}
+
+func TestTokenFlashKeyProductionRequiresConfiguration(t *testing.T) {
+	t.Setenv("DEVRADAR_DEV_MODE", "false")
+	t.Setenv("DEVRADAR_TOKEN_FLASH_KEY", "")
+	if key, err := TokenFlashKey(); err == nil || key != nil {
+		t.Fatalf("TokenFlashKey prod unset = %x, %v, want nil/error", key, err)
+	}
 }
 
 func TestValidate_UnsetIsFine(t *testing.T) {

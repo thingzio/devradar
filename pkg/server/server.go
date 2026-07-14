@@ -65,7 +65,7 @@ func New(store *postgres.Store, blobs BlobStore, email drnet.Sender, github OAut
 // and email sender from the environment, then serves until ctx is cancelled.
 // cmd/devradar-serve is a thin shell around this.
 func Run(ctx context.Context, opts Options) error {
-	if err := config.Validate(); err != nil {
+	if err := config.ValidateServer(); err != nil {
 		return err
 	}
 	store, err := postgres.New(ctx, config.DatabaseURL(), postgres.DefaultPoolConfig())

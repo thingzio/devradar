@@ -14,7 +14,6 @@ import (
 	"github.com/thingzio/devradar/pkg/authn"
 	"github.com/thingzio/devradar/pkg/data/postgres"
 	"github.com/thingzio/devradar/pkg/middleware"
-	"github.com/thingzio/devradar/pkg/tenant"
 )
 
 func TestAccessContextSeparatesBrowserUserAndAccount(t *testing.T) {
@@ -249,9 +248,14 @@ func TestAdmin_UsesActorEmailWithoutActiveAccount(t *testing.T) {
 func TestAccessContextAPITokenHasOnlyAccountAndTokenActor(t *testing.T) {
 	st := testStore(t)
 	_, acct, _ := seedAccessSession(t, st)
-	raw, err := tenant.CreateAPIToken(context.Background(), st.DB(), acct.ID, "ci", time.Hour)
+	raw, err := authn.NewToken("dr_")
 	if err != nil {
-		t.Fatalf("create api token: %v", err)
+		t.Fatalf("generate api token: %v", err)
+	}
+	if _, err := st.DB().ExecContext(context.Background(), `
+		INSERT INTO devradar_api_token (tenant_id,name,token_hash,expires_at)
+		VALUES ($1,'ci',$2,now()+interval '1 hour')`, acct.ID, authn.HashToken(raw)); err != nil {
+		t.Fatalf("seed api token: %v", err)
 	}
 
 	handler := middleware.RequireAPIToken(st)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

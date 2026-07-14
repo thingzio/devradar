@@ -240,6 +240,8 @@ type lockedAccountMutation func(*sql.Tx) (bool, error)
 
 // withLockedAccountAudit serializes account membership state and appends its
 // success event atomically. The account lock is the transaction's first query.
+// NO KEY UPDATE preserves serialization with peer lifecycle mutations while
+// remaining compatible with old-revision token inserts' FK KEY SHARE lock.
 func (s *Store) withLockedAccountAudit(
 	ctx context.Context,
 	accountID string,
@@ -259,7 +261,7 @@ func (s *Store) withLockedAccountAudit(
 
 	var lockedAccountID string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT id FROM devradar_tenant WHERE id=$1 FOR UPDATE`, accountID).Scan(&lockedAccountID); err != nil {
+		`SELECT id FROM devradar_tenant WHERE id=$1 FOR NO KEY UPDATE`, accountID).Scan(&lockedAccountID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}

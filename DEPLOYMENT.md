@@ -181,7 +181,7 @@ reclone. Production rollout still requires explicit owner approval.
 
 ```bash
 make tf-init          # terraform init (GCS backend, state prefix "devradar")
-make tf-plan          # review — expect ~1 SQL user, 1 bucket, 4 secrets, SAs,
+make tf-plan          # review — expect ~1 SQL user, 1 bucket, 5 secrets, SAs,
                       #          WIF, AR repo, 1 service, 1 job, 1 scheduler
 make tf-apply         # run by hand with an operator identity
 ```
@@ -191,7 +191,8 @@ The Cloud Run service and job are created with a **public placeholder image**
 exists — the real images are pushed and deployed by CI in step 4. Terraform
 `ignore_changes` on the image field means CI's deploys are never reverted by a
 later `terraform apply`. This creates everything except the real images and the
-secret **values** (step 2). Capture the outputs:
+operator-supplied secret **values** (step 2). It also generates the token-flash
+key and stores its first secret version. Capture the outputs:
 
 ```bash
 terraform -chdir=infra/saas output
@@ -199,9 +200,11 @@ terraform -chdir=infra/saas output
 
 ### 2. Populate secret values
 
-Terraform creates four secret *containers* and assembles `devradar-saas-database-url`
-from the generated DB password. The other three seed a **placeholder** version so
-the serve service can deploy before real values exist. They are populated two
+Terraform creates five secret *containers*. It assembles
+`devradar-saas-database-url` from the generated DB password and generates
+`devradar-saas-token-flash-key` with `random_id`; neither needs tfvars or
+out-of-band population. The other three seed a **placeholder** version so the
+serve service can deploy before real values exist. They are populated two
 different ways — match each to its source of truth or the next `terraform apply`
 will revert it:
 
@@ -302,6 +305,12 @@ Once the deploy is confirmed, set `deletion_protection = true` on both
 
 ### Ship new application code
 
+Apply infrastructure changes before releasing an image that depends on them.
+In particular, Terraform **must** be applied before deploying any image that
+requires `DEVRADAR_TOKEN_FLASH_KEY`; otherwise the serve process fails startup
+validation. This rollout remains owner-gated: review `make tf-plan`, obtain
+explicit owner approval, then run `make tf-apply` before tagging the release.
+
 Bump the semver tag — that's the whole flow (the tag triggers the release
 workflow):
 
@@ -355,6 +364,18 @@ these with `gcloud`; the next apply would overwrite the hand-added version.
 (The DB password is managed by Terraform via `random_password`; rotate it with a
 `terraform apply -replace=random_password.db_password`, which also updates the
 `devradar-saas-database-url` secret.)
+
+The **token-flash key** is Terraform-generated and does not rotate during routine
+applies. Rotate it only with explicit owner approval:
+
+```bash
+terraform -chdir=infra/saas apply -replace=random_id.token_flash_key
+```
+
+Replacement creates a new pinned secret version and rolls the serve service to
+it. Wait for the apply and Cloud Run revision rollout to finish before resuming
+release activity. Rotation invalidates any unread token flashes; their maximum
+lifetime is two minutes.
 
 ---
 

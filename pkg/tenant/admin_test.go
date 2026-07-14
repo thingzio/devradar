@@ -78,7 +78,9 @@ func TestDeleteTenant_Cascades(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
-	if _, err := tenant.CreateAPIToken(ctx, db, tn.ID, "t", 0); err != nil {
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO devradar_api_token (tenant_id,name,token_hash)
+		VALUES ($1,'t',$2)`, tn.ID, "cascade-"+randEmail()); err != nil {
 		t.Fatalf("seed token: %v", err)
 	}
 
@@ -88,12 +90,13 @@ func TestDeleteTenant_Cascades(t *testing.T) {
 	if _, err := tenant.GetTenant(ctx, db, tn.ID); !errors.Is(err, tenant.ErrNotFound) {
 		t.Errorf("get after delete: err = %v, want ErrNotFound", err)
 	}
-	toks, err := tenant.ListAPITokens(ctx, db, tn.ID)
-	if err != nil {
+	var tokens int
+	if err := db.QueryRowContext(ctx,
+		`SELECT count(*) FROM devradar_api_token WHERE tenant_id=$1`, tn.ID).Scan(&tokens); err != nil {
 		t.Fatalf("list tokens: %v", err)
 	}
-	if len(toks) != 0 {
-		t.Errorf("tokens after tenant delete = %d, want 0 (cascade)", len(toks))
+	if tokens != 0 {
+		t.Errorf("tokens after tenant delete = %d, want 0 (cascade)", tokens)
 	}
 
 	// Deleting a non-existent tenant is a not-found, not a silent success.

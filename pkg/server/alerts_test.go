@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thingzio/devradar/pkg/account"
 	"github.com/thingzio/devradar/pkg/data/postgres"
 )
 
@@ -83,6 +84,16 @@ func TestAlertPages(t *testing.T) {
 	alertID := seedBrowserAlert(t, st, tenantID, sb, "CVE-2026-3001")
 	otherAlertID := seedBrowserAlert(t, st, otherTenantID, otherSB, "CVE-2026-9999")
 	session := seedSession(t, st, tenantID)
+	adminSession, err := st.ValidateSession(context.Background(), session.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inviteeID := seedAdditionalMember(t, st, tenantID, account.RoleReader, adminSession.User.ID)
+	inviteeRaw, err := st.CreateSession(context.Background(), inviteeID, &tenantID, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inviteeSession := &http.Cookie{Name: session.Name, Value: inviteeRaw}
 	otherSession := seedSession(t, st, otherTenantID)
 	h := srv.Handler()
 
@@ -139,9 +150,20 @@ func TestAlertPages(t *testing.T) {
 			t.Fatalf("mark read attempt %d = %d location=%q", i+1, rec.Code, rec.Header().Get("Location"))
 		}
 	}
-	got, err := st.GetAlert(context.Background(), tenantID, alertID)
+	got, err := st.GetAlert(context.Background(), tenantID, adminSession.User.ID, alertID)
 	if err != nil || got.ReadAt == nil {
 		t.Fatalf("alert read state = %+v error=%v", got, err)
+	}
+	inviteeAlert, err := st.GetAlert(context.Background(), tenantID, inviteeID, alertID)
+	if err != nil || inviteeAlert.ReadAt != nil {
+		t.Fatalf("invitee inherited admin receipt = %+v error=%v", inviteeAlert, err)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/alerts", nil)
+	req.AddCookie(inviteeSession)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "is-unread") {
+		t.Fatalf("invitee alerts after admin read = %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

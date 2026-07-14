@@ -117,9 +117,10 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		row.Bar = severityBar(im.Counts)
 		v.TopImages = append(v.TopImages, row)
 	}
-	alerts, err := s.store.UnreadAlerts(r.Context(), access.Account.ID, 5)
+	alerts, err := s.store.UnreadAlerts(r.Context(), access.Account.ID, access.Actor.ID, 5)
 	if err != nil {
-		slog.Warn("load overview alerts", "account_id", access.Account.ID, "error", err)
+		slog.Warn("load overview alerts", "account_id", access.Account.ID,
+			"user_id", access.Actor.ID, "request_id", middleware.RequestIDFromContext(r.Context()), "error", err)
 		v.AlertsUnavailable = true
 	} else {
 		for _, item := range alerts {

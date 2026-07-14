@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/lib/pq"
+	"github.com/thingzio/devradar/pkg/account"
 	alertengine "github.com/thingzio/devradar/pkg/alert"
 	"github.com/thingzio/devradar/pkg/data"
 	"github.com/thingzio/devradar/pkg/data/postgres"
@@ -270,15 +271,17 @@ func TestAlertTenantStore_IsolationPaginationAndReadState(t *testing.T) {
 		seedAlertRow(t, st, tenant1, p1.ID, sb1, 103, base.Add(2*time.Minute), "CVE-2026-0103"),
 	}
 	otherID := seedAlertRow(t, st, tenant2, p2.ID, sb2, 201, base.Add(3*time.Minute), "CVE-2026-0201")
+	user1 := legacyAlertUser(t, st, tenant1)
+	user2 := legacyAlertUser(t, st, tenant2)
 
-	page1, next, err := st.ListAlerts(ctx, tenant1, "", 2)
+	page1, next, err := st.ListAlerts(ctx, tenant1, user1, "", 2)
 	if err != nil {
 		t.Fatalf("list page 1: %v", err)
 	}
 	if len(page1) != 2 || next == "" || page1[0].Exposure != "CVE-2026-0103" || page1[1].Exposure != "CVE-2026-0102" {
 		t.Fatalf("page 1 = %+v next=%q", page1, next)
 	}
-	page2, next2, err := st.ListAlerts(ctx, tenant1, next, 2)
+	page2, next2, err := st.ListAlerts(ctx, tenant1, user1, next, 2)
 	if err != nil {
 		t.Fatalf("list page 2: %v", err)
 	}
@@ -286,32 +289,136 @@ func TestAlertTenantStore_IsolationPaginationAndReadState(t *testing.T) {
 		t.Fatalf("page 2 = %+v next=%q", page2, next2)
 	}
 
-	if _, err := st.GetAlert(ctx, tenant1, otherID); !errors.Is(err, postgres.ErrNotFound) {
+	if _, err := st.GetAlert(ctx, tenant1, user1, otherID); !errors.Is(err, postgres.ErrNotFound) {
 		t.Fatalf("cross-tenant GetAlert error = %v, want ErrNotFound", err)
 	}
-	if err := st.MarkAlertRead(ctx, tenant1, otherID); !errors.Is(err, postgres.ErrNotFound) {
+	if err := st.MarkAlertRead(ctx, tenant1, user1, otherID); !errors.Is(err, postgres.ErrNotFound) {
 		t.Fatalf("cross-tenant MarkAlertRead error = %v, want ErrNotFound", err)
 	}
-	if err := st.MarkAlertRead(ctx, tenant1, ids[2]); err != nil {
+	if err := st.MarkAlertRead(ctx, tenant1, user1, ids[2]); err != nil {
 		t.Fatalf("mark read: %v", err)
 	}
-	if err := st.MarkAlertRead(ctx, tenant1, ids[2]); err != nil {
+	if err := st.MarkAlertRead(ctx, tenant1, user1, ids[2]); err != nil {
 		t.Fatalf("retry mark read: %v", err)
 	}
-	unread, err := st.UnreadAlerts(ctx, tenant1, 10)
+	unread, err := st.UnreadAlerts(ctx, tenant1, user1, 10)
 	if err != nil {
 		t.Fatalf("unread alerts: %v", err)
 	}
 	if len(unread) != 2 {
 		t.Fatalf("unread alerts = %d, want 2", len(unread))
 	}
-	got, err := st.GetAlert(ctx, tenant1, ids[2])
+	got, err := st.GetAlert(ctx, tenant1, user1, ids[2])
 	if err != nil {
 		t.Fatalf("get alert: %v", err)
 	}
 	if got.ReadAt == nil || got.Exposure != "CVE-2026-0103" {
 		t.Fatalf("alert after read = %+v", got)
 	}
+	if _, err := st.GetAlert(ctx, tenant1, user2, ids[0]); !errors.Is(err, postgres.ErrNotFound) {
+		t.Fatalf("cross-account user GetAlert error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestAlertReceiptPersonalIsolationAndLegacyFallback(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	accountID, sb := seedTenantAndSBOM(t, st)
+	policy, err := st.EnsureAlertPolicy(ctx, accountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyUserID := legacyAlertUser(t, st, accountID)
+	inviteeID := seedAccountMember(t, st, accountID, account.RoleReader, legacyUserID)
+	otherAccountID, _ := seedTenantAndSBOM(t, st)
+	otherUserID := legacyAlertUser(t, st, otherAccountID)
+	base := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
+	legacyReadID := seedAlertRow(t, st, accountID, policy.ID, sb, 301, base, "CVE-2026-0301")
+	personalID := seedAlertRow(t, st, accountID, policy.ID, sb, 302, base.Add(time.Minute), "CVE-2026-0302")
+	oldRevisionID := seedAlertRow(t, st, accountID, policy.ID, sb, 303, base.Add(2*time.Minute), "CVE-2026-0303")
+	if _, err := st.DB().ExecContext(ctx,
+		`UPDATE devradar_alert SET read_at=now() WHERE tenant_id=$1 AND id IN ($2,$3)`,
+		accountID, legacyReadID, oldRevisionID); err != nil {
+		t.Fatal(err)
+	}
+
+	legacyDetail, err := st.GetAlert(ctx, accountID, legacyUserID, legacyReadID)
+	if err != nil || legacyDetail.ReadAt == nil {
+		t.Fatalf("legacy migrated read = %+v, %v", legacyDetail, err)
+	}
+	inviteeLegacyDetail, err := st.GetAlert(ctx, accountID, inviteeID, legacyReadID)
+	if err != nil || inviteeLegacyDetail.ReadAt != nil {
+		t.Fatalf("invitee inherited legacy read = %+v, %v", inviteeLegacyDetail, err)
+	}
+
+	if err := st.MarkAlertRead(ctx, accountID, legacyUserID, personalID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MarkAlertRead(ctx, accountID, legacyUserID, personalID); err != nil {
+		t.Fatalf("idempotent mark read: %v", err)
+	}
+	var receiptCount int
+	var compatibilityReadAt sql.NullTime
+	if err := st.DB().QueryRowContext(ctx, `
+		SELECT (SELECT count(*) FROM devradar_alert_receipt
+		        WHERE alert_id=$1 AND account_id=$2 AND user_id=$3),read_at
+		FROM devradar_alert WHERE id=$1 AND tenant_id=$2`,
+		personalID, accountID, legacyUserID).Scan(&receiptCount, &compatibilityReadAt); err != nil {
+		t.Fatal(err)
+	}
+	if receiptCount != 1 || compatibilityReadAt.Valid {
+		t.Fatalf("personal write = receipts %d compatibility read %v, want 1/NULL", receiptCount, compatibilityReadAt)
+	}
+
+	legacyUnread, err := st.UnreadAlerts(ctx, accountID, legacyUserID, 10)
+	if err != nil || len(legacyUnread) != 0 {
+		t.Fatalf("legacy unread = %d, %v, want 0", len(legacyUnread), err)
+	}
+	inviteeUnread, err := st.UnreadAlerts(ctx, accountID, inviteeID, 10)
+	if err != nil || len(inviteeUnread) != 3 {
+		t.Fatalf("invitee unread = %d, %v, want 3", len(inviteeUnread), err)
+	}
+	inviteeDetail, err := st.GetAlert(ctx, accountID, inviteeID, personalID)
+	if err != nil || inviteeDetail.ReadAt != nil {
+		t.Fatalf("invitee detail after other user read = %+v, %v", inviteeDetail, err)
+	}
+	items, next, err := st.ListAlerts(ctx, accountID, inviteeID, "", 2)
+	if err != nil || len(items) != 2 || next == "" || !allUnread(items) {
+		t.Fatalf("invitee page 1 = %+v next=%q err=%v", items, next, err)
+	}
+	items, next, err = st.ListAlerts(ctx, accountID, inviteeID, next, 2)
+	if err != nil || len(items) != 1 || next != "" || !allUnread(items) {
+		t.Fatalf("invitee page 2 = %+v next=%q err=%v", items, next, err)
+	}
+
+	if _, err := st.GetAlert(ctx, accountID, otherUserID, personalID); !errors.Is(err, postgres.ErrNotFound) {
+		t.Fatalf("cross-account user detail = %v, want ErrNotFound", err)
+	}
+	if err := st.MarkAlertRead(ctx, accountID, otherUserID, personalID); !errors.Is(err, postgres.ErrNotFound) {
+		t.Fatalf("cross-account user write = %v, want ErrNotFound", err)
+	}
+}
+
+func legacyAlertUser(t *testing.T, st *postgres.Store, accountID string) string {
+	t.Helper()
+	if err := st.ReconcileLegacyAccount(context.Background(), accountID); err != nil {
+		t.Fatalf("reconcile legacy account: %v", err)
+	}
+	var userID string
+	if err := st.DB().QueryRowContext(context.Background(),
+		`SELECT id FROM devradar_user WHERE legacy_tenant_id=$1`, accountID).Scan(&userID); err != nil {
+		t.Fatalf("read legacy user: %v", err)
+	}
+	return userID
+}
+
+func allUnread(items []postgres.Alert) bool {
+	for _, item := range items {
+		if item.ReadAt != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func TestAlertTenantStore_RejectsInvalidSeverity(t *testing.T) {

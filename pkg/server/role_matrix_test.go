@@ -14,7 +14,6 @@ import (
 	"github.com/thingzio/devradar/pkg/account"
 	"github.com/thingzio/devradar/pkg/data/postgres"
 	"github.com/thingzio/devradar/pkg/middleware"
-	"github.com/thingzio/devradar/pkg/tenant"
 )
 
 type roleMatrixRoute struct {
@@ -135,20 +134,25 @@ func TestRoleMatrixMutationEffects(t *testing.T) {
 		sbom := seedLabeledSBOM(t, st, accountID, "personal-effect")
 		alertID := seedBrowserAlert(t, st, accountID, sbom, "CVE-2026-5101")
 		tokensBefore := accountTokenCount(t, st, accountID)
+		actor := sessionUserActor(t, st, session)
 
 		rec := postRoleMutation(t, h, session, "/alerts/"+alertID+"/read", nil)
 		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/alerts/"+alertID {
 			t.Fatalf("mark alert read = %d location %q, want 303 alert detail: %s",
 				rec.Code, rec.Header().Get("Location"), rec.Body.String())
 		}
-		var read bool
+		var receiptRead, compatibilityRead bool
 		if err := st.DB().QueryRowContext(ctx,
-			`SELECT read_at IS NOT NULL FROM devradar_alert WHERE tenant_id=$1 AND id=$2`,
-			accountID, alertID).Scan(&read); err != nil {
+			`SELECT EXISTS(
+				SELECT 1 FROM devradar_alert_receipt
+				WHERE account_id=$1 AND alert_id=$2 AND user_id=$3
+			),read_at IS NOT NULL
+			FROM devradar_alert WHERE tenant_id=$1 AND id=$2`,
+			accountID, alertID, actor.UserID).Scan(&receiptRead, &compatibilityRead); err != nil {
 			t.Fatalf("read alert effect: %v", err)
 		}
-		if !read {
-			t.Fatal("alert remained unread")
+		if !receiptRead || compatibilityRead {
+			t.Fatalf("alert receipt/compatibility read = %v/%v, want true/false", receiptRead, compatibilityRead)
 		}
 		if got := accountTokenCount(t, st, accountID); got != tokensBefore {
 			t.Fatalf("mark alert read changed token count from %d to %d", tokensBefore, got)
@@ -208,7 +212,8 @@ func TestRoleMatrixMutationEffects(t *testing.T) {
 		accountID := selectedAccountID(t, st, session)
 		sbom := seedLabeledSBOM(t, st, accountID, "credential-effect")
 		alertID := seedBrowserAlert(t, st, accountID, sbom, "CVE-2026-5102")
-		before, err := tenant.ListAPITokens(ctx, st.DB(), accountID)
+		actor := sessionUserActor(t, st, session)
+		before, err := st.ListAPITokens(ctx, accountID, actor)
 		if err != nil {
 			t.Fatalf("list tokens before create: %v", err)
 		}
@@ -218,7 +223,7 @@ func TestRoleMatrixMutationEffects(t *testing.T) {
 			t.Fatalf("create token = %d location %q, want 303 /tokens: %s",
 				create.Code, create.Header().Get("Location"), create.Body.String())
 		}
-		afterCreate, err := tenant.ListAPITokens(ctx, st.DB(), accountID)
+		afterCreate, err := st.ListAPITokens(ctx, accountID, actor)
 		if err != nil {
 			t.Fatalf("list tokens after create: %v", err)
 		}
@@ -232,7 +237,7 @@ func TestRoleMatrixMutationEffects(t *testing.T) {
 			t.Fatalf("revoke token = %d location %q, want 303 /tokens: %s",
 				revoke.Code, revoke.Header().Get("Location"), revoke.Body.String())
 		}
-		afterRevoke, err := tenant.ListAPITokens(ctx, st.DB(), accountID)
+		afterRevoke, err := st.ListAPITokens(ctx, accountID, actor)
 		if err != nil {
 			t.Fatalf("list tokens after revoke: %v", err)
 		}
@@ -286,11 +291,21 @@ func selectedAccountID(t *testing.T, st *postgres.Store, sessionCookie *http.Coo
 
 func accountTokenCount(t *testing.T, st *postgres.Store, accountID string) int {
 	t.Helper()
-	tokens, err := tenant.ListAPITokens(context.Background(), st.DB(), accountID)
-	if err != nil {
-		t.Fatalf("list account tokens: %v", err)
+	var count int
+	if err := st.DB().QueryRowContext(context.Background(),
+		`SELECT count(*) FROM devradar_api_token WHERE tenant_id=$1`, accountID).Scan(&count); err != nil {
+		t.Fatalf("count account tokens: %v", err)
 	}
-	return len(tokens)
+	return count
+}
+
+func sessionUserActor(t *testing.T, st *postgres.Store, sessionCookie *http.Cookie) account.Actor {
+	t.Helper()
+	session, err := st.ValidateSession(context.Background(), sessionCookie.Value)
+	if err != nil {
+		t.Fatalf("validate role session actor: %v", err)
+	}
+	return account.Actor{Kind: account.ActorUser, UserID: session.User.ID}
 }
 
 func postRoleMutation(t *testing.T, h http.Handler, session *http.Cookie, path string, form url.Values) *httptest.ResponseRecorder {

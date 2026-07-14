@@ -1,10 +1,8 @@
 package config
 
 import (
-	"encoding/base64"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/url"
 	"os"
 	"strconv"
@@ -53,17 +51,23 @@ func Validate() error {
 	// keying), so a bad value is a security-relevant misconfig, not a cosmetic one.
 	check(validateInt("DEVRADAR_TRUSTED_PROXY_COUNT", 0, -1))
 
-	// Fail closed on a security-at-rest key: a SET-but-invalid token-flash key
-	// silently degrades to plaintext storage of the live API token. Acceptable in
-	// dev (unset ⇒ plaintext by design); a deployment mistake in production.
-	check(validateTokenFlashKey())
-
 	// Required URLs, when set, must parse with a scheme + host.
 	check(validateURL("BASE_URL"))
 	check(validateDatabaseURL("DATABASE_URL"))
 
 	if len(errs) > 0 {
 		return fmt.Errorf("invalid configuration: %w", errors.Join(errs...))
+	}
+	return nil
+}
+
+// ValidateServer validates shared configuration plus serve-only secrets.
+func ValidateServer() error {
+	if err := Validate(); err != nil {
+		return err
+	}
+	if err := validateTokenFlashKey(); err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
 	}
 	return nil
 }
@@ -120,35 +124,13 @@ func validateURL(key string) error {
 	return nil
 }
 
-// validateTokenFlashKey guards the token-flash encryption key. A SET but invalid
-// DEVRADAR_TOKEN_FLASH_KEY (not base64, or not 32 bytes) would make TokenFlashKey()
-// return nil and the caller store the one-time API token in PLAINTEXT — silently
-// defeating the encryption the operator meant to enable — so a set-but-invalid
-// value is a HARD error in every mode (it is unambiguously a mistake).
-//
-// An UNSET key is NOT an error: the flash then falls back to plaintext-at-rest for
-// the ~2-minute display window, which is the documented behavior when no key is
-// provisioned (dev, and any environment that hasn't set one yet). Outside DevMode
-// we emit a loud startup WARNING so the plaintext fallback is visible, but we do
-// NOT refuse to start — making it fatal turned a not-yet-provisioned secret into a
-// deploy-blocking startup-probe failure (the container won't boot), which is worse
-// than the plaintext window it was trying to prevent. Provisioning the key is
-// tracked in ROADMAP.md; until then this degrades loudly, not fatally.
+// validateTokenFlashKey rejects missing production configuration and every
+// invalid configured value. Development initializes a process-ephemeral key;
+// restart loss of an unread two-minute flash is preferable to recoverable raw
+// token storage.
 func validateTokenFlashKey() error {
-	v := strings.TrimSpace(os.Getenv("DEVRADAR_TOKEN_FLASH_KEY"))
-	if v == "" {
-		if !DevMode() {
-			slog.Warn("DEVRADAR_TOKEN_FLASH_KEY is not set; the one-time API-token " +
-				"flash will be stored in PLAINTEXT at rest (provision the key to encrypt it)")
-		}
-		return nil
-	}
-	key, err := base64.StdEncoding.DecodeString(v)
-	if err != nil || len(key) != 32 {
-		return fmt.Errorf("DEVRADAR_TOKEN_FLASH_KEY must be base64-encoded 32 bytes " +
-			"(an invalid value would silently store API tokens in plaintext)")
-	}
-	return nil
+	_, err := TokenFlashKey()
+	return err
 }
 
 // validateDatabaseURL checks that DATABASE_URL, if set, parses as a URL. Cloud

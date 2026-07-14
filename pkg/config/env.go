@@ -6,11 +6,13 @@
 package config
 
 import (
+	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/thingzio/devradar/pkg/attest"
@@ -110,21 +112,40 @@ func EmailFrom() string {
 }
 
 // TokenFlashKey returns the AES-256 key used to encrypt the one-time API-token
-// display flash at rest (DEVRADAR_TOKEN_FLASH_KEY, base64-encoded 32 bytes), or
-// nil when unset. When nil the flash is stored as plaintext (acceptable for
-// local dev); production should set a key so the live secret is never at rest in
-// plaintext even for the 2-minute display window. An invalid/wrong-length value
-// returns nil (the caller degrades to plaintext rather than failing).
-func TokenFlashKey() []byte {
+// display flash at rest (DEVRADAR_TOKEN_FLASH_KEY, base64-encoded 32 bytes).
+// Development uses one process-ephemeral key when unset. Production requires a
+// configured key. Invalid values always fail closed.
+func TokenFlashKey() ([]byte, error) {
 	raw := GetEnv("DEVRADAR_TOKEN_FLASH_KEY", "")
 	if raw == "" {
-		return nil
+		if !DevMode() {
+			return nil, fmt.Errorf("DEVRADAR_TOKEN_FLASH_KEY is required outside development mode")
+		}
+		return ephemeralTokenFlashKey()
 	}
 	key, err := base64.StdEncoding.DecodeString(raw)
 	if err != nil || len(key) != 32 {
-		return nil
+		return nil, fmt.Errorf("DEVRADAR_TOKEN_FLASH_KEY must be base64-encoded 32 bytes")
 	}
-	return key
+	return key, nil
+}
+
+var processTokenFlashKey struct {
+	once sync.Once
+	key  [32]byte
+	err  error
+}
+
+func ephemeralTokenFlashKey() ([]byte, error) {
+	processTokenFlashKey.once.Do(func() {
+		_, processTokenFlashKey.err = rand.Read(processTokenFlashKey.key[:])
+	})
+	if processTokenFlashKey.err != nil {
+		return nil, fmt.Errorf("generate development token flash key: %w", processTokenFlashKey.err)
+	}
+	key := make([]byte, len(processTokenFlashKey.key))
+	copy(key, processTokenFlashKey.key[:])
+	return key, nil
 }
 
 // GitHubClientID returns the GitHub OAuth app client id, or "" if unset.

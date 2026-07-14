@@ -7,8 +7,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/thingzio/devradar/pkg/tenant"
 )
 
 // TestCreateToken_CapEnforced verifies the per-tenant token issuance cap: with
@@ -39,8 +37,9 @@ func TestCreateToken_CapEnforced(t *testing.T) {
 	if code := create(); code != http.StatusTooManyRequests {
 		t.Errorf("3rd token create = %d, want 429 (cap reached)", code)
 	}
-	n, err := tenant.CountAPITokens(context.Background(), st.DB(), tenantID)
-	if err != nil {
+	var n int
+	if err := st.DB().QueryRowContext(context.Background(),
+		`SELECT count(*) FROM devradar_api_token WHERE tenant_id=$1`, tenantID).Scan(&n); err != nil {
 		t.Fatalf("count tokens: %v", err)
 	}
 	if n != 2 {

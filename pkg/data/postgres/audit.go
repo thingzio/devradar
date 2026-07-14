@@ -10,11 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/thingzio/devradar/pkg/account"
-	"github.com/thingzio/devradar/pkg/authn"
 	"github.com/thingzio/devradar/pkg/data"
 )
 
@@ -240,63 +238,6 @@ func (s *Store) SetMinSeverityAudited(ctx context.Context, accountID, severity s
 	})
 }
 
-// CreateAPITokenAudited generates an account credential and appends its audit
-// event in the same transaction. Only the hash crosses the database boundary.
-func (s *Store) CreateAPITokenAudited(
-	ctx context.Context,
-	accountID, name string,
-	ttl time.Duration,
-	maxTokens int,
-	actor account.Actor,
-	requestID string,
-) (string, error) {
-	var secret [32]byte
-	if _, err := rand.Read(secret[:]); err != nil {
-		return "", fmt.Errorf("generate api token: %w", err)
-	}
-	raw := "dr_" + hex.EncodeToString(secret[:])
-	tokenID, err := newAuditUUID()
-	if err != nil {
-		return "", fmt.Errorf("generate api token id: %w", err)
-	}
-	var expiresAt any
-	if ttl > 0 {
-		expiresAt = time.Now().Add(ttl).UTC()
-	}
-	err = s.WithAudit(ctx, accountID, actor, AuditEvent{
-		Action: "api_token.create", TargetType: "api_token", TargetID: tokenID,
-		Outcome: "success", RequestID: requestID,
-	}, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx,
-			`SELECT pg_advisory_xact_lock(hashtext($1))`, accountID); err != nil {
-			return fmt.Errorf("acquire token admission lock: %w", err)
-		}
-		res, err := tx.ExecContext(ctx, `
-			INSERT INTO devradar_api_token
-				(id,tenant_id,name,token_hash,expires_at,created_by_user_id)
-			SELECT $1,$2,$3,$4,$5,$6
-			WHERE $7 <= 0
-			   OR (SELECT count(*) FROM devradar_api_token WHERE tenant_id=$2) < $7`,
-			tokenID, accountID, name, authn.HashToken(raw), expiresAt,
-			nullStr(actor.UserID), maxTokens)
-		if err != nil {
-			return fmt.Errorf("create api token: %w", err)
-		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("create api token rows affected: %w", err)
-		}
-		if n == 0 {
-			return ErrAPITokenLimit
-		}
-		return nil
-	})
-	if err != nil {
-		return "", err
-	}
-	return raw, nil
-}
-
 func newAuditUUID() (string, error) {
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
@@ -306,29 +247,6 @@ func newAuditUUID() (string, error) {
 	raw[8] = raw[8]&0x3f | 0x80
 	h := hex.EncodeToString(raw[:])
 	return h[:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:], nil
-}
-
-// RevokeAPITokenAudited deletes only an account-owned credential and records
-// its stable token UUID as the target.
-func (s *Store) RevokeAPITokenAudited(ctx context.Context, accountID, tokenID string, actor account.Actor, requestID string) error {
-	return s.WithAudit(ctx, accountID, actor, AuditEvent{
-		Action: "api_token.revoke", TargetType: "api_token", TargetID: tokenID,
-		Outcome: "success", RequestID: requestID,
-	}, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx,
-			`DELETE FROM devradar_api_token WHERE id=$1 AND tenant_id=$2`, tokenID, accountID)
-		if err != nil {
-			return fmt.Errorf("revoke api token: %w", err)
-		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("revoke api token rows affected: %w", err)
-		}
-		if n == 0 {
-			return ErrNotFound
-		}
-		return nil
-	})
 }
 
 func validateAuditInput(accountID string, actor account.Actor, event AuditEvent) ([]byte, error) {

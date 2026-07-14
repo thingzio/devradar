@@ -4,11 +4,16 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"errors"
 	"fmt"
 	"log"
+	"time"
 
 	_ "github.com/lib/pq"
 
+	"github.com/thingzio/devradar/pkg/account"
+	"github.com/thingzio/devradar/pkg/authn"
 	"github.com/thingzio/devradar/pkg/data/postgres"
 	"github.com/thingzio/devradar/pkg/tenant"
 )
@@ -33,12 +38,51 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("upsert tenant: %w", err)
 	}
-	token, err := tenant.CreateAPIToken(ctx, db, tn.ID, "local-dev", 0)
+	if err := store.ReconcileLegacyAccount(ctx, tn.ID); err != nil {
+		return fmt.Errorf("reconcile local account: %w", err)
+	}
+	user, acct, err := store.ResolveDirectIdentity(ctx, account.VerifiedIdentity{
+		Provider: "magiclink", Subject: tn.Email, Email: tn.Email,
+	})
+	if err != nil {
+		return fmt.Errorf("resolve local identity: %w", err)
+	}
+	if acct == nil {
+		return fmt.Errorf("resolve local identity: no active account")
+	}
+	session, err := store.CreateSession(ctx, user.ID, &acct.ID, time.Hour)
+	if err != nil {
+		return fmt.Errorf("create local session: %w", err)
+	}
+	defer func() { _ = store.DestroySession(ctx, session) }()
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return fmt.Errorf("generate local token flash key: %w", err)
+	}
+	requestID, err := authn.NewToken("")
+	if err != nil {
+		return fmt.Errorf("generate local request id: %w", err)
+	}
+	compensationRequestID, err := authn.NewToken("")
+	if err != nil {
+		return fmt.Errorf("generate local compensation request id: %w", err)
+	}
+	tokenID, err := store.CreateAPIToken(ctx, acct.ID, user.ID, authn.HashToken(session),
+		"local-dev", 0, 0, requestID, key)
 	if err != nil {
 		return fmt.Errorf("create token: %w", err)
 	}
+	token, err := store.ConsumeTokenFlash(ctx, authn.HashToken(session), acct.ID, key)
+	if err != nil {
+		revokeErr := store.RevokeAPIToken(ctx, acct.ID, tokenID,
+			account.Actor{Kind: account.ActorUser, UserID: user.ID}, compensationRequestID)
+		if revokeErr != nil {
+			revokeErr = fmt.Errorf("compensate token creation: %w", revokeErr)
+		}
+		return errors.Join(fmt.Errorf("consume token flash: %w", err), revokeErr)
+	}
 
-	fmt.Printf("Tenant ID: %s\n", tn.ID)
+	fmt.Printf("Tenant ID: %s\n", acct.ID)
 	fmt.Printf("Email:     %s\n", tn.Email)
 	fmt.Printf("API Token: %s\n\n", token)
 	fmt.Println("Export it for the curl examples in the README:")

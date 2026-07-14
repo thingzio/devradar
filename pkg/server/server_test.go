@@ -18,11 +18,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thingzio/devradar/pkg/authn"
 	"github.com/thingzio/devradar/pkg/data/postgres"
 	"github.com/thingzio/devradar/pkg/gcs"
 	"github.com/thingzio/devradar/pkg/middleware"
 	"github.com/thingzio/devradar/pkg/server"
-	"github.com/thingzio/devradar/pkg/tenant"
 )
 
 // seedSession mints a UI session cookie for a tenant so tests can exercise
@@ -53,6 +53,9 @@ func seedLegacyUser(t *testing.T, st *postgres.Store, tenantID string) string {
 
 func testServer(t *testing.T) (*server.Server, *postgres.Store) {
 	t.Helper()
+	if _, configured := os.LookupEnv("DEVRADAR_DEV_MODE"); !configured {
+		t.Setenv("DEVRADAR_DEV_MODE", "true")
+	}
 	st := testPostgresStore(t)
 	// email + OAuth nil → API-only; local blob store under a temp dir.
 	srv := server.New(st, gcs.LocalStore{Dir: t.TempDir()}, nil, nil, nil, server.Options{Version: "test"})
@@ -136,9 +139,14 @@ func seedTenantToken(t *testing.T, st *postgres.Store) (tenantID, token string) 
 		"u"+hex.EncodeToString(b)+"@example.com").Scan(&tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
-	tok, err := tenant.CreateAPIToken(ctx, st.DB(), tenantID, "test", 0)
+	tok, err := authn.NewToken("dr_")
 	if err != nil {
-		t.Fatalf("create token: %v", err)
+		t.Fatalf("generate token: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_api_token (tenant_id,name,token_hash)
+		VALUES ($1,'test',$2)`, tenantID, authn.HashToken(tok)); err != nil {
+		t.Fatalf("seed token: %v", err)
 	}
 	return tenantID, tok
 }

@@ -1,7 +1,31 @@
 # Secrets DevRadar owns. Registry credentials are intentionally absent — DevRadar
-# never pulls images. Secret *values* for send-api-key and anthropic-api-key are
-# populated out-of-band (console/CLI) after first apply; only the database-url
-# value is assembled here (from the generated DB password).
+# never pulls images. Values use generated, out-of-band, or tfvars-backed sources
+# as documented per secret below.
+
+# Session-bound API token flashes use an application-level encryption key. This
+# value remains stable in Terraform state until an operator explicitly replaces
+# random_id.token_flash_key.
+resource "random_id" "token_flash_key" {
+  byte_length = 32
+}
+
+resource "google_secret_manager_secret" "token_flash_key" {
+  secret_id = "${var.prefix}-token-flash-key"
+  project   = var.project_id
+  replication {
+    auto {}
+  }
+  depends_on = [google_project_service.default]
+}
+
+resource "google_secret_manager_secret_version" "token_flash_key" {
+  secret      = google_secret_manager_secret.token_flash_key.id
+  secret_data = random_id.token_flash_key.b64_std
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
 
 resource "google_secret_manager_secret" "database_url" {
   secret_id = "${var.prefix}-database-url"
@@ -93,6 +117,12 @@ resource "google_secret_manager_secret_version" "oauth_client_secret" {
 
 resource "google_secret_manager_secret_iam_member" "run_database_url" {
   secret_id = google_secret_manager_secret.database_url.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.run.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "run_token_flash_key" {
+  secret_id = google_secret_manager_secret.token_flash_key.id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.run.email}"
 }

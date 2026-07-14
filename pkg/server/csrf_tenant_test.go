@@ -1,10 +1,13 @@
 package server_test
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/thingzio/devradar/pkg/middleware"
 )
 
 // TestTenantMutations_RequireCSRF verifies every authenticated browser mutation
@@ -72,6 +75,7 @@ func TestCreateToken_FlashNotInURL(t *testing.T) {
 	srv, st := testServer(t)
 	tenantID, _ := seedTenantToken(t, st)
 	cookie := seedSession(t, st, tenantID)
+	otherSession := seedSession(t, st, tenantID)
 	h := srv.Handler()
 
 	// Create a token (CSRF-protected form).
@@ -92,6 +96,13 @@ func TestCreateToken_FlashNotInURL(t *testing.T) {
 	}
 	if strings.Contains(loc, "dr_") || strings.Contains(loc, "new=") {
 		t.Errorf("redirect URL leaks the token: %q", loc)
+	}
+	otherReq := httptest.NewRequest(http.MethodGet, "/tokens", nil)
+	otherReq.AddCookie(otherSession)
+	otherRec := httptest.NewRecorder()
+	h.ServeHTTP(otherRec, otherReq)
+	if strings.Contains(otherRec.Body.String(), "dr_") {
+		t.Fatal("different session consumed the creating session's token flash")
 	}
 
 	// First GET shows the token once (from the flash).
@@ -115,5 +126,41 @@ func TestCreateToken_FlashNotInURL(t *testing.T) {
 	// Second GET must not re-show that exact token (single-use flash).
 	if second := get(); strings.Contains(second, shown) {
 		t.Errorf("second /tokens GET should not re-show the token")
+	}
+}
+
+func TestCreateToken_InvalidEncryptionKeyFailsCorrelatedAndAtomic(t *testing.T) {
+	t.Setenv("DEVRADAR_TOKEN_FLASH_KEY", "invalid-key")
+	srv, st := testServer(t)
+	accountID, _ := seedTenantToken(t, st)
+	session := seedSession(t, st, accountID)
+	h := srv.Handler()
+	token, err := middleware.GenerateCSRFToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrfCookie := &http.Cookie{Name: middleware.CSRFCookieName(), Value: token}
+	req := httptest.NewRequest(http.MethodPost, "/tokens",
+		strings.NewReader("name=must-rollback&csrf_token="+token))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(session)
+	req.AddCookie(csrfCookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError || rec.Header().Get("X-Request-ID") == "" {
+		t.Fatalf("invalid key response = %d request_id=%q, want 500/correlation",
+			rec.Code, rec.Header().Get("X-Request-ID"))
+	}
+	var tokens, audits, flashes int
+	if err := st.DB().QueryRowContext(context.Background(), `
+		SELECT (SELECT count(*) FROM devradar_api_token WHERE tenant_id=$1),
+		       (SELECT count(*) FROM devradar_audit_event
+		        WHERE account_id=$1 AND action='api_token.create'),
+		       (SELECT count(*) FROM devradar_session_token_flash WHERE account_id=$1)`, accountID).
+		Scan(&tokens, &audits, &flashes); err != nil {
+		t.Fatal(err)
+	}
+	if tokens != 1 || audits != 0 || flashes != 0 {
+		t.Fatalf("invalid-key state = %d tokens/%d audits/%d flashes, want 1/0/0", tokens, audits, flashes)
 	}
 }

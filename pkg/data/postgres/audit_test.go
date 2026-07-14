@@ -1,6 +1,7 @@
 package postgres_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -14,6 +15,7 @@ import (
 	"github.com/lib/pq"
 	"github.com/thingzio/devradar/pkg/account"
 	"github.com/thingzio/devradar/pkg/attest"
+	"github.com/thingzio/devradar/pkg/authn"
 	"github.com/thingzio/devradar/pkg/data"
 	"github.com/thingzio/devradar/pkg/data/postgres"
 	"github.com/thingzio/devradar/pkg/vex"
@@ -525,9 +527,17 @@ func TestAuditedAPITokenCreateAndRevoke(t *testing.T) {
 	ctx := context.Background()
 	accountID, userID := seedAuditAccount(t, st)
 	actor := account.Actor{Kind: account.ActorUser, UserID: userID}
-	raw, err := st.CreateAPITokenAudited(ctx, accountID, "ci", time.Hour, 10, actor, randID(t))
+	session, err := st.CreateSession(ctx, userID, &accountID, time.Hour)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateAPIToken(ctx, accountID, userID, authn.HashToken(session),
+		"ci", time.Hour, 10, randID(t), bytes.Repeat([]byte{4}, 32)); err != nil {
 		t.Fatalf("create audited api token: %v", err)
+	}
+	raw, err := st.ConsumeTokenFlash(ctx, authn.HashToken(session), accountID, bytes.Repeat([]byte{4}, 32))
+	if err != nil {
+		t.Fatal(err)
 	}
 	if !strings.HasPrefix(raw, "dr_") {
 		t.Fatalf("raw token prefix = %q", raw)
@@ -556,7 +566,7 @@ func TestAuditedAPITokenCreateAndRevoke(t *testing.T) {
 		t.Fatal("raw API token leaked into audit metadata")
 	}
 
-	if err := st.RevokeAPITokenAudited(ctx, accountID, tokenID, actor, randID(t)); err != nil {
+	if err := st.RevokeAPIToken(ctx, accountID, tokenID, actor, randID(t)); err != nil {
 		t.Fatalf("revoke audited api token: %v", err)
 	}
 	if err := st.DB().QueryRowContext(ctx, `
@@ -575,13 +585,17 @@ func TestAuditedAPITokenAuditFailuresRollBack(t *testing.T) {
 		st := isolatedAdminProductHealthStore(t)
 		ctx := context.Background()
 		accountID, userID := seedAuditAccount(t, st)
+		session, err := st.CreateSession(ctx, userID, &accountID, time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if _, err := st.DB().ExecContext(ctx, `
 			ALTER TABLE devradar_audit_event ADD CONSTRAINT test_reject_token_create
 			CHECK (action <> 'api_token.create')`); err != nil {
 			t.Fatalf("add token create audit failure: %v", err)
 		}
-		if _, err := st.CreateAPITokenAudited(ctx, accountID, "rollback", 0, 10,
-			account.Actor{Kind: account.ActorUser, UserID: userID}, randID(t)); err == nil {
+		if _, err := st.CreateAPIToken(ctx, accountID, userID, authn.HashToken(session),
+			"rollback", 0, 10, randID(t), bytes.Repeat([]byte{5}, 32)); err == nil {
 			t.Fatal("token create audit failure returned nil")
 		}
 		var count int
@@ -609,7 +623,7 @@ func TestAuditedAPITokenAuditFailuresRollBack(t *testing.T) {
 			CHECK (action <> 'api_token.revoke')`); err != nil {
 			t.Fatalf("add token revoke audit failure: %v", err)
 		}
-		if err := st.RevokeAPITokenAudited(ctx, accountID, tokenID,
+		if err := st.RevokeAPIToken(ctx, accountID, tokenID,
 			account.Actor{Kind: account.ActorUser, UserID: userID}, randID(t)); err == nil {
 			t.Fatal("token revoke audit failure returned nil")
 		}

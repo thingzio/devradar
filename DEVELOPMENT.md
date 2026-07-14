@@ -181,9 +181,10 @@ Tenant isolation is application-enforced, not PostgreSQL RLS:
 - Cross-tenant integration tests are required for each scoped table/query.
 - Deliberate cross-tenant operator queries are `Admin`-prefixed and colocated.
 
-API tokens are never stored recoverably: only SHA-256 hashes are retained. The
-one-time token-display flash is encrypted with AES-GCM when
-`DEVRADAR_TOKEN_FLASH_KEY` is configured; production must provide the key.
+Raw API tokens are never stored: credential rows retain only SHA-256 hashes and
+the one-time token-display flash retains only AES-GCM ciphertext. Production must
+provide `DEVRADAR_TOKEN_FLASH_KEY`; development uses a process-ephemeral key,
+so a restart may discard an unread two-minute flash.
 Browser access uses hashed, expiring sessions after a magic link or optional
 GitHub OAuth. Mutating browser routes require CSRF protection.
 

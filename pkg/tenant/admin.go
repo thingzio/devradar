@@ -154,16 +154,3 @@ func DeleteTenant(ctx context.Context, db *sql.DB, tenantID string) error {
 	}
 	return nil
 }
-
-// AdminRevokeAPIToken deletes an API token by id without a tenant predicate —
-// an operator action. Returns ErrNotFound if no such token exists.
-func AdminRevokeAPIToken(ctx context.Context, db *sql.DB, tokenID string) error {
-	res, err := db.ExecContext(ctx, `DELETE FROM devradar_api_token WHERE id = $1`, tokenID)
-	if err != nil {
-		return fmt.Errorf("admin revoke api token: %w", err)
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
-	}
-	return nil
-}

@@ -22,11 +22,15 @@ func TestPurgeExpiredAuth(t *testing.T) {
 	liveEmail := "purge-live-" + randID(t)[:8] + "@example.com"
 
 	// Two sessions: one already expired, one live.
+	expiredSessionID := randID(t)
+	expiredFlashSessionID := randID(t)
+	liveFlashSessionID := randID(t)
 	if _, err := st.DB().ExecContext(ctx,
 		`INSERT INTO devradar_session (id, tenant_id, expires_at) VALUES
 		 ($1, $2, now() - interval '1 hour'),
-		 ($3, $2, now() + interval '1 hour')`,
-		randID(t), tenantID, randID(t)); err != nil {
+		 ($3, $2, now() + interval '1 hour'),
+		 ($4, $2, now() + interval '1 hour')`,
+		expiredSessionID, tenantID, expiredFlashSessionID, liveFlashSessionID); err != nil {
 		t.Fatalf("seed sessions: %v", err)
 	}
 	// Two login tokens: one expired, one live.
@@ -53,6 +57,13 @@ func TestPurgeExpiredAuth(t *testing.T) {
 		tenantID, liveFlashTenant); err != nil {
 		t.Fatalf("seed token flash: %v", err)
 	}
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_session_token_flash (session_id,account_id,value,expires_at) VALUES
+		 ($1,$2,'enc:expired',now()-interval '1 hour'),
+		 ($3,$2,'enc:live',now()+interval '1 hour')`,
+		expiredFlashSessionID, tenantID, liveFlashSessionID); err != nil {
+		t.Fatalf("seed session token flash: %v", err)
+	}
 
 	if err := st.PurgeExpiredAuth(ctx); err != nil {
 		t.Fatalf("purge: %v", err)
@@ -64,8 +75,8 @@ func TestPurgeExpiredAuth(t *testing.T) {
 		`SELECT COUNT(*) FROM devradar_session WHERE tenant_id=$1`, tenantID).Scan(&sessions); err != nil {
 		t.Fatalf("count sessions: %v", err)
 	}
-	if sessions != 1 {
-		t.Errorf("live sessions after purge = %d, want 1", sessions)
+	if sessions != 2 {
+		t.Errorf("live sessions after purge = %d, want 2", sessions)
 	}
 	if err := st.DB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM devradar_login_token WHERE email=$1`, liveEmail).Scan(&tokens); err != nil {
@@ -89,5 +100,14 @@ func TestPurgeExpiredAuth(t *testing.T) {
 	}
 	if liveFlash != 1 {
 		t.Errorf("live token-flash row must survive, got %d", liveFlash)
+	}
+	var sessionFlashes int
+	if err := st.DB().QueryRowContext(ctx, `
+		SELECT count(*) FROM devradar_session_token_flash WHERE account_id=$1`, tenantID).
+		Scan(&sessionFlashes); err != nil {
+		t.Fatalf("count session token flashes: %v", err)
+	}
+	if sessionFlashes != 1 {
+		t.Errorf("live session token flashes after purge = %d, want 1", sessionFlashes)
 	}
 }

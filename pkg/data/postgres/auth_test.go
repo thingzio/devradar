@@ -12,7 +12,6 @@ import (
 	"github.com/thingzio/devradar/pkg/account"
 	"github.com/thingzio/devradar/pkg/authn"
 	"github.com/thingzio/devradar/pkg/data/postgres"
-	"github.com/thingzio/devradar/pkg/tenant"
 )
 
 func TestValidateAPITokenReturnsAccountAndTokenActor(t *testing.T) {
@@ -25,10 +24,7 @@ func TestValidateAPITokenReturnsAccountAndTokenActor(t *testing.T) {
 	if err != nil || acct == nil {
 		t.Fatalf("resolve api account: account=%#v err=%v", acct, err)
 	}
-	raw, err := tenant.CreateAPIToken(ctx, st.DB(), acct.ID, "ci", time.Hour)
-	if err != nil {
-		t.Fatalf("create api token: %v", err)
-	}
+	raw := seedValidationAPIToken(t, st, acct.ID, "ci", time.Hour)
 
 	gotAccount, actor, err := st.ValidateAPIToken(ctx, raw)
 	if err != nil {
@@ -78,10 +74,7 @@ func TestValidateAPITokenRejectsRevokedAndExpiredTokens(t *testing.T) {
 		{name: "expired", mutate: `UPDATE devradar_api_token SET expires_at=now()-interval '1 minute' WHERE token_hash=$1`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			raw, err := tenant.CreateAPIToken(ctx, st.DB(), accountID, tc.name, time.Hour)
-			if err != nil {
-				t.Fatalf("create api token: %v", err)
-			}
+			raw := seedValidationAPIToken(t, st, accountID, tc.name, time.Hour)
 			if _, err := st.DB().ExecContext(ctx, tc.mutate, authn.HashToken(raw)); err != nil {
 				t.Fatalf("invalidate api token: %v", err)
 			}
@@ -90,6 +83,24 @@ func TestValidateAPITokenRejectsRevokedAndExpiredTokens(t *testing.T) {
 			}
 		})
 	}
+}
+
+func seedValidationAPIToken(t *testing.T, st *postgres.Store, accountID, name string, ttl time.Duration) string {
+	t.Helper()
+	raw, err := authn.NewToken("dr_")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var expiresAt any
+	if ttl > 0 {
+		expiresAt = time.Now().Add(ttl).UTC()
+	}
+	if _, err := st.DB().ExecContext(context.Background(), `
+		INSERT INTO devradar_api_token (tenant_id,name,token_hash,expires_at)
+		VALUES ($1,$2,$3,$4)`, accountID, name, authn.HashToken(raw), expiresAt); err != nil {
+		t.Fatalf("seed validation api token: %v", err)
+	}
+	return raw
 }
 
 func TestResolveDirectIdentityCreatesOneAccount(t *testing.T) {

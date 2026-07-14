@@ -279,9 +279,10 @@ func (s *Server) handleAdminTenantDetail(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "failed to load tenant", http.StatusInternalServerError)
 		return
 	}
-	tokens, err := tenant.ListAPITokens(r.Context(), s.store.DB(), id)
+	tokens, err := s.store.ListAPITokens(r.Context(), id, middleware.ActorFromContext(r.Context()))
 	if err != nil {
-		slog.Error("admin tenant tokens", "error", err)
+		slog.Error("admin tenant tokens", "account_id", id,
+			"request_id", middleware.RequestIDFromContext(r.Context()), "error", err)
 		http.Error(w, "failed to load tenant", http.StatusInternalServerError)
 		return
 	}
@@ -375,7 +376,7 @@ func (s *Server) handleAdminRevokeToken(w http.ResponseWriter, r *http.Request) 
 	id := r.PathValue("id")
 	tid := r.PathValue("tid")
 	dest := "/admin/tenant/" + id
-	if err := s.store.RevokeAPITokenAudited(r.Context(), id, tid,
+	if err := s.store.RevokeAPIToken(r.Context(), id, tid,
 		middleware.ActorFromContext(r.Context()), middleware.RequestIDFromContext(r.Context())); err != nil {
 		logMutationFailure(r, "api_token.revoke", id, tid, err)
 		slog.Error("admin revoke token", "token", tid, "error", err)

@@ -92,26 +92,33 @@ func updateAlertPolicy(ctx context.Context, exec dbtx, tenantID string, policy A
 	return n > 0, nil
 }
 
-const alertSelect = `
+const personalAlertSelect = `
 	SELECT a.id, a.tenant_id, a.policy_id, a.event_id, a.event_occurred_at,
 	       a.alert_kind, a.sbom_id, a.repository, a.digest, a.finding_id,
 	       a.exposure, a.package, a.version, a.severity, a.cause, a.score,
-	       a.read_at, a.created_at, COALESCE(e.kev, false), e.epss_score
+	       COALESCE(r.read_at, CASE WHEN u.legacy_tenant_id=a.tenant_id THEN a.read_at END),
+	       a.created_at, COALESCE(e.kev, false), e.epss_score
 	FROM devradar_alert a
+	JOIN devradar_tenant t ON t.id=a.tenant_id AND t.status='active'
+	JOIN devradar_account_member m
+	  ON m.account_id=a.tenant_id AND m.user_id=$2 AND m.revoked_at IS NULL
+	JOIN devradar_user u ON u.id=m.user_id AND u.status='active'
+	LEFT JOIN devradar_alert_receipt r
+	  ON r.alert_id=a.id AND r.account_id=a.tenant_id AND r.user_id=$2
 	LEFT JOIN devradar_cve_enrichment e ON e.cve = a.exposure`
 
-// ListAlerts returns a tenant's alert history newest first.
-func (s *Store) ListAlerts(ctx context.Context, tenantID, cursor string, limit int) (items []Alert, next string, err error) {
+// ListAlerts returns an account member's personal alert history newest first.
+func (s *Store) ListAlerts(ctx context.Context, accountID, userID, cursor string, limit int) (items []Alert, next string, err error) {
 	eff, fetch := clampLimit(limit)
 	cur, hasCur := decodeCursor(cursor)
-	args := []any{tenantID}
+	args := []any{accountID, userID}
 	seek := ""
 	if hasCur {
-		seek = " AND (a.created_at, a.id) < ($2, $3)"
+		seek = " AND (a.created_at, a.id) < ($3, $4)"
 		args = append(args, cur.TS, cur.ID)
 	}
 	args = append(args, fetch)
-	rows, err := s.db.QueryContext(ctx, alertSelect+fmt.Sprintf(`
+	rows, err := s.db.QueryContext(ctx, personalAlertSelect+fmt.Sprintf(`
 		WHERE a.tenant_id=$1%s
 		ORDER BY a.created_at DESC, a.id DESC
 		LIMIT $%d`, seek, len(args)), args...)
@@ -137,15 +144,16 @@ func (s *Store) ListAlerts(ctx context.Context, tenantID, cursor string, limit i
 	return items, next, nil
 }
 
-// UnreadAlerts returns a bounded newest-first tenant list for Overview.
-func (s *Store) UnreadAlerts(ctx context.Context, tenantID string, limit int) ([]Alert, error) {
+// UnreadAlerts returns a bounded newest-first personal list for Overview.
+func (s *Store) UnreadAlerts(ctx context.Context, accountID, userID string, limit int) ([]Alert, error) {
 	if limit <= 0 || limit > maxPageLimit {
 		limit = 5
 	}
-	rows, err := s.db.QueryContext(ctx, alertSelect+`
-		WHERE a.tenant_id=$1 AND a.read_at IS NULL
+	rows, err := s.db.QueryContext(ctx, personalAlertSelect+`
+		WHERE a.tenant_id=$1
+		  AND COALESCE(r.read_at, CASE WHEN u.legacy_tenant_id=a.tenant_id THEN a.read_at END) IS NULL
 		ORDER BY a.created_at DESC, a.id DESC
-		LIMIT $2`, tenantID, limit)
+		LIMIT $3`, accountID, userID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list unread alerts: %w", err)
 	}
@@ -164,11 +172,11 @@ func (s *Store) UnreadAlerts(ctx context.Context, tenantID string, limit int) ([
 	return out, nil
 }
 
-// GetAlert returns one alert only when it belongs to tenantID.
-func (s *Store) GetAlert(ctx context.Context, tenantID, alertID string) (*Alert, error) {
+// GetAlert returns one alert only when it belongs to the member's account.
+func (s *Store) GetAlert(ctx context.Context, accountID, userID, alertID string) (*Alert, error) {
 	var a Alert
-	err := scanAlert(s.db.QueryRowContext(ctx, alertSelect+`
-		WHERE a.tenant_id=$1 AND a.id=$2`, tenantID, alertID), &a)
+	err := scanAlert(s.db.QueryRowContext(ctx, personalAlertSelect+`
+		WHERE a.tenant_id=$1 AND a.id=$3`, accountID, userID, alertID), &a)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -178,19 +186,28 @@ func (s *Store) GetAlert(ctx context.Context, tenantID, alertID string) (*Alert,
 	return &a, nil
 }
 
-// MarkAlertRead idempotently stamps tenant-level presentation state.
-func (s *Store) MarkAlertRead(ctx context.Context, tenantID, alertID string) error {
-	res, err := s.db.ExecContext(ctx, `
-		UPDATE devradar_alert SET read_at=COALESCE(read_at, now())
-		WHERE tenant_id=$1 AND id=$2`, tenantID, alertID)
+// MarkAlertRead idempotently creates only the specified member's receipt.
+func (s *Store) MarkAlertRead(ctx context.Context, accountID, userID, alertID string) error {
+	var eligible bool
+	err := s.db.QueryRowContext(ctx, `
+		WITH eligible AS MATERIALIZED (
+			SELECT a.id,a.tenant_id,m.user_id
+			FROM devradar_alert a
+			JOIN devradar_tenant t ON t.id=a.tenant_id AND t.status='active'
+			JOIN devradar_account_member m
+			  ON m.account_id=a.tenant_id AND m.user_id=$2 AND m.revoked_at IS NULL
+			JOIN devradar_user u ON u.id=m.user_id AND u.status='active'
+			WHERE a.tenant_id=$1 AND a.id=$3
+		), inserted AS (
+			INSERT INTO devradar_alert_receipt (alert_id,account_id,user_id)
+			SELECT id,tenant_id,user_id FROM eligible
+			ON CONFLICT (alert_id,user_id) DO NOTHING
+		)
+		SELECT EXISTS(SELECT 1 FROM eligible)`, accountID, userID, alertID).Scan(&eligible)
 	if err != nil {
 		return fmt.Errorf("mark alert read: %w", err)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("mark alert read rows affected: %w", err)
-	}
-	if n == 0 {
+	if !eligible {
 		return ErrNotFound
 	}
 	return nil

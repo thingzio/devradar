@@ -41,6 +41,16 @@ resource "google_cloud_run_v2_service" "serve" {
       }
 
       env {
+        name = "DEVRADAR_TOKEN_FLASH_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.token_flash_key.secret_id
+            version = google_secret_manager_secret_version.token_flash_key.version
+          }
+        }
+      }
+
+      env {
         name  = "BASE_URL"
         value = "https://${var.domain}"
       }
@@ -143,7 +153,10 @@ resource "google_cloud_run_v2_service" "serve" {
     ignore_changes = [template[0].containers[0].image]
   }
 
-  depends_on = [google_project_service.default]
+  depends_on = [
+    google_project_service.default,
+    google_secret_manager_secret_iam_member.run_token_flash_key,
+  ]
 }
 
 resource "google_cloud_run_v2_service_iam_member" "serve_public" {

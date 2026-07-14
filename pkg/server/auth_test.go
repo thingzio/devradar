@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thingzio/devradar/pkg/account"
 	"github.com/thingzio/devradar/pkg/authn"
 	"github.com/thingzio/devradar/pkg/middleware"
 	"github.com/thingzio/devradar/pkg/tenant"
@@ -23,13 +24,15 @@ func TestAPIToken_Revoked401(t *testing.T) {
 	tenantID, tok := seedTenantToken(t, st)
 	h := srv.Handler()
 	ctx := context.Background()
+	adminID := seedLegacyUser(t, st, tenantID)
+	actor := account.Actor{Kind: account.ActorUser, UserID: adminID}
 
 	// Find and revoke the token we just minted.
-	toks, err := tenant.ListAPITokens(ctx, st.DB(), tenantID)
+	toks, err := st.ListAPITokens(ctx, tenantID, actor)
 	if err != nil || len(toks) != 1 {
 		t.Fatalf("list tokens: %v (n=%d)", err, len(toks))
 	}
-	if err := tenant.RevokeAPIToken(ctx, st.DB(), tenantID, toks[0].ID); err != nil {
+	if err := st.RevokeAPIToken(ctx, tenantID, toks[0].ID, actor, randomHex(t, 16)); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 
@@ -198,16 +201,19 @@ func TestRevokeAPIToken_CrossTenant(t *testing.T) {
 	ctx := context.Background()
 	tenantA, tokA := seedTenantToken(t, st)
 	tenantB, _ := seedTenantToken(t, st)
+	adminA := seedLegacyUser(t, st, tenantA)
+	adminB := seedLegacyUser(t, st, tenantB)
 
-	toks, err := tenant.ListAPITokens(ctx, st.DB(), tenantA)
+	toks, err := st.ListAPITokens(ctx, tenantA, account.Actor{Kind: account.ActorUser, UserID: adminA})
 	if err != nil || len(toks) != 1 {
 		t.Fatalf("list A tokens: %v", err)
 	}
 	// B tries to revoke A's token → must error, and A's token must still work.
-	if err := tenant.RevokeAPIToken(ctx, st.DB(), tenantB, toks[0].ID); err == nil {
+	if err := st.RevokeAPIToken(ctx, tenantB, toks[0].ID,
+		account.Actor{Kind: account.ActorUser, UserID: adminB}, randomHex(t, 16)); err == nil {
 		t.Error("cross-tenant revoke should fail")
 	}
-	if _, err := tenant.ValidateAPIToken(ctx, st.DB(), tokA); err != nil {
+	if _, _, err := st.ValidateAPIToken(ctx, tokA); err != nil {
 		t.Errorf("A's token must still be valid after B's failed revoke: %v", err)
 	}
 }

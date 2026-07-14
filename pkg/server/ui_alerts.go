@@ -46,8 +46,11 @@ type alertDetailView struct {
 
 func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	access := middleware.AccessFromContext(r.Context())
-	items, next, err := s.store.ListAlerts(r.Context(), access.Account.ID, r.URL.Query().Get("cursor"), 50)
+	items, next, err := s.store.ListAlerts(r.Context(), access.Account.ID, access.Actor.ID,
+		r.URL.Query().Get("cursor"), 50)
 	if err != nil {
+		slog.Error("list personal alerts", "account_id", access.Account.ID,
+			"user_id", access.Actor.ID, "request_id", middleware.RequestIDFromContext(r.Context()), "error", err)
 		http.Error(w, "failed to load alerts", http.StatusInternalServerError)
 		return
 	}
@@ -62,12 +65,15 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAlertDetail(w http.ResponseWriter, r *http.Request) {
 	access := middleware.AccessFromContext(r.Context())
-	item, err := s.store.GetAlert(r.Context(), access.Account.ID, r.PathValue("id"))
+	item, err := s.store.GetAlert(r.Context(), access.Account.ID, access.Actor.ID, r.PathValue("id"))
 	if errors.Is(err, postgres.ErrNotFound) {
 		http.NotFound(w, r)
 		return
 	}
 	if err != nil {
+		slog.Error("load personal alert", "account_id", access.Account.ID,
+			"user_id", access.Actor.ID, "alert_id", r.PathValue("id"),
+			"request_id", middleware.RequestIDFromContext(r.Context()), "error", err)
 		http.Error(w, "failed to load alert", http.StatusInternalServerError)
 		return
 	}
@@ -103,10 +109,13 @@ func (s *Server) handleAlertDetail(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMarkAlertRead(w http.ResponseWriter, r *http.Request) {
 	access := middleware.AccessFromContext(r.Context())
 	id := r.PathValue("id")
-	if err := s.store.MarkAlertRead(r.Context(), access.Account.ID, id); errors.Is(err, postgres.ErrNotFound) {
+	if err := s.store.MarkAlertRead(r.Context(), access.Account.ID, access.Actor.ID, id); errors.Is(err, postgres.ErrNotFound) {
 		http.NotFound(w, r)
 		return
 	} else if err != nil {
+		slog.Error("mark personal alert read", "account_id", access.Account.ID,
+			"user_id", access.Actor.ID, "alert_id", id,
+			"request_id", middleware.RequestIDFromContext(r.Context()), "error", err)
 		http.Error(w, "failed to update alert", http.StatusInternalServerError)
 		return
 	}

@@ -6,19 +6,16 @@ import (
 )
 
 // PurgeExpiredAuth reclaims dead ephemeral auth rows — expired login tokens,
-// sessions, and one-time token-flash rows — in one best-effort sweep. All three
+// sessions, and one-time token-flash rows — in one best-effort sweep. All rows
 // are already rejected at read time by an `expires_at > now()` guard, so deleting
 // expired rows can never invalidate a live session, a still-usable link, or a
 // still-displayable flash; it only stops the tables growing without bound.
 //
-// The token-flash sweep matters for MORE than table size: the flash row holds the
-// RAW API token for one-time display, and when DEVRADAR_TOKEN_FLASH_KEY is not
-// provisioned that value is stored in PLAINTEXT. A flash is normally deleted on
-// read, but an UNREAD flash (the user closed the tab before viewing) would
-// otherwise linger — with a usable plaintext credential — until the next token
-// mint overwrites it or the tenant is deleted. Purging expired flash rows bounds
-// that plaintext exposure to the flash TTL. (Provisioning the key to encrypt the
-// value at rest is tracked in ROADMAP.md; this purge is the defense until then.)
+// The token-flash sweep matters for more than table size. New session flashes
+// contain only encrypted ciphertext, but old revisions may have written raw
+// credentials to the retained compatibility table. Unread flashes would
+// otherwise linger after their display window until overwritten or cascaded.
+// Purging both formats bounds their retention to the flash TTL.
 //
 // Run periodically off the scan job's end-of-run housekeeping (there is no cron).
 // Returns the first error encountered but always attempts every delete, so one
@@ -37,6 +34,8 @@ func (s *Store) PurgeExpiredAuth(ctx context.Context) error {
 	_, err = s.db.ExecContext(ctx, `DELETE FROM devradar_session WHERE expires_at <= now()`)
 	record(err, "sessions")
 	_, err = s.db.ExecContext(ctx, `DELETE FROM devradar_token_flash WHERE expires_at <= now()`)
-	record(err, "token flash")
+	record(err, "legacy token flash")
+	_, err = s.db.ExecContext(ctx, `DELETE FROM devradar_session_token_flash WHERE expires_at <= now()`)
+	record(err, "session token flash")
 	return firstErr
 }

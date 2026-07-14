@@ -25,7 +25,6 @@ import (
 	"github.com/thingzio/devradar/pkg/middleware"
 	"github.com/thingzio/devradar/pkg/oauth"
 	"github.com/thingzio/devradar/pkg/ratelimit"
-	"github.com/thingzio/devradar/pkg/tenant"
 )
 
 //go:embed templates/*.html
@@ -79,7 +78,6 @@ func sortHeader(label, key, base, qs, sortParam, dirParam, activeSort, activeDir
 const (
 	sessionTTL    = 7 * 24 * time.Hour
 	loginTokenTTL = 15 * time.Minute
-	tokenFlashTTL = 2 * time.Minute // one-time API-token display window
 	loginPath     = "/"
 )
 
@@ -400,17 +398,34 @@ func randomState() (string, error) {
 
 func (s *Server) handleTokensPage(w http.ResponseWriter, r *http.Request) {
 	access := middleware.AccessFromContext(r.Context())
-	tokens, err := tenant.ListAPITokens(r.Context(), s.store.DB(), access.Account.ID)
+	tokens, err := s.store.ListAPITokens(r.Context(), access.Account.ID,
+		middleware.ActorFromContext(r.Context()))
 	if err != nil {
+		slog.Error("list api tokens", "account_id", access.Account.ID,
+			"user_id", access.Actor.ID, "request_id", middleware.RequestIDFromContext(r.Context()), "error", err)
 		http.Error(w, "failed to list tokens", http.StatusInternalServerError)
 		return
 	}
 	// Read-and-delete the one-time token flash (set by handleCreateToken). Shown
 	// exactly once, never carried in the URL. A failure to read is non-fatal — the
 	// page still renders, just without the banner.
-	newToken, err := tenant.ConsumeTokenFlash(r.Context(), s.store.DB(), access.Account.ID, config.TokenFlashKey())
+	sessionHash, err := requestSessionHash(r)
 	if err != nil {
-		slog.Error("consume token flash", "error", err)
+		logMutationFailure(r, "api_token.flash.consume", access.Account.ID, "", err)
+		http.Error(w, "failed to load tokens", http.StatusInternalServerError)
+		return
+	}
+	flashKey, err := config.TokenFlashKey()
+	if err != nil {
+		logMutationFailure(r, "api_token.flash.consume", access.Account.ID, "", err)
+		http.Error(w, "failed to load tokens", http.StatusInternalServerError)
+		return
+	}
+	newToken, err := s.store.ConsumeTokenFlash(r.Context(), sessionHash,
+		access.Account.ID, flashKey)
+	if err != nil {
+		slog.Error("consume token flash", "account_id", access.Account.ID,
+			"request_id", middleware.RequestIDFromContext(r.Context()), "error", err)
 	}
 	alertPolicy, err := s.store.EnsureAlertPolicy(r.Context(), access.Account.ID)
 	if err != nil {
@@ -446,7 +461,7 @@ func (s *Server) handleTokensPage(w http.ResponseWriter, r *http.Request) {
 
 type tokensView struct {
 	chromeView
-	Tokens      []tenant.APITokenInfo
+	Tokens      []postgres.APITokenInfo
 	NewToken    string
 	CSRFToken   string
 	MinSeverity string
@@ -473,9 +488,21 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	// Enforce the per-tenant token cap ATOMICALLY inside the insert (0 disables it)
 	// so a bug or compromised session can't mint unbounded credentials — the old
 	// count-then-create was raceable. ErrTokenLimit → 429.
-	raw, err := s.store.CreateAPITokenAudited(r.Context(), access.Account.ID, name, ttl,
-		config.MaxTokensPerTenant(), middleware.ActorFromContext(r.Context()),
-		middleware.RequestIDFromContext(r.Context()))
+	sessionHash, err := requestSessionHash(r)
+	if err != nil {
+		logMutationFailure(r, "api_token.create", access.Account.ID, "", err)
+		http.Error(w, "failed to create token", http.StatusInternalServerError)
+		return
+	}
+	flashKey, err := config.TokenFlashKey()
+	if err != nil {
+		logMutationFailure(r, "api_token.create", access.Account.ID, "", err)
+		http.Error(w, "failed to create token", http.StatusInternalServerError)
+		return
+	}
+	_, err = s.store.CreateAPIToken(r.Context(), access.Account.ID, access.Actor.ID,
+		sessionHash, name, ttl, config.MaxTokensPerTenant(),
+		middleware.RequestIDFromContext(r.Context()), flashKey)
 	if errors.Is(err, postgres.ErrAPITokenLimit) {
 		logMutationDenied(r, "api_token.create", "token quota reached")
 		http.Error(w, fmt.Sprintf("token limit reached (%d per tenant); revoke an unused token first",
@@ -487,27 +514,26 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to create token", http.StatusInternalServerError)
 		return
 	}
-	// Stash the raw token server-side for one-time display and redirect to a clean
-	// URL — never put the secret in the query string (browser history, Referer,
-	// logs). The /tokens page reads-and-deletes it once.
-	if err := tenant.StashTokenFlash(r.Context(), s.store.DB(), access.Account.ID, raw, tokenFlashTTL, config.TokenFlashKey()); err != nil {
-		slog.Error("stash token flash", "account_id", access.Account.ID,
-			"request_id", middleware.RequestIDFromContext(r.Context()), "error", err)
-		http.Error(w, "failed to create token", http.StatusInternalServerError)
-		return
-	}
 	http.Redirect(w, r, "/tokens", http.StatusSeeOther)
 }
 
 func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 	access := middleware.AccessFromContext(r.Context())
-	if err := s.store.RevokeAPITokenAudited(r.Context(), access.Account.ID, r.PathValue("id"),
+	if err := s.store.RevokeAPIToken(r.Context(), access.Account.ID, r.PathValue("id"),
 		middleware.ActorFromContext(r.Context()), middleware.RequestIDFromContext(r.Context())); err != nil {
 		logMutationFailure(r, "api_token.revoke", access.Account.ID, r.PathValue("id"), err)
 		http.Error(w, "failed to revoke token", http.StatusBadRequest)
 		return
 	}
 	http.Redirect(w, r, "/tokens", http.StatusSeeOther)
+}
+
+func requestSessionHash(r *http.Request) (string, error) {
+	cookie, err := r.Cookie(middleware.SessionCookieName())
+	if err != nil || cookie.Value == "" {
+		return "", fmt.Errorf("active session cookie is unavailable")
+	}
+	return authn.HashToken(cookie.Value), nil
 }
 
 func (s *Server) handleSetMinSeverity(w http.ResponseWriter, r *http.Request) {
