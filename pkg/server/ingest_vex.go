@@ -19,26 +19,32 @@ const maxVEXBytes = 5 << 20 // 5 MiB
 func (s *Server) handleSubmitVEX(w http.ResponseWriter, r *http.Request) {
 	acct := middleware.AccountFromContext(r.Context())
 	if acct == nil {
+		logMutationDenied(r, "vex.save", "unauthenticated")
 		writeError(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxVEXBytes+1))
 	if err != nil || len(body) == 0 {
+		logMutationDenied(r, "vex.save", "empty or unreadable body")
 		writeError(w, http.StatusBadRequest, "empty or unreadable body")
 		return
 	}
 	if len(body) > maxVEXBytes {
+		logMutationDenied(r, "vex.save", "document too large")
 		writeError(w, http.StatusRequestEntityTooLarge, "vex document too large")
 		return
 	}
 
 	doc, err := vex.Parse(body)
 	if err != nil {
+		logMutationDenied(r, "vex.save", "invalid document")
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
-	id, matched, err := s.store.SaveVEXDocument(r.Context(), acct.ID, doc)
+	id, matched, err := s.store.SaveVEXDocumentAudited(r.Context(), acct.ID, doc,
+		middleware.ActorFromContext(r.Context()), middleware.RequestIDFromContext(r.Context()))
 	if err != nil {
+		logMutationFailure(r, "vex.save", acct.ID, "", err)
 		writeError(w, http.StatusInternalServerError, "failed to store VEX document")
 		return
 	}

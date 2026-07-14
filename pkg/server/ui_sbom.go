@@ -255,7 +255,9 @@ func (s *Server) handleArchiveSBOMUI(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := s.store.ArchiveSBOM(r.Context(), access.Account.ID, id); err != nil {
+	if err := s.store.ArchiveSBOMAudited(r.Context(), access.Account.ID, id,
+		middleware.ActorFromContext(r.Context()), middleware.RequestIDFromContext(r.Context())); err != nil {
+		logMutationFailure(r, "sbom.archive", access.Account.ID, id, err)
 		if errors.Is(err, postgres.ErrNotFound) {
 			http.Error(w, "SBOM not found", http.StatusNotFound)
 			return
@@ -273,10 +275,13 @@ func (s *Server) handleArchiveRepoUI(w http.ResponseWriter, r *http.Request) {
 	access := middleware.AccessFromContext(r.Context())
 	repo := r.FormValue("repo")
 	if repo == "" {
+		logMutationDenied(r, "repository.archive", "missing repository")
 		http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 		return
 	}
-	if _, err := s.store.ArchiveRepo(r.Context(), access.Account.ID, repo); err != nil {
+	if _, err := s.store.ArchiveRepoAudited(r.Context(), access.Account.ID, repo,
+		middleware.ActorFromContext(r.Context()), middleware.RequestIDFromContext(r.Context())); err != nil {
+		logMutationFailure(r, "repository.archive", access.Account.ID, repo, err)
 		http.Error(w, "failed to archive image", http.StatusInternalServerError)
 		return
 	}

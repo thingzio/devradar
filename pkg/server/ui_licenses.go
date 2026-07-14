@@ -167,6 +167,7 @@ func (s *Server) handleLicenseFamily(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSetLicensePolicy(w http.ResponseWriter, r *http.Request) {
 	access := middleware.AccessFromContext(r.Context())
 	if err := r.ParseForm(); err != nil {
+		logMutationDenied(r, "account.license_policy.update", "invalid form")
 		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
 	}
@@ -179,7 +180,9 @@ func (s *Server) handleSetLicensePolicy(w http.ResponseWriter, r *http.Request) 
 	p.AllowExceptions = splitLicenseList(r.FormValue("allow_exceptions"))
 	p.DenyExceptions = splitLicenseList(r.FormValue("deny_exceptions"))
 
-	if err := s.store.SetLicensePolicy(r.Context(), access.Account.ID, p); err != nil {
+	if err := s.store.SetLicensePolicyAudited(r.Context(), access.Account.ID, p,
+		middleware.ActorFromContext(r.Context()), middleware.RequestIDFromContext(r.Context())); err != nil {
+		logMutationFailure(r, "account.license_policy.update", access.Account.ID, access.Account.ID, err)
 		http.Error(w, "failed to save policy", http.StatusInternalServerError)
 		return
 	}

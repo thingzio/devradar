@@ -53,16 +53,22 @@ func RequireAPIToken(store *postgres.Store) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token := bearer(r)
 			if token == "" {
+				slog.Warn("api authentication denied", "reason", "missing bearer token",
+					"path", r.URL.Path, "request_id", RequestIDFromContext(r.Context()))
 				writeError(w, http.StatusUnauthorized, "missing or invalid authorization header")
 				return
 			}
 			acct, actor, err := store.ValidateAPIToken(r.Context(), token)
 			if err != nil {
-				slog.Debug("invalid api token", "error", err)
+				slog.Warn("api authentication denied", "reason", "invalid api token",
+					"path", r.URL.Path, "request_id", RequestIDFromContext(r.Context()), "error", err)
 				writeError(w, http.StatusUnauthorized, "invalid api token")
 				return
 			}
 			if acct.Status == "suspended" {
+				slog.Warn("api authentication denied", "reason", "account suspended",
+					"account_id", acct.ID, "path", r.URL.Path,
+					"request_id", RequestIDFromContext(r.Context()))
 				writeError(w, http.StatusForbidden, "account suspended")
 				return
 			}
@@ -79,19 +85,27 @@ func RequireUser(store *postgres.Store, loginURL string) func(http.Handler) http
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			cookie, err := r.Cookie(cookieName)
 			if err != nil {
+				slog.Warn("browser authentication denied", "reason", "missing session",
+					"path", r.URL.Path, "request_id", RequestIDFromContext(r.Context()))
 				http.Redirect(w, r, loginURL, http.StatusFound)
 				return
 			}
 			session, err := store.ValidateSession(r.Context(), cookie.Value)
 			if err != nil {
+				slog.Warn("browser authentication denied", "reason", "invalid session",
+					"path", r.URL.Path, "request_id", RequestIDFromContext(r.Context()))
 				ClearSessionCookie(w)
 				http.Redirect(w, r, loginURL, http.StatusFound)
 				return
 			}
 			if session.User.Status != "active" {
+				slog.Warn("browser authentication denied", "reason", "user suspended",
+					"user_id", session.User.ID, "path", r.URL.Path,
+					"request_id", RequestIDFromContext(r.Context()))
 				if err := store.DestroySession(r.Context(), cookie.Value); err != nil {
 					slog.Error("destroy suspended user session",
-						"user_id", session.User.ID, "path", r.URL.Path, "error", err)
+						"user_id", session.User.ID, "path", r.URL.Path,
+						"request_id", RequestIDFromContext(r.Context()), "error", err)
 				}
 				ClearSessionCookie(w)
 				http.Redirect(w, r, loginURL+"?error=suspended", http.StatusFound)
@@ -123,15 +137,23 @@ func RequireAccount(store *postgres.Store, accountsURL string) func(http.Handler
 			session, _ := r.Context().Value(sessionContextKey).(*account.Session)
 			user := UserFromContext(r.Context())
 			if session == nil || user == nil {
+				slog.Warn("account authorization denied", "reason", "missing user session",
+					"path", r.URL.Path, "request_id", RequestIDFromContext(r.Context()))
 				http.Redirect(w, r, accountsURL, http.StatusFound)
 				return
 			}
 			if session.ActiveAccountID == nil {
+				slog.Warn("account authorization denied", "reason", "no active account",
+					"user_id", user.ID, "path", r.URL.Path,
+					"request_id", RequestIDFromContext(r.Context()))
 				http.Redirect(w, r, accountsURL, http.StatusFound)
 				return
 			}
 			access, err := store.GetAccess(r.Context(), user.ID, *session.ActiveAccountID)
 			if errors.Is(err, postgres.ErrNotFound) {
+				slog.Warn("account authorization denied", "reason", "account unavailable",
+					"user_id", user.ID, "account_id", *session.ActiveAccountID,
+					"path", r.URL.Path, "request_id", RequestIDFromContext(r.Context()))
 				reconcileErr := store.ReconcileLegacyAccount(r.Context(), *session.ActiveAccountID)
 				switch {
 				case reconcileErr == nil:
@@ -145,7 +167,9 @@ func RequireAccount(store *postgres.Store, accountsURL string) func(http.Handler
 				return
 			}
 			if err != nil {
-				slog.Error("load account access", "error", err)
+				slog.Error("load account access", "user_id", user.ID,
+					"account_id", *session.ActiveAccountID, "path", r.URL.Path,
+					"request_id", RequestIDFromContext(r.Context()), "error", err)
 				http.Error(w, "failed to load account", http.StatusInternalServerError)
 				return
 			}
@@ -165,6 +189,8 @@ func RequireCapability(capability account.Capability) func(http.Handler) http.Ha
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			access := AccessFromContext(r.Context())
 			if access == nil || !access.Can(capability) {
+				slog.Warn("account authorization denied", "capability", capability,
+					"path", r.URL.Path, "request_id", RequestIDFromContext(r.Context()))
 				http.Error(w, "Forbidden", http.StatusForbidden)
 				return
 			}

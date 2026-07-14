@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/thingzio/devradar/pkg/account"
 	"github.com/thingzio/devradar/pkg/attest"
 )
 
@@ -16,6 +17,50 @@ import (
 // attestation under the same policy is a no-op (ON CONFLICT DO NOTHING on the
 // natural key), and the status update is deterministic for that (sbom, result).
 func (s *Store) SaveAttestation(ctx context.Context, tenantID, sbomID string, r *attest.Result) error {
+	if err := validateAttestationResult(r); err != nil {
+		return err
+	}
+	evidenceID, err := newAuditUUID()
+	if err != nil {
+		return fmt.Errorf("generate attestation evidence id: %w", err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin attestation tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, _, err := saveAttestation(ctx, tx, tenantID, sbomID, evidenceID, r); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit attestation: %w", err)
+	}
+	return nil
+}
+
+// SaveAttestationAudited records new API-submitted verification evidence and
+// its attribution atomically. A natural-key retry appends no duplicate event.
+func (s *Store) SaveAttestationAudited(ctx context.Context, tenantID, sbomID string, r *attest.Result, actor account.Actor, requestID string) error {
+	if err := validateAttestationResult(r); err != nil {
+		return err
+	}
+	evidenceID, err := newAuditUUID()
+	if err != nil {
+		return fmt.Errorf("generate attestation evidence id: %w", err)
+	}
+	return s.withAuditTarget(ctx, tenantID, actor, AuditEvent{
+		Action: "attestation.save", TargetType: "sbom_attestation", TargetID: evidenceID,
+		Outcome: "success", RequestID: requestID,
+	}, func(tx *sql.Tx) (string, error) {
+		persistedEvidenceID, changed, err := saveAttestation(ctx, tx, tenantID, sbomID, evidenceID, r)
+		if err == nil && !changed {
+			return persistedEvidenceID, errAuditNoMutation
+		}
+		return persistedEvidenceID, err
+	})
+}
+
+func validateAttestationResult(r *attest.Result) error {
 	if r == nil {
 		return fmt.Errorf("save attestation: nil result")
 	}
@@ -24,49 +69,63 @@ func (s *Store) SaveAttestation(ctx context.Context, tenantID, sbomID string, r 
 	default:
 		return fmt.Errorf("save attestation: invalid outcome %q", r.Outcome)
 	}
+	return nil
+}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin attestation tx: %w", err)
+func saveAttestation(ctx context.Context, tx *sql.Tx, tenantID, sbomID, evidenceID string, r *attest.Result) (string, bool, error) {
+	var owned bool
+	if err := tx.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM devradar_sbom WHERE id=$1 AND tenant_id=$2)`,
+		sbomID, tenantID).Scan(&owned); err != nil {
+		return "", false, fmt.Errorf("check attestation SBOM owner: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	if !owned {
+		return "", false, ErrNotFound
+	}
 
-	if _, err := tx.ExecContext(ctx, `
+	insertResult, err := tx.ExecContext(ctx, `
 		INSERT INTO devradar_sbom_attestation
-			(sbom_id, tenant_id, result, mode, binding, subject_digest, predicate_type,
+			(id, sbom_id, tenant_id, result, mode, binding, subject_digest, predicate_type,
 			 cert_identity, oidc_issuer, key_id, transparency_log_ref,
 			 verifier_version, policy_version, failure_reason, envelope)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 		ON CONFLICT (sbom_id, subject_digest, policy_version) DO NOTHING`,
-		sbomID, tenantID, r.Outcome, r.Mode, r.Binding, r.SubjectDigest,
+		evidenceID, sbomID, tenantID, r.Outcome, r.Mode, r.Binding, r.SubjectDigest,
 		nullStr(r.PredicateType), nullStr(r.CertIdentity), nullStr(r.OIDCIssuer),
 		nullStr(r.KeyID), nullStr(r.TransparencyLogRef), r.VerifierVersion,
-		r.PolicyVersion, nullStr(r.FailureReason), envelopeJSON(r.Envelope)); err != nil {
-		return fmt.Errorf("insert attestation: %w", err)
+		r.PolicyVersion, nullStr(r.FailureReason), envelopeJSON(r.Envelope))
+	if err != nil {
+		return "", false, fmt.Errorf("insert attestation: %w", err)
+	}
+	inserted, err := insertResult.RowsAffected()
+	if err != nil {
+		return "", false, fmt.Errorf("insert attestation rows affected: %w", err)
 	}
 
-	// Reflect the outcome on the SBOM, deriving the denormalized flag from the
-	// evidence row that is actually PERSISTED — not blindly from r.Outcome. The
-	// INSERT above is ON CONFLICT DO NOTHING on (sbom_id, subject_digest,
-	// policy_version): a re-verification under the same key keeps the original
-	// evidence untouched. Setting the flag from r.Outcome there would let the
-	// fast-path flag and the evidence row disagree (e.g. stored 'verified',
-	// re-run 'failed' → flag flips to failed while the row still says verified).
-	// Reading the flag back out of the evidence table keeps them in lockstep by
-	// construction, for both the fresh-insert and the conflict-kept case.
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE devradar_sbom sb SET verification_status = ev.result
-		FROM devradar_sbom_attestation ev
-		WHERE sb.id=$1 AND sb.tenant_id=$2
-		  AND ev.sbom_id=$1 AND ev.subject_digest=$3 AND ev.policy_version=$4`,
-		sbomID, tenantID, r.SubjectDigest, r.PolicyVersion); err != nil {
-		return fmt.Errorf("update verification status: %w", err)
+	var persistedEvidenceID, persistedResult string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT id,result
+		FROM devradar_sbom_attestation
+		WHERE tenant_id=$1 AND sbom_id=$2
+		  AND subject_digest=$3 AND policy_version=$4`,
+		tenantID, sbomID, r.SubjectDigest, r.PolicyVersion).
+		Scan(&persistedEvidenceID, &persistedResult); err != nil {
+		return "", false, fmt.Errorf("select persisted attestation: %w", err)
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit attestation: %w", err)
+	updateResult, err := tx.ExecContext(ctx, `
+		UPDATE devradar_sbom SET verification_status=$3
+		WHERE id=$1 AND tenant_id=$2
+		  AND verification_status IS DISTINCT FROM $3`,
+		sbomID, tenantID, persistedResult)
+	if err != nil {
+		return "", false, fmt.Errorf("update verification status: %w", err)
 	}
-	return nil
+	updated, err := updateResult.RowsAffected()
+	if err != nil {
+		return "", false, fmt.Errorf("update verification status rows affected: %w", err)
+	}
+	return persistedEvidenceID, inserted > 0 || updated > 0, nil
 }
 
 // GetVerificationStatus returns the denormalized verification_status for an

@@ -150,10 +150,13 @@ func (s *Server) handleGetSBOM(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleArchiveSBOM(w http.ResponseWriter, r *http.Request) {
 	acct := middleware.AccountFromContext(r.Context())
 	if acct == nil {
+		logMutationDenied(r, "sbom.archive", "unauthenticated")
 		writeError(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
-	if err := s.store.ArchiveSBOM(r.Context(), acct.ID, r.PathValue("id")); err != nil {
+	if err := s.store.ArchiveSBOMAudited(r.Context(), acct.ID, r.PathValue("id"),
+		middleware.ActorFromContext(r.Context()), middleware.RequestIDFromContext(r.Context())); err != nil {
+		logMutationFailure(r, "sbom.archive", acct.ID, r.PathValue("id"), err)
 		writeReadErr(w, err, "failed to archive sbom")
 		return
 	}

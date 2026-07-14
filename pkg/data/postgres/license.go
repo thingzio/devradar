@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/lib/pq"
+	"github.com/thingzio/devradar/pkg/account"
 	"github.com/thingzio/devradar/pkg/data"
 )
 
@@ -411,6 +412,26 @@ func (s *Store) GetLicensePolicy(ctx context.Context, tenantID string) (data.Lic
 
 // SetLicensePolicy upserts the tenant's compliance policy.
 func (s *Store) SetLicensePolicy(ctx context.Context, tenantID string, p data.LicensePolicy) error {
+	_, err := setLicensePolicy(ctx, s.db, tenantID, p)
+	return err
+}
+
+// SetLicensePolicyAudited updates the account-wide license policy atomically
+// with durable attribution.
+func (s *Store) SetLicensePolicyAudited(ctx context.Context, tenantID string, p data.LicensePolicy, actor account.Actor, requestID string) error {
+	return s.WithAudit(ctx, tenantID, actor, AuditEvent{
+		Action: "account.license_policy.update", TargetType: "account", TargetID: tenantID,
+		Outcome: "success", RequestID: requestID,
+	}, func(tx *sql.Tx) error {
+		changed, err := setLicensePolicy(ctx, tx, tenantID, p)
+		if err == nil && !changed {
+			return errAuditNoMutation
+		}
+		return err
+	})
+}
+
+func setLicensePolicy(ctx context.Context, exec dbtx, tenantID string, p data.LicensePolicy) (bool, error) {
 	denied := make([]string, 0, len(p.DeniedCategories))
 	for _, c := range p.DeniedCategories {
 		denied = append(denied, string(c))
@@ -422,19 +443,27 @@ func (s *Store) SetLicensePolicy(ctx context.Context, tenantID string, p data.Li
 	if deny == nil {
 		deny = []string{}
 	}
-	_, err := s.db.ExecContext(ctx, `
+	res, err := exec.ExecContext(ctx, `
 		INSERT INTO devradar_license_policy (tenant_id, denied_categories, allow_exceptions, deny_exceptions, updated_at)
 		VALUES ($1, $2, $3, $4, now())
 		ON CONFLICT (tenant_id) DO UPDATE SET
 			denied_categories = EXCLUDED.denied_categories,
 			allow_exceptions  = EXCLUDED.allow_exceptions,
 			deny_exceptions   = EXCLUDED.deny_exceptions,
-			updated_at        = now()`,
+			updated_at        = now()
+		WHERE ROW(devradar_license_policy.denied_categories,devradar_license_policy.allow_exceptions,
+		          devradar_license_policy.deny_exceptions)
+		      IS DISTINCT FROM ROW(EXCLUDED.denied_categories,EXCLUDED.allow_exceptions,
+		                           EXCLUDED.deny_exceptions)`,
 		tenantID, pq.Array(denied), pq.Array(allow), pq.Array(deny))
 	if err != nil {
-		return fmt.Errorf("set license policy: %w", err)
+		return false, fmt.Errorf("set license policy: %w", err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("set license policy rows affected: %w", err)
+	}
+	return n > 0, nil
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────

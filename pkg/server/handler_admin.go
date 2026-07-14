@@ -343,10 +343,13 @@ func (s *Server) handleAdminSetMinSeverity(w http.ResponseWriter, r *http.Reques
 	sev := r.FormValue("min_severity")
 	dest := "/admin/tenant/" + id
 	if !data.ValidMinSeverity(sev) {
+		logMutationDenied(r, "account.min_severity.update", "invalid severity")
 		http.Redirect(w, r, dest+"?msg=invalid_severity", http.StatusSeeOther)
 		return
 	}
-	if err := tenant.SetMinSeverity(r.Context(), s.store.DB(), id, sev); err != nil {
+	if err := s.store.SetMinSeverityAudited(r.Context(), id, sev,
+		middleware.ActorFromContext(r.Context()), middleware.RequestIDFromContext(r.Context())); err != nil {
+		logMutationFailure(r, "account.min_severity.update", id, id, err)
 		slog.Error("admin set min_severity", "account_id", id, "error", err)
 		http.Redirect(w, r, dest+"?msg=error", http.StatusSeeOther)
 		return
@@ -372,7 +375,9 @@ func (s *Server) handleAdminRevokeToken(w http.ResponseWriter, r *http.Request) 
 	id := r.PathValue("id")
 	tid := r.PathValue("tid")
 	dest := "/admin/tenant/" + id
-	if err := tenant.AdminRevokeAPIToken(r.Context(), s.store.DB(), tid); err != nil {
+	if err := s.store.RevokeAPITokenAudited(r.Context(), id, tid,
+		middleware.ActorFromContext(r.Context()), middleware.RequestIDFromContext(r.Context())); err != nil {
+		logMutationFailure(r, "api_token.revoke", id, tid, err)
 		slog.Error("admin revoke token", "token", tid, "error", err)
 		http.Redirect(w, r, dest+"?msg=error", http.StatusSeeOther)
 		return

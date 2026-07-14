@@ -220,6 +220,42 @@ func TestAdmin_CSRFRequired(t *testing.T) {
 	}
 }
 
+func TestAdminSharedMutationUsesPlatformActor(t *testing.T) {
+	srv, st := testServer(t)
+	adminAccountID, _ := seedTenantToken(t, st)
+	t.Setenv("DEVRADAR_ADMIN_USERS", tenantEmail(t, st, adminAccountID))
+	h := srv.Handler()
+	cookie := seedSession(t, st, adminAccountID)
+	targetAccountID, _ := seedTenantToken(t, st)
+	token, err := middleware.GenerateCSRFToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost,
+		"/admin/tenant/"+targetAccountID+"/min-severity",
+		strings.NewReader("min_severity=high&csrf_token="+token))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	req.AddCookie(&http.Cookie{Name: middleware.CSRFCookieName(), Value: token})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("platform setting mutation status = %d, want 303", rec.Code)
+	}
+	var kind, userID, requestID string
+	if err := st.DB().QueryRowContext(context.Background(), `
+		SELECT actor_kind,actor_user_id::text,request_id
+		FROM devradar_audit_event
+		WHERE account_id=$1 AND action='account.min_severity.update'`, targetAccountID).
+		Scan(&kind, &userID, &requestID); err != nil {
+		t.Fatalf("read platform audit: %v", err)
+	}
+	if kind != "platform" || userID == "" || requestID != rec.Header().Get("X-Request-ID") {
+		t.Fatalf("platform attribution = %s/%s/%s, response %s", kind, userID, requestID,
+			rec.Header().Get("X-Request-ID"))
+	}
+}
+
 // TestAdmin_ForceRescanCycle verifies the operator "force rescan" makes an SBOM
 // due for scanning even when it was just scanned, and that ClearRescanRequested
 // (invoked by the scan loop after every scanner has run) consumes the marker so

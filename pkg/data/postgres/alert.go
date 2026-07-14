@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/lib/pq"
+	"github.com/thingzio/devradar/pkg/account"
 	"github.com/thingzio/devradar/pkg/data"
 )
 
@@ -34,31 +35,61 @@ func (s *Store) EnsureAlertPolicy(ctx context.Context, tenantID string) (*AlertP
 // UpdateAlertPolicy changes only the policy owned by tenantID. Policy ID and
 // tenant ID from the input are deliberately ignored.
 func (s *Store) UpdateAlertPolicy(ctx context.Context, tenantID string, policy AlertPolicy) error {
+	_, err := updateAlertPolicy(ctx, s.db, tenantID, policy)
+	return err
+}
+
+// UpdateAlertPolicyAudited updates shared alert policy and its attribution in
+// one transaction.
+func (s *Store) UpdateAlertPolicyAudited(ctx context.Context, tenantID string, policy AlertPolicy, actor account.Actor, requestID string) error {
+	return s.WithAudit(ctx, tenantID, actor, AuditEvent{
+		Action: "account.alert_policy.update", TargetType: "account", TargetID: tenantID,
+		Outcome: "success", RequestID: requestID,
+	}, func(tx *sql.Tx) error {
+		changed, err := updateAlertPolicy(ctx, tx, tenantID, policy)
+		if err == nil && !changed {
+			return errAuditNoMutation
+		}
+		return err
+	})
+}
+
+func updateAlertPolicy(ctx context.Context, exec dbtx, tenantID string, policy AlertPolicy) (bool, error) {
 	if !data.ValidMinSeverity(policy.MinSeverity) {
-		return fmt.Errorf("invalid alert minimum severity %q", policy.MinSeverity)
+		return false, fmt.Errorf("invalid alert minimum severity %q", policy.MinSeverity)
 	}
 	labels := policy.Labels
 	if labels == nil {
 		labels = []string{}
 	}
-	res, err := s.db.ExecContext(ctx, `
+	res, err := exec.ExecContext(ctx, `
 		UPDATE devradar_alert_policy
 		SET enabled=$2, min_severity=$3, alert_kev=$4, alert_fix_available=$5,
 		    include_image=$6, include_db=$7, labels=$8, updated_at=now()
-		WHERE tenant_id=$1`, tenantID, policy.Enabled, policy.MinSeverity,
+		WHERE tenant_id=$1
+		  AND ROW(enabled,min_severity,alert_kev,alert_fix_available,include_image,include_db,labels)
+		      IS DISTINCT FROM ROW($2,$3,$4,$5,$6,$7,$8::text[])`, tenantID, policy.Enabled, policy.MinSeverity,
 		policy.AlertKEV, policy.AlertFixAvailable, policy.IncludeImage,
 		policy.IncludeDB, pq.Array(labels))
 	if err != nil {
-		return fmt.Errorf("update alert policy: %w", err)
+		return false, fmt.Errorf("update alert policy: %w", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("update alert policy rows affected: %w", err)
+		return false, fmt.Errorf("update alert policy rows affected: %w", err)
 	}
 	if n == 0 {
-		return ErrNotFound
+		var exists bool
+		if err := exec.QueryRowContext(ctx,
+			`SELECT EXISTS(SELECT 1 FROM devradar_alert_policy WHERE tenant_id=$1)`, tenantID).
+			Scan(&exists); err != nil {
+			return false, fmt.Errorf("check alert policy target: %w", err)
+		}
+		if !exists {
+			return false, ErrNotFound
+		}
 	}
-	return nil
+	return n > 0, nil
 }
 
 const alertSelect = `

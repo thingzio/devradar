@@ -469,13 +469,17 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	// Enforce the per-tenant token cap ATOMICALLY inside the insert (0 disables it)
 	// so a bug or compromised session can't mint unbounded credentials — the old
 	// count-then-create was raceable. ErrTokenLimit → 429.
-	raw, err := tenant.CreateAPITokenWithLimit(r.Context(), s.store.DB(), access.Account.ID, name, ttl, config.MaxTokensPerTenant())
-	if errors.Is(err, tenant.ErrTokenLimit) {
+	raw, err := s.store.CreateAPITokenAudited(r.Context(), access.Account.ID, name, ttl,
+		config.MaxTokensPerTenant(), middleware.ActorFromContext(r.Context()),
+		middleware.RequestIDFromContext(r.Context()))
+	if errors.Is(err, postgres.ErrAPITokenLimit) {
+		logMutationDenied(r, "api_token.create", "token quota reached")
 		http.Error(w, fmt.Sprintf("token limit reached (%d per tenant); revoke an unused token first",
 			config.MaxTokensPerTenant()), http.StatusTooManyRequests)
 		return
 	}
 	if err != nil {
+		logMutationFailure(r, "api_token.create", access.Account.ID, "", err)
 		http.Error(w, "failed to create token", http.StatusInternalServerError)
 		return
 	}
@@ -483,7 +487,8 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	// URL — never put the secret in the query string (browser history, Referer,
 	// logs). The /tokens page reads-and-deletes it once.
 	if err := tenant.StashTokenFlash(r.Context(), s.store.DB(), access.Account.ID, raw, tokenFlashTTL, config.TokenFlashKey()); err != nil {
-		slog.Error("stash token flash", "error", err)
+		slog.Error("stash token flash", "account_id", access.Account.ID,
+			"request_id", middleware.RequestIDFromContext(r.Context()), "error", err)
 		http.Error(w, "failed to create token", http.StatusInternalServerError)
 		return
 	}
@@ -492,7 +497,9 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 	access := middleware.AccessFromContext(r.Context())
-	if err := tenant.RevokeAPIToken(r.Context(), s.store.DB(), access.Account.ID, r.PathValue("id")); err != nil {
+	if err := s.store.RevokeAPITokenAudited(r.Context(), access.Account.ID, r.PathValue("id"),
+		middleware.ActorFromContext(r.Context()), middleware.RequestIDFromContext(r.Context())); err != nil {
+		logMutationFailure(r, "api_token.revoke", access.Account.ID, r.PathValue("id"), err)
 		http.Error(w, "failed to revoke token", http.StatusBadRequest)
 		return
 	}
@@ -503,10 +510,13 @@ func (s *Server) handleSetMinSeverity(w http.ResponseWriter, r *http.Request) {
 	access := middleware.AccessFromContext(r.Context())
 	sev := r.FormValue("min_severity")
 	if !data.ValidMinSeverity(sev) {
+		logMutationDenied(r, "account.min_severity.update", "invalid severity")
 		http.Error(w, "invalid min_severity", http.StatusBadRequest)
 		return
 	}
-	if err := tenant.SetMinSeverity(r.Context(), s.store.DB(), access.Account.ID, sev); err != nil {
+	if err := s.store.SetMinSeverityAudited(r.Context(), access.Account.ID, sev,
+		middleware.ActorFromContext(r.Context()), middleware.RequestIDFromContext(r.Context())); err != nil {
+		logMutationFailure(r, "account.min_severity.update", access.Account.ID, access.Account.ID, err)
 		http.Error(w, "failed to update setting", http.StatusInternalServerError)
 		return
 	}
@@ -516,16 +526,19 @@ func (s *Server) handleSetMinSeverity(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSetAlertPolicy(w http.ResponseWriter, r *http.Request) {
 	access := middleware.AccessFromContext(r.Context())
 	if err := r.ParseForm(); err != nil {
+		logMutationDenied(r, "account.alert_policy.update", "invalid form")
 		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
 	}
 	minSeverity := r.FormValue("min_severity")
 	if !data.ValidMinSeverity(minSeverity) {
+		logMutationDenied(r, "account.alert_policy.update", "invalid severity")
 		http.Error(w, "invalid min_severity", http.StatusBadRequest)
 		return
 	}
 	knownLabels, err := s.store.TenantLabels(r.Context(), access.Account.ID)
 	if err != nil {
+		logMutationFailure(r, "account.alert_policy.update", access.Account.ID, access.Account.ID, err)
 		http.Error(w, "failed to update alert settings", http.StatusInternalServerError)
 		return
 	}
@@ -549,7 +562,9 @@ func (s *Server) handleSetAlertPolicy(w http.ResponseWriter, r *http.Request) {
 		IncludeDB:         r.FormValue("include_db") == "on",
 		Labels:            allowed,
 	}
-	if err := s.store.UpdateAlertPolicy(r.Context(), access.Account.ID, policy); err != nil {
+	if err := s.store.UpdateAlertPolicyAudited(r.Context(), access.Account.ID, policy,
+		middleware.ActorFromContext(r.Context()), middleware.RequestIDFromContext(r.Context())); err != nil {
+		logMutationFailure(r, "account.alert_policy.update", access.Account.ID, access.Account.ID, err)
 		http.Error(w, "failed to update alert settings", http.StatusInternalServerError)
 		return
 	}

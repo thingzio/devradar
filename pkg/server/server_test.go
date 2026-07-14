@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -69,6 +70,20 @@ func testPostgresStore(t *testing.T) *postgres.Store {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	return st
+}
+
+func TestHandlerRequestIDOnSuccessAndAuthError(t *testing.T) {
+	srv, _ := testServer(t)
+	for _, path := range []string{"/health", "/v1/images"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("X-Request-ID", "spoofed")
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		id := rec.Header().Get("X-Request-ID")
+		if !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(id) || id == "spoofed" {
+			t.Fatalf("%s request ID = %q, want generated lowercase 128-bit hex", path, id)
+		}
+	}
 }
 
 // csrfFor performs a GET of path with the session cookie, extracts the CSRF
@@ -347,7 +362,7 @@ func TestRead_TenantIsolation(t *testing.T) {
 // archived SBOM drops from the images list.
 func TestSBOMLifecycle(t *testing.T) {
 	srv, st := testServer(t)
-	_, tok := seedTenantToken(t, st)
+	tenantID, tok := seedTenantToken(t, st)
 	h := srv.Handler()
 
 	raw, err := os.ReadFile("../sbom/testdata/redis.syft.cdx.json")
@@ -382,8 +397,21 @@ func TestSBOMLifecycle(t *testing.T) {
 		t.Errorf("GET unknown sbom = %d, want 404", rc.Code)
 	}
 	// Archive → 204.
-	if rc := do(http.MethodDelete, "/v1/sboms/"+sub.SBOMID); rc.Code != http.StatusNoContent {
+	deleteResponse := do(http.MethodDelete, "/v1/sboms/"+sub.SBOMID)
+	if rc := deleteResponse; rc.Code != http.StatusNoContent {
 		t.Errorf("DELETE sbom = %d, want 204", rc.Code)
+	}
+	var actorKind, actorTokenID, requestID string
+	if err := st.DB().QueryRowContext(context.Background(), `
+		SELECT actor_kind,actor_api_token_id::text,request_id
+		FROM devradar_audit_event
+		WHERE account_id=$1 AND action='sbom.archive' AND target_id=$2`, tenantID, sub.SBOMID).
+		Scan(&actorKind, &actorTokenID, &requestID); err != nil {
+		t.Fatalf("read API archive audit: %v", err)
+	}
+	if actorKind != "api_token" || actorTokenID == "" || requestID != deleteResponse.Header().Get("X-Request-ID") {
+		t.Fatalf("API archive attribution = %s/%s/%s, response %s", actorKind, actorTokenID,
+			requestID, deleteResponse.Header().Get("X-Request-ID"))
 	}
 	// Archive again → still 204 (idempotent).
 	if rc := do(http.MethodDelete, "/v1/sboms/"+sub.SBOMID); rc.Code != http.StatusNoContent {

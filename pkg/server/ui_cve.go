@@ -164,6 +164,7 @@ func (s *Server) handleUploadVEX(w http.ResponseWriter, r *http.Request) {
 	// ceiling — so without this an authenticated user could exhaust container disk.
 	r.Body = http.MaxBytesReader(w, r.Body, maxVEXBytes+4096) // headroom for multipart framing
 	if err := r.ParseMultipartForm(maxVEXBytes + 1024); err != nil {
+		logMutationDenied(r, "vex.save", "invalid multipart body")
 		http.Redirect(w, r, "/cves?upload_err="+url.QueryEscape("file too large or unreadable"), http.StatusSeeOther)
 		return
 	}
@@ -171,31 +172,38 @@ func (s *Server) handleUploadVEX(w http.ResponseWriter, r *http.Request) {
 	// body cap would truncate the upload), so validate the double-submit token
 	// against the parsed form here, after ParseMultipartForm.
 	if !middleware.CheckCSRF(r) {
+		logMutationDenied(r, "vex.save", "invalid csrf")
 		http.Error(w, "Forbidden: invalid or missing CSRF token", http.StatusForbidden)
 		return
 	}
 	file, _, err := r.FormFile("vex")
 	if err != nil {
+		logMutationDenied(r, "vex.save", "missing file")
 		http.Redirect(w, r, "/cves?upload_err="+url.QueryEscape("no file selected"), http.StatusSeeOther)
 		return
 	}
 	defer func() { _ = file.Close() }()
 	body, err := io.ReadAll(io.LimitReader(file, maxVEXBytes+1))
 	if err != nil || len(body) == 0 {
+		logMutationDenied(r, "vex.save", "empty or unreadable file")
 		http.Redirect(w, r, "/cves?upload_err="+url.QueryEscape("empty or unreadable file"), http.StatusSeeOther)
 		return
 	}
 	if len(body) > maxVEXBytes {
+		logMutationDenied(r, "vex.save", "document too large")
 		http.Redirect(w, r, "/cves?upload_err="+url.QueryEscape("file too large"), http.StatusSeeOther)
 		return
 	}
 	doc, err := vex.Parse(body)
 	if err != nil {
+		logMutationDenied(r, "vex.save", "invalid document")
 		http.Redirect(w, r, "/cves?upload_err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
-	_, matched, err := s.store.SaveVEXDocument(r.Context(), access.Account.ID, doc)
+	_, matched, err := s.store.SaveVEXDocumentAudited(r.Context(), access.Account.ID, doc,
+		middleware.ActorFromContext(r.Context()), middleware.RequestIDFromContext(r.Context()))
 	if err != nil {
+		logMutationFailure(r, "vex.save", access.Account.ID, "", err)
 		http.Redirect(w, r, "/cves?upload_err="+url.QueryEscape("failed to store VEX"), http.StatusSeeOther)
 		return
 	}

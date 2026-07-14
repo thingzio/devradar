@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/lib/pq"
+	"github.com/thingzio/devradar/pkg/account"
 	"github.com/thingzio/devradar/pkg/data"
 )
 
@@ -519,18 +520,50 @@ func (s *Store) GetSBOM(ctx context.Context, tenantID, sbomID, minSeverity strin
 // (ListActiveSBOMs) and the images list, and stops accruing findings. Findings
 // and event history are retained. Idempotent. ErrNotFound if not owned.
 func (s *Store) ArchiveSBOM(ctx context.Context, tenantID, sbomID string) error {
-	res, err := s.db.ExecContext(ctx,
+	_, err := archiveSBOM(ctx, s.db, tenantID, sbomID)
+	return err
+}
+
+// ArchiveSBOMAudited archives one owned SBOM atomically with attribution. A
+// repeat archive is a successful no-op and does not append another event.
+func (s *Store) ArchiveSBOMAudited(ctx context.Context, tenantID, sbomID string, actor account.Actor, requestID string) error {
+	return s.WithAudit(ctx, tenantID, actor, AuditEvent{
+		Action: "sbom.archive", TargetType: "sbom", TargetID: sbomID,
+		Outcome: "success", RequestID: requestID,
+	}, func(tx *sql.Tx) error {
+		changed, err := archiveSBOM(ctx, tx, tenantID, sbomID)
+		if err == nil && !changed {
+			return errAuditNoMutation
+		}
+		return err
+	})
+}
+
+func archiveSBOM(ctx context.Context, exec dbtx, tenantID, sbomID string) (bool, error) {
+	res, err := exec.ExecContext(ctx,
 		`UPDATE devradar_sbom SET status='archived'
 		 WHERE id=$1 AND tenant_id=$2 AND status<>'archived'`, sbomID, tenantID)
 	if err != nil {
-		return fmt.Errorf("archive sbom: %w", err)
+		return false, fmt.Errorf("archive sbom: %w", err)
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("archive sbom rows affected: %w", err)
+	}
+	if n == 0 {
 		// Either not owned/absent, or already archived. Distinguish so a repeat
 		// archive is idempotent (200) but an unknown id is 404.
-		return s.assertSBOMOwner(ctx, tenantID, sbomID)
+		var exists bool
+		if err := exec.QueryRowContext(ctx,
+			`SELECT EXISTS(SELECT 1 FROM devradar_sbom WHERE id=$1 AND tenant_id=$2)`,
+			sbomID, tenantID).Scan(&exists); err != nil {
+			return false, fmt.Errorf("check sbom owner: %w", err)
+		}
+		if !exists {
+			return false, ErrNotFound
+		}
 	}
-	return nil
+	return n > 0, nil
 }
 
 // ArchiveRepo archives every active SBOM (all digests/versions) of one image
@@ -540,7 +573,28 @@ func (s *Store) ArchiveSBOM(ctx context.Context, tenantID, sbomID string) error 
 // archived (0 = unknown/empty image or already fully archived — the caller can
 // treat 0 as idempotent success). Tenant-scoped.
 func (s *Store) ArchiveRepo(ctx context.Context, tenantID, repository string) (int64, error) {
-	res, err := s.db.ExecContext(ctx,
+	return archiveRepo(ctx, s.db, tenantID, repository)
+}
+
+// ArchiveRepoAudited archives every active digest in a repository atomically
+// with one repository-level event. A zero-row retry appends no event.
+func (s *Store) ArchiveRepoAudited(ctx context.Context, tenantID, repository string, actor account.Actor, requestID string) (archived int64, err error) {
+	err = s.WithAudit(ctx, tenantID, actor, AuditEvent{
+		Action: "repository.archive", TargetType: "repository", TargetID: auditRepositoryTarget(repository),
+		Outcome: "success", RequestID: requestID,
+	}, func(tx *sql.Tx) error {
+		var archiveErr error
+		archived, archiveErr = archiveRepo(ctx, tx, tenantID, repository)
+		if archiveErr == nil && archived == 0 {
+			return errAuditNoMutation
+		}
+		return archiveErr
+	})
+	return archived, err
+}
+
+func archiveRepo(ctx context.Context, exec dbtx, tenantID, repository string) (int64, error) {
+	res, err := exec.ExecContext(ctx,
 		`UPDATE devradar_sbom SET status='archived'
 		 WHERE tenant_id=$1 AND repository=$2 AND status='active'`, tenantID, repository)
 	if err != nil {

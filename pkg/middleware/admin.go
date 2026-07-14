@@ -34,6 +34,8 @@ func RequirePlatformAdmin(store *postgres.Store) func(http.Handler) http.Handler
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			cookie, err := r.Cookie(cookieName)
 			if err != nil {
+				slog.Warn("admin access denied", "reason", "missing session", "path", r.URL.Path,
+					"request_id", RequestIDFromContext(r.Context()))
 				http.NotFound(w, r)
 				return
 			}
@@ -47,11 +49,12 @@ func RequirePlatformAdmin(store *postgres.Store) func(http.Handler) http.Handler
 					ClearSessionCookie(w)
 				}
 				slog.Warn("admin access denied",
-					"path", r.URL.Path, "remote", r.RemoteAddr, "email", sessionEmail(session))
+					"path", r.URL.Path, "remote", r.RemoteAddr, "email", sessionEmail(session),
+					"request_id", RequestIDFromContext(r.Context()))
 				http.NotFound(w, r)
 				return
 			}
-			actor := account.Actor{Kind: account.ActorUser, UserID: session.User.ID}
+			actor := account.Actor{Kind: account.ActorPlatform, UserID: session.User.ID}
 			ctx := context.WithValue(r.Context(), userContextKey, &session.User)
 			ctx = context.WithValue(ctx, actorContextKey, actor)
 			next.ServeHTTP(w, r.WithContext(ctx))

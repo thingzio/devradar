@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/lib/pq"
+	"github.com/thingzio/devradar/pkg/account"
 )
 
 // ErrSBOMLimit is returned by UpsertSBOM when a brand-new SBOM would exceed the
@@ -138,11 +139,38 @@ func (s *Store) UpsertSBOMWithLimit(ctx context.Context, sb *SBOM, maxSBOMs, max
 // read API. Scoped to the pending→active transition so it never resurrects an
 // archived SBOM. Idempotent: a no-op (0 rows) when the row is already active.
 func (s *Store) ActivateSBOM(ctx context.Context, id string) error {
-	if _, err := s.db.ExecContext(ctx,
-		`UPDATE devradar_sbom SET status='active' WHERE id=$1 AND status='pending'`, id); err != nil {
-		return fmt.Errorf("activate sbom: %w", err)
+	_, err := activateSBOM(ctx, s.db, "", id)
+	return err
+}
+
+// ActivateSBOMAudited promotes only an account-owned pending SBOM and appends
+// API-token attribution in the same transaction. An already-active retry is a
+// no-op without a duplicate event.
+func (s *Store) ActivateSBOMAudited(ctx context.Context, tenantID, id string, actor account.Actor, requestID string) error {
+	return s.WithAudit(ctx, tenantID, actor, AuditEvent{
+		Action: "sbom.activate", TargetType: "sbom", TargetID: id,
+		Outcome: "success", RequestID: requestID,
+	}, func(tx *sql.Tx) error {
+		changed, err := activateSBOM(ctx, tx, tenantID, id)
+		if err == nil && !changed {
+			return errAuditNoMutation
+		}
+		return err
+	})
+}
+
+func activateSBOM(ctx context.Context, exec dbtx, tenantID, id string) (bool, error) {
+	res, err := exec.ExecContext(ctx, `
+		UPDATE devradar_sbom SET status='active'
+		WHERE id=$1 AND status='pending' AND ($2='' OR tenant_id=$2::uuid)`, id, tenantID)
+	if err != nil {
+		return false, fmt.Errorf("activate sbom: %w", err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("activate sbom rows affected: %w", err)
+	}
+	return n > 0, nil
 }
 
 // DeletePendingSBOM removes a still-'pending' SBOM row — the cleanup path when

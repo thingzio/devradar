@@ -186,7 +186,7 @@ func (s *Server) Handler() http.Handler {
 	// Minimal passwordless UI (session auth) for minting API tokens.
 	s.registerUI(mux)
 
-	return recoverPanics(securityHeaders(mux))
+	return middleware.RequestID(recoverPanics(securityHeaders(mux)))
 }
 
 // Serve starts the HTTP server and blocks until ctx is cancelled, then shuts
@@ -232,7 +232,8 @@ func recoverPanics(next http.Handler) http.Handler {
 					panic(rec)
 				}
 				slog.Error("handler panic", "panic", rec, "path", r.URL.Path,
-					"method", r.Method, "stack", string(debug.Stack()))
+					"method", r.Method, "request_id", middleware.RequestIDFromContext(r.Context()),
+					"stack", string(debug.Stack()))
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 			}
 		}()
@@ -269,6 +270,17 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+func logMutationDenied(r *http.Request, action, reason string) {
+	slog.Warn("mutation denied", "action", action, "reason", reason,
+		"path", r.URL.Path, "request_id", middleware.RequestIDFromContext(r.Context()))
+}
+
+func logMutationFailure(r *http.Request, action, accountID, targetID string, err error) {
+	slog.Error("mutation failed", "action", action, "account_id", accountID,
+		"target_id", targetID, "path", r.URL.Path,
+		"request_id", middleware.RequestIDFromContext(r.Context()), "error", err)
 }
 
 // Compile-time assertions that the concrete implementations satisfy the seams.

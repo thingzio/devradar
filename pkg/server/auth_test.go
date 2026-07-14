@@ -222,7 +222,7 @@ func TestSetMinSeverity_ValidAndInvalid(t *testing.T) {
 	cookie := seedSession(t, st, tenantID)
 	ctx := context.Background()
 
-	post := func(val string) int {
+	post := func(val string) *httptest.ResponseRecorder {
 		csrfCookie, token := csrfFor(t, h, cookie, "/tokens")
 		req := httptest.NewRequest(http.MethodPost, "/settings/min-severity",
 			strings.NewReader("min_severity="+val+"&csrf_token="+token))
@@ -231,11 +231,12 @@ func TestSetMinSeverity_ValidAndInvalid(t *testing.T) {
 		req.AddCookie(csrfCookie)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
-		return rec.Code
+		return rec
 	}
 
 	// Valid → persisted (303 redirect back to /tokens).
-	if code := post("high"); code != http.StatusSeeOther {
+	validResponse := post("high")
+	if code := validResponse.Code; code != http.StatusSeeOther {
 		t.Errorf("valid min_severity: status = %d, want 303", code)
 	}
 	tn, err := tenant.GetTenant(ctx, st.DB(), tenantID)
@@ -245,10 +246,22 @@ func TestSetMinSeverity_ValidAndInvalid(t *testing.T) {
 	if tn.MinSeverity != "high" {
 		t.Errorf("min_severity = %q, want high", tn.MinSeverity)
 	}
+	var actorKind, actorUserID, requestID string
+	if err := st.DB().QueryRowContext(ctx, `
+		SELECT actor_kind,actor_user_id::text,request_id
+		FROM devradar_audit_event
+		WHERE account_id=$1 AND action='account.min_severity.update'`, tenantID).
+		Scan(&actorKind, &actorUserID, &requestID); err != nil {
+		t.Fatalf("read browser setting audit: %v", err)
+	}
+	if actorKind != "user" || actorUserID == "" || requestID != validResponse.Header().Get("X-Request-ID") {
+		t.Fatalf("browser setting attribution = %s/%s/%s, response %s", actorKind,
+			actorUserID, requestID, validResponse.Header().Get("X-Request-ID"))
+	}
 
 	// Invalid → 400, stored value unchanged.
-	if code := post("banana"); code != http.StatusBadRequest {
-		t.Errorf("invalid min_severity: status = %d, want 400", code)
+	if response := post("banana"); response.Code != http.StatusBadRequest {
+		t.Errorf("invalid min_severity: status = %d, want 400", response.Code)
 	}
 	tn, _ = tenant.GetTenant(ctx, st.DB(), tenantID)
 	if tn.MinSeverity != "high" {

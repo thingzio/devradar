@@ -2,8 +2,10 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
+	"github.com/thingzio/devradar/pkg/account"
 	"github.com/thingzio/devradar/pkg/vex"
 )
 
@@ -75,12 +77,54 @@ const (
 // (tenant, product_digest, vulnerability) granularity in v1 — subcomponent is
 // stored but not used for matching.
 func (s *Store) SaveVEXDocument(ctx context.Context, tenantID string, doc *vex.Document) (id string, matched int, err error) {
+	if doc == nil {
+		return "", 0, fmt.Errorf("save vex: nil document")
+	}
+	id, err = newAuditUUID()
+	if err != nil {
+		return "", 0, fmt.Errorf("generate vex document id: %w", err)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", 0, fmt.Errorf("begin vex tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	matched, err = saveVEXDocument(ctx, tx, tenantID, id, doc)
+	if err != nil {
+		return "", 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", 0, fmt.Errorf("commit vex: %w", err)
+	}
+	return id, matched, nil
+}
+
+// SaveVEXDocumentAudited persists a VEX document and its success attribution
+// in one transaction.
+func (s *Store) SaveVEXDocumentAudited(ctx context.Context, tenantID string, doc *vex.Document, actor account.Actor, requestID string) (id string, matched int, err error) {
+	if doc == nil {
+		return "", 0, fmt.Errorf("save vex: nil document")
+	}
+	id, err = newAuditUUID()
+	if err != nil {
+		return "", 0, fmt.Errorf("generate vex document id: %w", err)
+	}
+	err = s.WithAudit(ctx, tenantID, actor, AuditEvent{
+		Action: "vex.save", TargetType: "vex_document", TargetID: id,
+		Outcome: "success", RequestID: requestID,
+	}, func(tx *sql.Tx) error {
+		var saveErr error
+		matched, saveErr = saveVEXDocument(ctx, tx, tenantID, id, doc)
+		return saveErr
+	})
+	if err != nil {
+		return "", 0, err
+	}
+	return id, matched, nil
+}
+
+func saveVEXDocument(ctx context.Context, tx *sql.Tx, tenantID, id string, doc *vex.Document) (matched int, err error) {
 	// Count how many statements hit a real finding in one of the tenant's SBOMs.
 	// A statement matches by exact digest, or (digest-less) by repository key — the
 	// last path segment of the tracked repository. Mirrors vexRepoKeyExpr on the
@@ -95,18 +139,18 @@ func (s *Store) SaveVEXDocument(ctx context.Context, tenantID string, doc *vex.D
 				  AND (($3 <> '' AND sb.digest = $3)
 				       OR ($4 <> '' AND lower(split_part(sb.repository, '/', array_length(string_to_array(sb.repository,'/'),1))) = $4)))`,
 			tenantID, st.Vulnerability, st.ProductDigest, st.ProductRepo).Scan(&hit); err != nil {
-			return "", 0, fmt.Errorf("vex match check: %w", err)
+			return 0, fmt.Errorf("vex match check: %w", err)
 		}
 		if hit {
 			matched++
 		}
 	}
 
-	if err := tx.QueryRowContext(ctx, `
-		INSERT INTO devradar_vex_document (tenant_id, author, statements, matched, document)
-		VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-		tenantID, nullStr(doc.Author), len(doc.Statements), matched, []byte(doc.Raw)).Scan(&id); err != nil {
-		return "", 0, fmt.Errorf("insert vex document: %w", err)
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO devradar_vex_document (id,tenant_id,author,statements,matched,document)
+		VALUES ($1,$2,$3,$4,$5,$6)`,
+		id, tenantID, nullStr(doc.Author), len(doc.Statements), matched, []byte(doc.Raw)); err != nil {
+		return 0, fmt.Errorf("insert vex document: %w", err)
 	}
 
 	stmt, err := tx.PrepareContext(ctx, `
@@ -115,7 +159,7 @@ func (s *Store) SaveVEXDocument(ctx context.Context, tenantID string, doc *vex.D
 			 status, justification, impact_statement, timestamp)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`)
 	if err != nil {
-		return "", 0, fmt.Errorf("prepare vex statement: %w", err)
+		return 0, fmt.Errorf("prepare vex statement: %w", err)
 	}
 	defer func() { _ = stmt.Close() }()
 
@@ -127,13 +171,10 @@ func (s *Store) SaveVEXDocument(ctx context.Context, tenantID string, doc *vex.D
 		if _, err := stmt.ExecContext(ctx, tenantID, id, nullStr(st.ProductDigest), nullStr(st.ProductRepo),
 			st.Vulnerability, nullStr(st.Subcomponent), st.Status, nullStr(st.Justification),
 			nullStr(st.ImpactStatement), ts); err != nil {
-			return "", 0, fmt.Errorf("insert vex statement: %w", err)
+			return 0, fmt.Errorf("insert vex statement: %w", err)
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return "", 0, fmt.Errorf("commit vex: %w", err)
-	}
-	return id, matched, nil
+	return matched, nil
 }
 
 // VEXDocumentRow is a tenant-facing summary of a submitted VEX document.

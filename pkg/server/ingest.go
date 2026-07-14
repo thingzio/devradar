@@ -84,6 +84,7 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	acct := middleware.AccountFromContext(ctx)
 	if acct == nil {
+		logMutationDenied(r, "sbom.submit", "unauthenticated")
 		writeError(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
@@ -102,24 +103,29 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
+			logMutationDenied(r, "sbom.submit", "request too large")
 			writeError(w, http.StatusRequestEntityTooLarge, "request too large")
 			return
 		}
+		logMutationDenied(r, "sbom.submit", "unreadable body")
 		writeError(w, http.StatusBadRequest, "could not read request body")
 		return
 	}
 	var req submitRequest
 	if err := json.Unmarshal(body, &req); err != nil {
+		logMutationDenied(r, "sbom.submit", "invalid JSON")
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
 	if req.SBOM == "" {
+		logMutationDenied(r, "sbom.submit", "missing SBOM")
 		writeError(w, http.StatusBadRequest, "missing sbom")
 		return
 	}
 
 	decoded, err := base64.StdEncoding.DecodeString(req.SBOM)
 	if err != nil {
+		logMutationDenied(r, "sbom.submit", "invalid SBOM base64")
 		writeError(w, http.StatusBadRequest, "sbom is not valid base64")
 		return
 	}
@@ -127,14 +133,17 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 	// small compressed payload can't expand into a memory-exhausting bomb.
 	raw, err := maybeGunzip(decoded, maxSBOMBytes)
 	if err != nil {
+		logMutationDenied(r, "sbom.submit", "invalid compressed SBOM")
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if len(raw) > maxSBOMBytes {
+		logMutationDenied(r, "sbom.submit", "SBOM too large")
 		writeError(w, http.StatusRequestEntityTooLarge, "sbom exceeds size limit")
 		return
 	}
 	if !json.Valid(raw) {
+		logMutationDenied(r, "sbom.submit", "invalid SBOM JSON")
 		writeError(w, http.StatusBadRequest, "sbom is not valid JSON (expected CycloneDX or SPDX)")
 		return
 	}
@@ -143,6 +152,7 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 	// tag), fall back to a digest parsed from the caller's image_ref.
 	subj, err := sbom.ResolveWithRef(raw, req.ImageRef)
 	if err != nil {
+		logMutationDenied(r, "sbom.submit", "unresolvable SBOM subject")
 		if errors.Is(err, sbom.ErrNoDigest) {
 			writeError(w, http.StatusUnprocessableEntity,
 				"could not resolve an image digest from the SBOM; generate it by digest "+
@@ -212,18 +222,21 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 		GeneratedAt:  generatedAt,
 	}, config.MaxSBOMsPerTenant(), config.MaxImagesPerTenant())
 	if errors.Is(err, postgres.ErrImageLimit) {
+		logMutationDenied(r, "sbom.submit", "image quota reached")
 		writeError(w, http.StatusTooManyRequests, fmt.Sprintf(
 			"image limit reached (%d images per tenant); archive an image or contact support to raise the limit",
 			config.MaxImagesPerTenant()))
 		return
 	}
 	if errors.Is(err, postgres.ErrSBOMLimit) {
+		logMutationDenied(r, "sbom.submit", "SBOM quota reached")
 		writeError(w, http.StatusTooManyRequests, fmt.Sprintf(
 			"SBOM limit reached (%d active SBOMs per tenant); archive an SBOM or contact support to raise the limit",
 			config.MaxSBOMsPerTenant()))
 		return
 	}
 	if err != nil {
+		logMutationFailure(r, "sbom.submit", acct.ID, id, err)
 		writeError(w, http.StatusInternalServerError, "failed to record SBOM")
 		return
 	}
@@ -247,6 +260,7 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 	// re-Put is idempotent).
 	if canonicalBytes {
 		if err := s.blobs.Put(ctx, objectPath, raw); err != nil {
+			logMutationFailure(r, "sbom.submit", acct.ID, effID, err)
 			slog.Error("store sbom bytes", "sbom_id", effID, "error", err)
 			if delErr := s.store.DeletePendingSBOM(ctx, effID); delErr != nil {
 				slog.Error("cleanup pending sbom", "sbom_id", effID, "error", delErr)
@@ -266,7 +280,9 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		// Promote to active only after the bytes are durably stored.
-		if err := s.store.ActivateSBOM(ctx, effID); err != nil {
+		if err := s.store.ActivateSBOMAudited(ctx, acct.ID, effID,
+			middleware.ActorFromContext(ctx), middleware.RequestIDFromContext(ctx)); err != nil {
+			logMutationFailure(r, "sbom.activate", acct.ID, effID, err)
 			slog.Error("activate sbom", "sbom_id", effID, "error", err)
 			writeError(w, http.StatusInternalServerError, "failed to activate SBOM")
 			return
@@ -307,11 +323,13 @@ func (s *Server) verifyAttestation(ctx context.Context, tenantID, sbomID string,
 	}
 	bundle, err := base64.StdEncoding.DecodeString(attestationB64)
 	if err != nil {
-		slog.Warn("attestation not valid base64", "sbom_id", sbomID)
+		slog.Warn("attestation not valid base64", "sbom_id", sbomID,
+			"request_id", middleware.RequestIDFromContext(ctx))
 		return attest.StatusUnverified
 	}
 	if len(bundle) > maxAttestationBytes {
-		slog.Warn("attestation exceeds size limit", "sbom_id", sbomID, "bytes", len(bundle))
+		slog.Warn("attestation exceeds size limit", "sbom_id", sbomID, "bytes", len(bundle),
+			"request_id", middleware.RequestIDFromContext(ctx))
 		return attest.StatusUnverified
 	}
 
@@ -319,7 +337,8 @@ func (s *Server) verifyAttestation(ctx context.Context, tenantID, sbomID string,
 	if err != nil {
 		// Could not run the check (malformed bundle, verifier fault): record a
 		// failed result so the outcome is auditable, but never fail ingest.
-		slog.Warn("attestation verification error", "sbom_id", sbomID, "error", err)
+		slog.Warn("attestation verification error", "sbom_id", sbomID,
+			"request_id", middleware.RequestIDFromContext(ctx), "error", err)
 		res = &attest.Result{
 			Outcome: attest.ResultFailed, Mode: attest.ModeKeyless,
 			Binding: attest.BindingImageDigest, SubjectDigest: subjectDigest,
@@ -330,8 +349,10 @@ func (s *Server) verifyAttestation(ctx context.Context, tenantID, sbomID string,
 	if res == nil {
 		return attest.StatusUnverified
 	}
-	if err := s.store.SaveAttestation(ctx, tenantID, sbomID, res); err != nil {
-		slog.Error("persist attestation evidence", "sbom_id", sbomID, "error", err)
+	if err := s.store.SaveAttestationAudited(ctx, tenantID, sbomID, res,
+		middleware.ActorFromContext(ctx), middleware.RequestIDFromContext(ctx)); err != nil {
+		slog.Error("persist attestation evidence", "sbom_id", sbomID,
+			"request_id", middleware.RequestIDFromContext(ctx), "error", err)
 		return attest.StatusUnverified
 	}
 	return res.Outcome

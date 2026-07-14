@@ -88,7 +88,8 @@ func ValidateCSRF(next http.Handler) http.Handler {
 		// stricter limit; this is a safe ceiling for the token check.
 		r.Body = http.MaxBytesReader(w, r.Body, 4096)
 		if !CheckCSRF(r) {
-			slog.Warn("csrf: rejected", "path", r.URL.Path, "remote", r.RemoteAddr)
+			slog.Warn("csrf: rejected", "path", r.URL.Path, "remote", r.RemoteAddr,
+				"request_id", RequestIDFromContext(r.Context()))
 			http.Error(w, "Forbidden: invalid or missing CSRF token", http.StatusForbidden)
 			return
 		}
