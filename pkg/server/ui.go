@@ -23,6 +23,7 @@ import (
 	"github.com/thingzio/devradar/pkg/data"
 	"github.com/thingzio/devradar/pkg/data/postgres"
 	"github.com/thingzio/devradar/pkg/middleware"
+	drnet "github.com/thingzio/devradar/pkg/net"
 	"github.com/thingzio/devradar/pkg/oauth"
 	"github.com/thingzio/devradar/pkg/ratelimit"
 )
@@ -214,7 +215,14 @@ func (s *Server) handleRequestLink(w http.ResponseWriter, r *http.Request) {
 			`<p>This link expires in %d minutes and can be used once.</p>`, link, link, int(loginTokenTTL.Minutes()))
 		text := fmt.Sprintf("Sign in to DevRadar:\n%s\n\nExpires in %d minutes; single use.",
 			link, int(loginTokenTTL.Minutes()))
-		if err := s.email.Send(ctx, email, subject, html, text); err != nil {
+		_, err := s.email.Send(ctx, drnet.Message{
+			To:             email,
+			Subject:        subject,
+			HTML:           html,
+			Text:           text,
+			IdempotencyKey: "magic-link/" + authn.HashToken(raw),
+		})
+		if err != nil {
 			slog.Error("send magic link", "error", err)
 			http.Redirect(w, r, loginPath+"?error=server", http.StatusSeeOther)
 			return

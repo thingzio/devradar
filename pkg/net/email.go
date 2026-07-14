@@ -8,23 +8,66 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"strings"
 	"time"
 )
 
 const (
 	resendAPIURL     = "https://api.resend.com/emails"
 	emailSendTimeout = 30 * time.Second
+	maxEmailPayload  = 512 << 10
+	maxResponseBody  = 16 << 10
 )
 
 var emailClient = &http.Client{Timeout: emailSendTimeout}
+var providerReceiptIDRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$`)
+
+var providerErrorNames = map[string]struct{}{
+	"application_error":              {},
+	"authentication_error":           {},
+	"concurrent_idempotent_requests": {},
+	"idempotency_key_already_exists": {},
+	"internal_server_error":          {},
+	"invalid_access":                 {},
+	"invalid_api_key":                {},
+	"invalid_idempotency_key":        {},
+	"invalid_parameter":              {},
+	"invalid_recipient":              {},
+	"invalid_region":                 {},
+	"method_not_allowed":             {},
+	"missing_api_key":                {},
+	"missing_required_field":         {},
+	"not_found":                      {},
+	"payload_mismatch":               {},
+	"rate_limit_exceeded":            {},
+	"restricted_api_key":             {},
+	"validation_error":               {},
+}
+
+// Message is one transactional email. IdempotencyKey must be stable for the
+// logical delivery and contains no recipient secret.
+type Message struct {
+	To             string
+	Subject        string
+	HTML           string
+	Text           string
+	IdempotencyKey string
+}
+
+// Receipt identifies the provider-side delivery request.
+type Receipt struct {
+	ID string
+}
 
 // Sender sends transactional email. The interface lets handlers depend on a
 // seam (real Resend, a dev logger, or a test fake) rather than a concrete client.
 type Sender interface {
-	Send(ctx context.Context, to, subject, html, text string) error
+	Send(context.Context, Message) (Receipt, error)
 }
 
 // ResendSender sends via the Resend API.
@@ -34,44 +77,125 @@ type ResendSender struct {
 }
 
 // Send delivers one email.
-func (s ResendSender) Send(ctx context.Context, to, subject, html, text string) error {
-	return sendEmailTo(ctx, resendAPIURL, s.APIKey, s.From, to, subject, html, text)
+func (s ResendSender) Send(ctx context.Context, message Message) (Receipt, error) {
+	return sendEmailTo(ctx, emailClient, resendAPIURL, s.APIKey, s.From, message)
 }
 
 // sendEmailTo is the inner implementation, parameterized on the URL so tests can
 // point at an httptest server.
-func sendEmailTo(ctx context.Context, apiURL, apiKey, from, to, subject, html, text string) error {
+func sendEmailTo(ctx context.Context, client *http.Client, apiURL, apiKey, from string, message Message) (Receipt, error) {
+	if err := validateMessage(message); err != nil {
+		return Receipt{}, err
+	}
 	payload := map[string]any{
 		"from":    from,
-		"to":      []string{to},
-		"subject": subject,
-		"html":    html,
-		"text":    text,
+		"to":      []string{message.To},
+		"subject": message.Subject,
+		"html":    message.HTML,
+		"text":    message.Text,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("marshal email payload: %w", err)
+		return Receipt{}, fmt.Errorf("marshal email payload: %w", err)
+	}
+	if len(body) > maxEmailPayload {
+		return Receipt{}, fmt.Errorf("email payload exceeds %d bytes", maxEmailPayload)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("create email request: %w", err)
+		return Receipt{}, fmt.Errorf("create email request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", message.IdempotencyKey)
 
-	resp, err := emailClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("send email: %w", err)
+		return Receipt{}, fmt.Errorf("send email request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == http.StatusOK {
+	rb, readErr := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody+1))
+	if readErr != nil {
+		return Receipt{}, fmt.Errorf("read email provider response: %w", readErr)
+	}
+	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+		var response struct {
+			ID string `json:"id"`
+		}
+		if len(rb) > maxResponseBody || json.Unmarshal(rb, &response) != nil {
+			return Receipt{}, fmt.Errorf("email provider returned success without a message ID")
+		}
+		response.ID = strings.TrimSpace(response.ID)
+		if !providerReceiptIDRE.MatchString(response.ID) {
+			return Receipt{}, fmt.Errorf("email provider returned an invalid message ID")
+		}
+		return Receipt{ID: response.ID}, nil
+	}
+
+	var response struct {
+		Name string `json:"name"`
+	}
+	_ = json.Unmarshal(rb, &response)
+	name := strings.TrimSpace(response.Name)
+	if _, recognized := providerErrorNames[name]; !recognized {
+		name = "provider_error"
+	}
+	// Provider messages are attacker-controlled and may reflect the submitted
+	// HTML/text, including raw magic-link or invitation tokens. Expose only a
+	// fixed message; status and allowlisted error name retain classification.
+	return Receipt{}, &ProviderError{StatusCode: resp.StatusCode, Name: name, Message: "provider request failed"}
+}
+
+// ProviderError is a bounded, credential-scrubbed Resend API failure.
+type ProviderError struct {
+	StatusCode int
+	Name       string
+	Message    string
+}
+
+func (e *ProviderError) Error() string {
+	return fmt.Sprintf("email provider returned %d %s: %s", e.StatusCode, e.Name, e.Message)
+}
+
+// IsTransientProviderError reports failures safe to retry with the same
+// idempotency key.
+func IsTransientProviderError(err error) bool {
+	var providerErr *ProviderError
+	if !errors.As(err, &providerErr) {
+		return false
+	}
+	return providerErr.StatusCode == http.StatusTooManyRequests ||
+		(providerErr.StatusCode >= 500 && providerErr.StatusCode <= 599) ||
+		(providerErr.StatusCode == http.StatusConflict && providerErr.Name == "concurrent_idempotent_requests")
+}
+
+// IsPermanentProviderError reports provider failures that retry cannot repair.
+func IsPermanentProviderError(err error) bool {
+	var providerErr *ProviderError
+	if !errors.As(err, &providerErr) || IsTransientProviderError(err) {
+		return false
+	}
+	return providerErr.StatusCode >= 400 && providerErr.StatusCode < 500
+}
+
+func validateMessage(message Message) error {
+	switch {
+	case strings.TrimSpace(message.To) == "":
+		return fmt.Errorf("email recipient is required")
+	case len(message.To) > 320:
+		return fmt.Errorf("email recipient exceeds 320 bytes")
+	case strings.TrimSpace(message.Subject) == "":
+		return fmt.Errorf("email subject is required")
+	case len(message.Subject) > 998:
+		return fmt.Errorf("email subject exceeds 998 bytes")
+	case message.HTML == "" && message.Text == "":
+		return fmt.Errorf("email body is required")
+	case strings.TrimSpace(message.IdempotencyKey) == "":
+		return fmt.Errorf("email idempotency key is required")
+	case len(message.IdempotencyKey) > 256:
+		return fmt.Errorf("email idempotency key exceeds 256 bytes")
+	default:
 		return nil
 	}
-	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<12))
-	msg := string(rb)
-	if len(msg) > 200 {
-		msg = msg[:200]
-	}
-	return fmt.Errorf("email API returned %d: %s", resp.StatusCode, msg)
 }

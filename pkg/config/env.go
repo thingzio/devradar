@@ -111,6 +111,52 @@ func EmailFrom() string {
 	return GetEnv("EMAIL_FROM", "DevRadar <no-reply@thingz.io>")
 }
 
+// AccountSharingEnabled gates invitation creation and management. It remains
+// disabled until the explicit account-sharing rollout.
+func AccountSharingEnabled() bool {
+	return GetEnvBool("DEVRADAR_ACCOUNT_SHARING_ENABLED")
+}
+
+// DeliveryKey returns the dedicated AES-256 key used for pending invitation
+// delivery payloads. Unlike the short-lived development token-flash key, this
+// durable outbox key never has an ephemeral fallback.
+func DeliveryKey() ([]byte, error) {
+	raw := GetEnv("DEVRADAR_DELIVERY_KEY", "")
+	if raw == "" {
+		return nil, fmt.Errorf("DEVRADAR_DELIVERY_KEY is required")
+	}
+	key, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil || len(key) != 32 {
+		return nil, fmt.Errorf("DEVRADAR_DELIVERY_KEY must be base64-encoded 32 bytes")
+	}
+	return key, nil
+}
+
+// DeliveryBatchSize is the maximum outbox rows leased by one job execution.
+func DeliveryBatchSize() int {
+	return GetEnvAsInt("DEVRADAR_DELIVERY_BATCH_SIZE", 50)
+}
+
+// DeliveryConcurrency bounds simultaneous provider requests.
+func DeliveryConcurrency() int {
+	return GetEnvAsInt("DEVRADAR_DELIVERY_CONCURRENCY", 5)
+}
+
+// DeliveryRequestDeadline bounds one provider request.
+func DeliveryRequestDeadline() time.Duration {
+	return GetEnvAsDuration("DEVRADAR_DELIVERY_REQUEST_DEADLINE", 10*time.Second)
+}
+
+// DeliveryMaxAttempts bounds provider-visible attempts, counted when leased.
+func DeliveryMaxAttempts() int {
+	return GetEnvAsInt("DEVRADAR_DELIVERY_MAX_ATTEMPTS", 8)
+}
+
+// DeliveryRetryHorizon stays inside Resend's 24-hour idempotency retention.
+func DeliveryRetryHorizon() time.Duration {
+	return GetEnvAsDuration("DEVRADAR_DELIVERY_RETRY_HORIZON", 23*time.Hour)
+}
+
 // TokenFlashKey returns the AES-256 key used to encrypt the one-time API-token
 // display flash at rest (DEVRADAR_TOKEN_FLASH_KEY, base64-encoded 32 bytes).
 // Development uses one process-ephemeral key when unset. Production requires a

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"encoding/base64"
 	"testing"
 	"time"
 )
@@ -90,5 +92,37 @@ func TestDefaults(t *testing.T) {
 	}
 	if SBOMBucket() == "" {
 		t.Error("SBOMBucket should have a default")
+	}
+}
+
+func TestDeliveryDefaults(t *testing.T) {
+	t.Setenv("DEVRADAR_ACCOUNT_SHARING_ENABLED", "")
+	if AccountSharingEnabled() {
+		t.Fatal("account sharing must default off")
+	}
+	if DeliveryBatchSize() != 50 || DeliveryConcurrency() != 5 ||
+		DeliveryRequestDeadline() != 10*time.Second || DeliveryMaxAttempts() != 8 ||
+		DeliveryRetryHorizon() != 23*time.Hour {
+		t.Fatalf("delivery defaults = batch=%d concurrency=%d deadline=%s attempts=%d horizon=%s",
+			DeliveryBatchSize(), DeliveryConcurrency(), DeliveryRequestDeadline(), DeliveryMaxAttempts(), DeliveryRetryHorizon())
+	}
+}
+
+func TestDeliveryKeyRequiresExactBase64Key(t *testing.T) {
+	t.Setenv("DEVRADAR_DELIVERY_KEY", "")
+	if key, err := DeliveryKey(); err == nil || key != nil {
+		t.Fatalf("unset DeliveryKey = %x, %v", key, err)
+	}
+	want := bytes.Repeat([]byte{0x42}, 32)
+	t.Setenv("DEVRADAR_DELIVERY_KEY", base64.StdEncoding.EncodeToString(want))
+	got, err := DeliveryKey()
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("DeliveryKey = %x, %v", got, err)
+	}
+	for _, invalid := range []string{"not-base64", base64.StdEncoding.EncodeToString(want[:31]), base64.StdEncoding.EncodeToString(append(want, 0))} {
+		t.Setenv("DEVRADAR_DELIVERY_KEY", invalid)
+		if key, err := DeliveryKey(); err == nil || key != nil {
+			t.Fatalf("invalid DeliveryKey(%q) = %x, %v", invalid, key, err)
+		}
 	}
 }

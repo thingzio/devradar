@@ -42,10 +42,16 @@ func Validate() error {
 	check(validateInt("SERVER_SHUTDOWN_TIMEOUT_SEC", 1, -1))
 	// PORT, when set, must be a valid TCP port.
 	check(validateInt("PORT", 1, 65535))
+	check(validateInt("DEVRADAR_DELIVERY_BATCH_SIZE", 1, 50))
+	check(validateInt("DEVRADAR_DELIVERY_CONCURRENCY", 1, 5))
+	check(validateInt("DEVRADAR_DELIVERY_MAX_ATTEMPTS", 1, 8))
 
 	// Non-negative durations (0 disables the staleness filter, documented).
 	check(validateDuration("DEVRADAR_SCAN_MAX_AGE", 0))
 	check(validateDuration("DEVRADAR_POSTURE_SNAPSHOT_MIN_INTERVAL", 0))
+	check(validateDurationRange("DEVRADAR_DELIVERY_REQUEST_DEADLINE", time.Millisecond, 10*time.Second))
+	check(validateDurationRange("DEVRADAR_DELIVERY_RETRY_HORIZON", time.Millisecond, 23*time.Hour))
+	check(validateBool("DEVRADAR_ACCOUNT_SHARING_ENABLED"))
 
 	// Trusted-proxy count gates X-Forwarded-For client-IP trust (rate-limit
 	// keying), so a bad value is a security-relevant misconfig, not a cosmetic one.
@@ -68,6 +74,48 @@ func ValidateServer() error {
 	}
 	if err := validateTokenFlashKey(); err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
+	}
+	if err := validateSendAPIKey(!DevMode()); err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
+	}
+	if AccountSharingEnabled() {
+		if _, err := DeliveryKey(); err != nil {
+			return fmt.Errorf("invalid configuration: %w", err)
+		}
+	}
+	return nil
+}
+
+// ValidateDelivery validates shared configuration plus the durable outbox key
+// and production provider credential required by the delivery command.
+func ValidateDelivery() error {
+	if err := Validate(); err != nil {
+		return err
+	}
+	if _, err := DeliveryKey(); err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
+	}
+	if err := validateSendAPIKey(!DevMode()); err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
+	}
+	return nil
+}
+
+func validateSendAPIKey(required bool) error {
+	raw, configured := os.LookupEnv("SEND_API_KEY")
+	if !configured || raw == "" || raw == sendAPIKeyPlaceholder {
+		if required {
+			return fmt.Errorf("SEND_API_KEY is required outside development mode")
+		}
+		return nil
+	}
+	if raw != strings.TrimSpace(raw) {
+		return fmt.Errorf("SEND_API_KEY contains leading or trailing whitespace")
+	}
+	for _, r := range raw {
+		if r < 0x21 || r > 0x7e {
+			return fmt.Errorf("SEND_API_KEY contains invalid characters")
+		}
 	}
 	return nil
 }
@@ -106,6 +154,34 @@ func validateDuration(key string, min time.Duration) error {
 		return fmt.Errorf("%s=%s is below the minimum %s", key, d, min)
 	}
 	return nil
+}
+
+func validateDurationRange(key string, min, max time.Duration) error {
+	if err := validateDuration(key, min); err != nil {
+		return err
+	}
+	v, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(v) == "" {
+		return nil
+	}
+	d, _ := time.ParseDuration(strings.TrimSpace(v))
+	if d > max {
+		return fmt.Errorf("%s=%s is above the maximum %s", key, d, max)
+	}
+	return nil
+}
+
+func validateBool(key string) error {
+	v, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(v) == "" {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on", "0", "false", "no", "off":
+		return nil
+	default:
+		return fmt.Errorf("%s=%q is not a boolean", key, v)
+	}
 }
 
 // validateURL checks that key, if set, is an absolute URL with a scheme + host.

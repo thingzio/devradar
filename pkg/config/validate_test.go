@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -96,10 +97,35 @@ func TestValidate_TokenFlashKeyFailsClosed(t *testing.T) {
 		t.Setenv("DEVRADAR_DEV_MODE", "false")
 		// base64 of 32 zero bytes.
 		t.Setenv("DEVRADAR_TOKEN_FLASH_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+		t.Setenv("SEND_API_KEY", "re_real")
 		if err := ValidateServer(); err != nil {
 			t.Fatalf("valid key rejected: %v", err)
 		}
 	})
+}
+
+func TestValidateServerRejectsUnsafeProductionSendAPIKey(t *testing.T) {
+	t.Setenv("DEVRADAR_DEV_MODE", "false")
+	t.Setenv("DEVRADAR_TOKEN_FLASH_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	for _, key := range []string{"", "   ", " re_real", "re_real ", "re_real\nheader", sendAPIKeyPlaceholder} {
+		t.Run(fmt.Sprintf("%q", key), func(t *testing.T) {
+			t.Setenv("SEND_API_KEY", key)
+			err := ValidateServer()
+			if err == nil || !strings.Contains(err.Error(), "SEND_API_KEY") {
+				t.Fatalf("unsafe server SEND_API_KEY error = %v", err)
+			}
+			if key != "" && key != "   " && strings.Contains(err.Error(), key) {
+				t.Fatalf("server error reflected SEND_API_KEY: %v", err)
+			}
+		})
+	}
+	t.Setenv("DEVRADAR_DEV_MODE", "true")
+	for _, key := range []string{"", sendAPIKeyPlaceholder} {
+		t.Setenv("SEND_API_KEY", key)
+		if err := ValidateServer(); err != nil {
+			t.Fatalf("development missing/placeholder sender rejected: %v", err)
+		}
+	}
 }
 
 func TestValidateDoesNotRequireServeOnlyTokenFlashKey(t *testing.T) {
@@ -152,5 +178,81 @@ func TestValidate_UnsetIsFine(t *testing.T) {
 	}
 	if err := Validate(); err != nil {
 		t.Fatalf("unset config should pass, got %v", err)
+	}
+}
+
+func TestValidateServerRequiresDeliveryKeyOnlyWhenSharingEnabled(t *testing.T) {
+	t.Setenv("DEVRADAR_DEV_MODE", "true")
+	t.Setenv("DEVRADAR_TOKEN_FLASH_KEY", "")
+	t.Setenv("DEVRADAR_DELIVERY_KEY", "")
+	t.Setenv("DEVRADAR_ACCOUNT_SHARING_ENABLED", "false")
+	if err := ValidateServer(); err != nil {
+		t.Fatalf("disabled sharing required delivery key: %v", err)
+	}
+	t.Setenv("DEVRADAR_ACCOUNT_SHARING_ENABLED", "true")
+	if err := ValidateServer(); err == nil || !strings.Contains(err.Error(), "DEVRADAR_DELIVERY_KEY") {
+		t.Fatalf("enabled sharing error = %v", err)
+	}
+	t.Setenv("DEVRADAR_DELIVERY_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	if err := ValidateServer(); err != nil {
+		t.Fatalf("enabled sharing with valid key: %v", err)
+	}
+}
+
+func TestValidateDeliveryFailsClosed(t *testing.T) {
+	t.Setenv("DEVRADAR_DELIVERY_KEY", "")
+	t.Setenv("SEND_API_KEY", "")
+	t.Setenv("DEVRADAR_DEV_MODE", "false")
+	if err := ValidateDelivery(); err == nil || !strings.Contains(err.Error(), "DEVRADAR_DELIVERY_KEY") {
+		t.Fatalf("missing delivery key error = %v", err)
+	}
+	t.Setenv("DEVRADAR_DELIVERY_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	if err := ValidateDelivery(); err == nil || !strings.Contains(err.Error(), "SEND_API_KEY") {
+		t.Fatalf("missing production sender error = %v", err)
+	}
+	t.Setenv("SEND_API_KEY", "re_real")
+	if err := ValidateDelivery(); err != nil {
+		t.Fatalf("valid production delivery config: %v", err)
+	}
+	t.Setenv("SEND_API_KEY", "")
+	t.Setenv("DEVRADAR_DEV_MODE", "true")
+	if err := ValidateDelivery(); err != nil {
+		t.Fatalf("development LogSender config: %v", err)
+	}
+}
+
+func TestValidateDeliveryRejectsUnsafeProductionSendAPIKey(t *testing.T) {
+	t.Setenv("DEVRADAR_DEV_MODE", "false")
+	t.Setenv("DEVRADAR_DELIVERY_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	for _, key := range []string{
+		"   ", " re_real", "re_real ", "re_real\nheader", sendAPIKeyPlaceholder,
+	} {
+		t.Run(fmt.Sprintf("%q", key), func(t *testing.T) {
+			t.Setenv("SEND_API_KEY", key)
+			err := ValidateDelivery()
+			if err == nil || !strings.Contains(err.Error(), "SEND_API_KEY") {
+				t.Fatalf("unsafe SEND_API_KEY error = %v", err)
+			}
+			if key != "   " && strings.Contains(err.Error(), key) {
+				t.Fatalf("error reflected SEND_API_KEY: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsInvalidDeliveryTunables(t *testing.T) {
+	for key, value := range map[string]string{
+		"DEVRADAR_DELIVERY_BATCH_SIZE":       "51",
+		"DEVRADAR_DELIVERY_CONCURRENCY":      "6",
+		"DEVRADAR_DELIVERY_REQUEST_DEADLINE": "11s",
+		"DEVRADAR_DELIVERY_MAX_ATTEMPTS":     "9",
+		"DEVRADAR_DELIVERY_RETRY_HORIZON":    "24h",
+	} {
+		t.Run(key, func(t *testing.T) {
+			t.Setenv(key, value)
+			if err := Validate(); err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("%s=%s error = %v", key, value, err)
+			}
+		})
 	}
 }
