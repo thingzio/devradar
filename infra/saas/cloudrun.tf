@@ -51,6 +51,16 @@ resource "google_cloud_run_v2_service" "serve" {
       }
 
       env {
+        name = "DEVRADAR_DELIVERY_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.delivery_key.secret_id
+            version = google_secret_manager_secret_version.delivery_key.version
+          }
+        }
+      }
+
+      env {
         name  = "BASE_URL"
         value = "https://${var.domain}"
       }
@@ -155,6 +165,7 @@ resource "google_cloud_run_v2_service" "serve" {
 
   depends_on = [
     google_project_service.default,
+    google_secret_manager_secret_iam_member.run_delivery_key,
     google_secret_manager_secret_iam_member.run_token_flash_key,
   ]
 }
@@ -243,4 +254,108 @@ resource "google_cloud_run_v2_job" "scan" {
   }
 
   depends_on = [google_project_service.default]
+}
+
+# ── Transactional email delivery — pure-Go ko image, single bounded task ─────
+resource "google_cloud_run_v2_job" "delivery" {
+  name                = "${var.prefix}-deliver"
+  location            = var.region
+  project             = var.project_id
+  deletion_protection = false # TODO: set true after initial deploy
+
+  template {
+    task_count  = 1
+    parallelism = 1
+
+    template {
+      service_account = google_service_account.delivery.email
+      timeout         = "300s"
+      # An immediate platform retry cannot reclaim this failed execution's
+      # five-minute leases and would mask the infrastructure error with exit 0.
+      # The next scheduled execution recovers them after lease expiry.
+      max_retries = 0
+
+      vpc_access {
+        network_interfaces {
+          network    = local.vpc_id
+          subnetwork = local.subnet_id
+        }
+        egress = "PRIVATE_RANGES_ONLY"
+      }
+
+      containers {
+        image = var.bootstrap_image
+
+        env {
+          name = "DATABASE_URL"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.database_url.secret_id
+              version = "latest"
+            }
+          }
+        }
+
+        env {
+          name = "SEND_API_KEY"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.send_api_key.secret_id
+              version = "latest"
+            }
+          }
+        }
+
+        env {
+          name = "DEVRADAR_DELIVERY_KEY"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.delivery_key.secret_id
+              version = google_secret_manager_secret_version.delivery_key.version
+            }
+          }
+        }
+
+        env {
+          name  = "BASE_URL"
+          value = "https://${var.domain}"
+        }
+
+        env {
+          name  = "EMAIL_FROM"
+          value = var.email_from
+        }
+
+        resources {
+          limits = {
+            cpu    = "1000m"
+            memory = "256Mi"
+          }
+        }
+
+        volume_mounts {
+          name       = "cloudsql"
+          mount_path = "/cloudsql"
+        }
+      }
+
+      volumes {
+        name = "cloudsql"
+        cloud_sql_instance {
+          instances = [local.db_connection]
+        }
+      }
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [template[0].template[0].containers[0].image]
+  }
+
+  depends_on = [
+    google_project_service.default,
+    google_secret_manager_secret_iam_member.delivery_database_url,
+    google_secret_manager_secret_iam_member.delivery_delivery_key,
+    google_secret_manager_secret_iam_member.delivery_send_api_key,
+  ]
 }

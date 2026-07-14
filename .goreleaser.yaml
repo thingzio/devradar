@@ -37,6 +37,23 @@ builds:
     goarch:
       - amd64
 
+  - id: devradar-deliver
+    binary: devradar-deliver
+    dir: ./cmd/devradar-deliver
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+        -X main.version={{.Version}}
+        -X main.commit={{.ShortCommit}}
+        -X main.date={{.CommitDate}}
+    goos:
+      - linux
+    goarch:
+      - amd64
+
 release:
   github:
     owner: thingzio
@@ -50,6 +67,18 @@ kos:
     build: devradar-serve
     repositories:
       - us-west1-docker.pkg.dev/thingzio/devradar-saas-images/devradar-serve
+    platforms:
+      - linux/amd64
+    tags:
+      - latest
+      - "{{.Tag}}"
+    preserve_import_paths: false
+    bare: true
+
+  - id: devradar-deliver
+    build: devradar-deliver
+    repositories:
+      - us-west1-docker.pkg.dev/thingzio/devradar-saas-images/devradar-deliver
     platforms:
       - linux/amd64
     tags:

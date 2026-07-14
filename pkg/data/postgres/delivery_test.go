@@ -18,6 +18,10 @@ func TestDeliveryMigrationSchemaAndIdempotency(t *testing.T) {
 	st := isolatedStoreAtVersion(t, 31)
 	applyMigrationFile(t, st, "sql/migrations/032_account_invitations.sql")
 	applyMigrationFile(t, st, "sql/migrations/032_account_invitations.sql")
+	var workerSlots int
+	if err := st.DB().QueryRow(`SELECT count(*) FROM devradar_delivery_slot`).Scan(&workerSlots); err != nil || workerSlots != 5 {
+		t.Fatalf("delivery worker slots=%d error=%v, want 5", workerSlots, err)
+	}
 	accountID, inviterID := seedAuditAccount(t, st)
 
 	invitationID := insertDeliveryInvitation(t, st, accountID, inviterID, "invitee@example.com", 1)
@@ -267,6 +271,40 @@ func TestDeliveryLeasesAreDisjointAndAttemptsIncrement(t *testing.T) {
 				t.Fatalf("leased delivery = %#v", row)
 			}
 		}
+	}
+}
+
+func TestDeliveryWorkerSlotsBoundConcurrencyAndSurviveConnectionLoss(t *testing.T) {
+	st := isolatedStoreAtVersion(t, 32)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	first, err := st.LeaseDeliverySlots(ctx, "execution-a", 5, 6*time.Minute)
+	if err != nil || len(first) != 5 {
+		t.Fatalf("first slot lease count=%d error=%v", len(first), err)
+	}
+	// Close every idle physical connection. Session advisory locks would vanish
+	// here; durable slot rows must remain owned until explicit release/expiry.
+	st.DB().SetMaxIdleConns(0)
+	if err := st.DB().PingContext(ctx); err != nil {
+		t.Fatalf("reconnect after leasing connection loss: %v", err)
+	}
+	second, err := st.LeaseDeliverySlots(ctx, "execution-b", 5, 6*time.Minute)
+	if err != nil || len(second) != 0 {
+		t.Fatalf("slots after connection loss count=%d error=%v, want 0", len(second), err)
+	}
+
+	stale := append([]postgres.DeliverySlot(nil), first...)
+	stale[0].Generation++
+	if err := st.ReleaseDeliverySlots(ctx, "execution-a", stale); !errors.Is(err, postgres.ErrStaleDeliverySlot) {
+		t.Fatalf("stale generation release error=%v, want ErrStaleDeliverySlot", err)
+	}
+	if err := st.ReleaseDeliverySlots(ctx, "execution-a", first); err != nil {
+		t.Fatalf("release slots: %v", err)
+	}
+	second, err = st.LeaseDeliverySlots(ctx, "execution-b", 5, 6*time.Minute)
+	if err != nil || len(second) != 5 {
+		t.Fatalf("slots after release count=%d error=%v, want 5", len(second), err)
 	}
 }
 

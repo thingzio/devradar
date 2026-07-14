@@ -19,8 +19,13 @@ jobs:
 
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: test
     environment: saas
+    outputs:
+      delivery_image: ${{ steps.bundle.outputs.delivery_image }}
+      scan_image: ${{ steps.bundle.outputs.scan_image }}
+      serve_image: ${{ steps.bundle.outputs.serve_image }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -63,6 +68,34 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Resolve immutable deployment bundle
+        id: bundle
+        env:
+          REGISTRY: ${{ vars.REGION }}-docker.pkg.dev/${{ vars.PROJECT_ID }}/devradar-saas-images
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          delivery_digest=$(timeout 60s gcloud artifacts docker images describe \
+            "${REGISTRY}/devradar-deliver:${TAG}" \
+            --format='value(image_summary.digest)')
+          scan_digest=$(timeout 60s gcloud artifacts docker images describe \
+            "${REGISTRY}/devradar-scan:${TAG}" \
+            --format='value(image_summary.digest)')
+          serve_digest=$(timeout 60s gcloud artifacts docker images describe \
+            "${REGISTRY}/devradar-serve:${TAG}" \
+            --format='value(image_summary.digest)')
+          for digest in "$delivery_digest" "$scan_digest" "$serve_digest"; do
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+              echo "::error::invalid image digest" >&2
+              exit 1
+            }
+          done
+          {
+            echo "delivery_image=${REGISTRY}/devradar-deliver@${delivery_digest}"
+            echo "scan_image=${REGISTRY}/devradar-scan@${scan_digest}"
+            echo "serve_image=${REGISTRY}/devradar-serve@${serve_digest}"
+          } >> "$GITHUB_OUTPUT"
+
   deploy:
     needs: release
     uses: ./.github/workflows/deploy.yaml
@@ -70,5 +103,7 @@ jobs:
       contents: read
       id-token: write
     with:
-      image_tag: ${{ github.ref_name }}
+      delivery_image: ${{ needs.release.outputs.delivery_image }}
+      scan_image: ${{ needs.release.outputs.scan_image }}
+      serve_image: ${{ needs.release.outputs.serve_image }}
     secrets: inherit

@@ -16,17 +16,124 @@ const (
 	maxProviderID         = 256
 	maxDeliveryAttempts   = 10000
 	maxDeliveryRetryDelay = 23 * time.Hour
+	maxDeliverySlots      = 5
+	maxDeliverySlotLease  = 10 * time.Minute
 )
 
 var (
 	// ErrStaleDeliveryLease means the delivery is no longer actively leased by
 	// the caller. No state was changed.
 	ErrStaleDeliveryLease = errors.New("stale delivery lease")
+	// ErrStaleDeliverySlot means one or more worker slots no longer match the
+	// exact owner/generation being released.
+	ErrStaleDeliverySlot = errors.New("stale delivery slot")
 	// ErrStaleDeliveryInvitation means an enqueue or revalidation target is not
 	// the exact current pending invitation identity.
 	ErrStaleDeliveryInvitation = errors.New("stale delivery invitation")
 	deliveryCredentialRE       = regexp.MustCompile(`(?i)(authorization\s*:\s*bearer|bearer)\s+\S+|\bre_[A-Za-z0-9_-]+`)
 )
+
+// DeliverySlot is one durable global worker-capacity lease. Generation fences
+// a delayed release from clearing a slot that has expired and been re-leased.
+type DeliverySlot struct {
+	Slot           int
+	LeaseOwner     string
+	Generation     int64
+	LeaseExpiresAt time.Time
+}
+
+// LeaseDeliverySlots claims up to limit of the five global provider slots.
+// Slot state is durable, so ownership survives database connection loss.
+func (s *Store) LeaseDeliverySlots(ctx context.Context, owner string, limit int, leaseDuration time.Duration) ([]DeliverySlot, error) {
+	if limit <= 0 {
+		return []DeliverySlot{}, nil
+	}
+	owner = strings.TrimSpace(owner)
+	if owner == "" || len(owner) > 128 {
+		return nil, fmt.Errorf("delivery slot owner must be between 1 and 128 bytes")
+	}
+	if limit > maxDeliverySlots {
+		limit = maxDeliverySlots
+	}
+	if leaseDuration <= 0 || leaseDuration > maxDeliverySlotLease {
+		return nil, fmt.Errorf("delivery slot lease duration must be positive and at most 10m")
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		WITH available AS MATERIALIZED (
+			SELECT slot FROM devradar_delivery_slot
+			WHERE lease_owner IS NULL OR lease_expires_at<=clock_timestamp()
+			ORDER BY slot
+			FOR UPDATE SKIP LOCKED
+			LIMIT $1
+		), leased AS (
+			UPDATE devradar_delivery_slot s
+			SET lease_owner=$2,lease_generation=s.lease_generation+1,
+			    lease_expires_at=clock_timestamp()+$3::interval
+			FROM available a WHERE s.slot=a.slot
+			RETURNING s.slot,s.lease_owner,s.lease_generation,s.lease_expires_at
+		)
+		SELECT slot,lease_owner,lease_generation,lease_expires_at FROM leased ORDER BY slot`,
+		limit, owner, leaseDuration.String())
+	if err != nil {
+		return nil, fmt.Errorf("lease delivery slots: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	slots := make([]DeliverySlot, 0, limit)
+	for rows.Next() {
+		var slot DeliverySlot
+		if err := rows.Scan(&slot.Slot, &slot.LeaseOwner, &slot.Generation, &slot.LeaseExpiresAt); err != nil {
+			return nil, fmt.Errorf("scan delivery slot: %w", err)
+		}
+		slots = append(slots, slot)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate delivery slots: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close delivery slots: %w", err)
+	}
+	return slots, nil
+}
+
+// ReleaseDeliverySlots releases exact owner/generation leases atomically.
+func (s *Store) ReleaseDeliverySlots(ctx context.Context, owner string, slots []DeliverySlot) error {
+	if len(slots) == 0 {
+		return nil
+	}
+	owner = strings.TrimSpace(owner)
+	if owner == "" || len(owner) > 128 || len(slots) > maxDeliverySlots {
+		return ErrStaleDeliverySlot
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin delivery slot release: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, slot := range slots {
+		if slot.Slot < 1 || slot.Slot > maxDeliverySlots || slot.Generation < 1 {
+			return ErrStaleDeliverySlot
+		}
+		result, err := tx.ExecContext(ctx, `
+			UPDATE devradar_delivery_slot
+			SET lease_owner=NULL,lease_expires_at=NULL
+			WHERE slot=$1 AND lease_owner=$2 AND lease_generation=$3`,
+			slot.Slot, owner, slot.Generation)
+		if err != nil {
+			return fmt.Errorf("release delivery slot %d: %w", slot.Slot, err)
+		}
+		changed, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("read delivery slot %d release: %w", slot.Slot, err)
+		}
+		if changed != 1 {
+			return ErrStaleDeliverySlot
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit delivery slot release: %w", err)
+	}
+	return nil
+}
 
 // Delivery is one leased encrypted outbox row. AccountID is carried explicitly
 // so every revalidation and state transition remains account-filtered.

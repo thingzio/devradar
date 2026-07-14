@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+workflow="$root/.github/workflows/deploy.yaml"
+release_workflow="$root/.github/workflows/release.yaml"
+runbook="$root/DEPLOYMENT.md"
+
+fail() {
+  echo "deploy workflow check: $*" >&2
+  exit 1
+}
+
+release_section=$(awk '
+  /^  release:/{emit=1}
+  emit && /^  deploy:/{exit}
+  emit
+' "$release_workflow")
+release_timeout_minutes=$(printf '%s\n' "$release_section" | sed -nE 's/^    timeout-minutes: ([0-9]+)$/\1/p')
+[[ "$release_timeout_minutes" == 60 ]] || fail "release job timeout must be 60 minutes"
+
+rg -q '^  group: deploy-saas$' "$workflow" || fail "deployment concurrency is not environment-wide"
+rg -q '^  cancel-in-progress: false$' "$workflow" || fail "in-progress deployment cancellation is enabled"
+rg -q 'Validate immutable image bundle' "$workflow" || fail "immutable-image validation is missing"
+if rg -qi 'image_tag|:latest|artifacts docker images describe' "$workflow"; then
+  fail "deploy must accept immutable images without resolving tags"
+fi
+if rg -q '^        default:' "$workflow"; then
+  fail "manual immutable image inputs must not have defaults"
+fi
+for image in delivery scan serve; do
+  case "$image" in
+    delivery) variable='DELIVERY_IMAGE'; repository='devradar-deliver' ;;
+    scan) variable='SCAN_IMAGE'; repository='devradar-scan' ;;
+    serve) variable='SERVE_IMAGE'; repository='devradar-serve' ;;
+  esac
+  test "$(rg -c "^      ${image}_image:\$" "$workflow" || true)" -eq 2 ||
+    fail "${image} image must be required by reusable and manual triggers"
+  test "$(rg -F -c "${image}_image: \${{ needs.release.outputs.${image}_image }}" "$release_workflow" || true)" -eq 1 ||
+    fail "release must pass the resolved ${image} image"
+  test "$(rg -F -c "validate_image \"\$${variable}\" ${repository}" "$workflow" || true)" -eq 1 ||
+    fail "deploy must validate the ${image} input against its repository"
+  test "$(rg -F -c "echo \"${image}_image=\${${variable}}\"" "$workflow" || true)" -eq 1 ||
+    fail "deploy must preserve the validated ${image} input exactly"
+  test "$(rg -F -c "echo \"${image}_image=\${REGISTRY}/${repository}@\${${image}_digest}\"" "$release_workflow" || true)" -eq 1 ||
+    fail "release must map the ${image} digest to its repository"
+done
+test "$(rg -c '^        required: true$' "$workflow" || true)" -eq 6 ||
+  fail "all reusable and manual image inputs must be required"
+test "$(rg -c 'image_summary.digest' "$release_workflow" || true)" -eq 3 ||
+  fail "release must resolve all three pushed images"
+test "$(rg -c 'timeout 60s gcloud artifacts docker images describe' "$release_workflow" || true)" -eq 3 ||
+  fail "release image resolution must be bounded"
+rg -F -q '[[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]' "$release_workflow" ||
+  fail "release must validate lowercase SHA-256 digests"
+rg -F -q '[[ "$image" == "$expected"* ]]' "$workflow" ||
+  fail "deploy must validate repository prefixes literally"
+rg -F -q '[[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]' "$workflow" ||
+  fail "deploy must validate lowercase SHA-256 digests"
+if rg -qi 'rollback|recover|upload-artifact|download-artifact|workflow_run|--async' "$workflow"; then
+  fail "workflow must be forward-only with no rollback/recovery path"
+fi
+if test -e "$root/.github/workflows/deploy-recover.yaml"; then
+  fail "abandoned recovery workflow still exists"
+fi
+rg -q 'Once pause succeeds' "$runbook" || fail "runbook does not scope fail-closed behavior after pause"
+rg -q 'leaves delivery paused' "$runbook" || fail "runbook does not document fail-closed paused state"
+rg -q 'workflow_dispatch' "$runbook" || fail "runbook does not document idempotent operator rerun"
+rg -q 'inspect both the Scheduler state' "$runbook" || fail "runbook does not require Scheduler inspection"
+rg -q 'exact image references' "$runbook" || fail "runbook does not require image inspection"
+rg -q 'pause failure performs no image mutation' "$runbook" || fail "runbook misstates pre-pause failure behavior"
+rg -q 'Never manually resume the Scheduler after a partial image' "$runbook" ||
+  fail "runbook permits manual resume after partial mutation"
+if rg -qi 'to that tag|Manual redeploy of an existing tag|re-point to.*latest' "$runbook"; then
+  fail "runbook still documents mutable-tag deployment"
+fi
+for input in delivery_image scan_image serve_image; do
+  rg -F -q "\`${input}\`" "$runbook" || fail "runbook omits manual ${input} input"
+done
+
+deploy_section=$(awk '/^  deploy:/{emit=1} emit' "$workflow")
+
+count_fixed() {
+  local text="$1" pattern="$2"
+  printf '%s\n' "$text" | rg -F -c "$pattern" || true
+}
+
+step_section() {
+  local name="$1"
+  awk -v name="$name" '
+    $0 == "      - name: " name { emit=1 }
+    emit && $0 != "      - name: " name && /^      - name:/ { exit }
+    emit
+  ' "$workflow"
+}
+
+for command in \
+  'scheduler jobs pause devradar-saas-deliver-scheduled' \
+  'run jobs update devradar-saas-deliver' \
+  'run jobs update devradar-saas-scan' \
+  'run services update devradar-saas-serve' \
+  'scheduler jobs resume devradar-saas-deliver-scheduled'; do
+  test "$(rg -F -c "$command" "$workflow" || true)" -eq 1 ||
+    fail "expected exactly one $command"
+done
+
+for image in delivery scan serve; do
+  case "$image" in
+    delivery) step='Deploy delivery job'; runtime='run jobs update devradar-saas-deliver' ;;
+    scan) step='Deploy scan job'; runtime='run jobs update devradar-saas-scan' ;;
+    serve) step='Deploy serve service'; runtime='run services update devradar-saas-serve' ;;
+  esac
+  section=$(step_section "$step")
+  test "$(count_fixed "$section" "TARGET_IMAGE: \${{ steps.preflight.outputs.${image}_image }}")" -eq 1 ||
+    fail "$image runtime must use its validated image output"
+  test "$(count_fixed "$section" "$runtime")" -eq 1 ||
+    fail "$image image is mapped to the wrong runtime"
+done
+
+line_in() {
+  local section="$1" pattern="$2"
+  printf '%s\n' "$section" | rg -n "$pattern" | head -1 | cut -d: -f1
+}
+
+pause_line=$(line_in "$deploy_section" 'scheduler jobs pause')
+delivery_line=$(line_in "$deploy_section" 'run jobs update devradar-saas-deliver')
+scan_line=$(line_in "$deploy_section" 'run jobs update devradar-saas-scan')
+serve_line=$(line_in "$deploy_section" 'run services update devradar-saas-serve')
+resume_line=$(line_in "$deploy_section" 'scheduler jobs resume')
+(( pause_line < delivery_line && delivery_line < scan_line && scan_line < serve_line && serve_line < resume_line )) ||
+  fail "safe prefix order must be pause, delivery, scan, serve, resume"
+
+first_gcloud=$(printf '%s\n' "$deploy_section" | rg 'gcloud ' | head -1)
+last_gcloud=$(printf '%s\n' "$deploy_section" | rg 'gcloud ' | tail -1)
+[[ "$first_gcloud" == *'scheduler jobs pause devradar-saas-deliver-scheduled'* ]] ||
+  fail "no gcloud command may run before Scheduler pause"
+[[ "$last_gcloud" == *'scheduler jobs resume devradar-saas-deliver-scheduled'* ]] ||
+  fail "Scheduler resume must be the final gcloud command"
+[[ "$(rg '^      - name:' "$workflow" | tail -1)" == '      - name: Resume delivery schedule' ]] ||
+  fail "Scheduler resume must be the final named step"
+test "$(count_fixed "$deploy_section" 'gcloud ')" -eq 5 ||
+  fail "deploy must contain only pause, three updates, and resume"
+
+if rg 'gcloud ' "$workflow" | rg -v 'timeout [0-9]+s gcloud ' >/dev/null; then
+  fail "every gcloud mutation/read must have a command timeout"
+fi
+
+sum_timeouts() {
+  printf '%s\n' "$1" | sed -nE 's/.*timeout ([0-9]+)s gcloud.*/\1/p' | awk '{sum += $1} END {print sum+0}'
+}
+
+deploy_timeout_minutes=$(printf '%s\n' "$deploy_section" | sed -nE 's/^    timeout-minutes: ([0-9]+)$/\1/p' | head -1)
+[[ -n "$deploy_timeout_minutes" ]] || fail "deploy job timeout is missing"
+
+forward_budget=$(sum_timeouts "$deploy_section")
+margin=300
+
+(( forward_budget + margin < deploy_timeout_minutes * 60 )) ||
+  fail "forward worst-case budget ${forward_budget}s leaves less than ${margin}s overhead"
+
+echo "deploy workflow check: PASS (safe-prefix forward=${forward_budget}s/${deploy_timeout_minutes}m)"

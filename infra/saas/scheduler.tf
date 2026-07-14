@@ -18,3 +18,31 @@ resource "google_cloud_scheduler_job" "scan" {
 
   depends_on = [google_project_service.default]
 }
+
+# Executes one bounded outbox pass each minute. Five durable database worker
+# slots bound aggregate concurrency; row leases fence each delivery attempt.
+resource "google_cloud_scheduler_job" "delivery" {
+  name      = "${var.prefix}-deliver-scheduled"
+  project   = var.project_id
+  region    = var.region
+  schedule  = "* * * * *"
+  time_zone = "UTC"
+  paused    = true
+
+  # Terraform creates the job safely paused. The deploy workflow resumes it
+  # only after installing all real images; later applies preserve that state.
+  lifecycle {
+    ignore_changes = [paused]
+  }
+
+  http_target {
+    http_method = "POST"
+    uri         = "https://${var.region}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${var.project_id}/jobs/${google_cloud_run_v2_job.delivery.name}:run"
+
+    oauth_token {
+      service_account_email = google_service_account.scheduler.email
+    }
+  }
+
+  depends_on = [google_project_service.default]
+}

@@ -31,13 +31,13 @@ variable "git_repo" {
 variable "bootstrap_image" {
   description = <<-EOT
     Placeholder image used ONLY to create the Cloud Run resources on the first
-    apply, before CI has pushed the real images. A public Google sample image
-    that serves HTTP on 8080. After creation, CI (gcloud run deploy) sets the
-    real image; Terraform ignores image changes thereafter (see cloudrun.tf
-    lifecycle blocks), so this value is never re-applied.
+    apply, before CI has pushed the real images. This is an immutable digest of
+    Google's public sample server. Delivery scheduling remains paused while it
+    is installed. After creation, CI sets the real images; Terraform ignores
+    image changes thereafter (see cloudrun.tf lifecycle blocks).
   EOT
   type        = string
-  default     = "us-docker.pkg.dev/cloudrun/container/hello"
+  default     = "us-docker.pkg.dev/cloudrun/container/hello@sha256:3beb8d6dd8bac1c597d10f3ddf59f5f684d6054ab589c4334c0486dad07a3f97"
 }
 
 variable "notification_email" {

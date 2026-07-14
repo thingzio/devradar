@@ -61,6 +61,7 @@ lint-go: ## Lints Go code (go vet + golangci-lint)
 .PHONY: lint-yaml
 lint-yaml: ## Lints YAML files (yamllint); skipped if yamllint absent
 	@command -v yamllint >/dev/null 2>&1 && yamllint -c .yamllint.yaml . || echo "yamllint not installed; skipping YAML lint"
+	@tools/check-deploy-workflow
 
 .PHONY: test
 test: ## Runs unit + integration tests (integration needs 'make db-up')
@@ -120,6 +121,11 @@ scan: ## Runs the daily scan job once against local Postgres + blob store
 	@mkdir -p $(LOCAL_SBOMS)
 	$(LOCAL_ENV) go run -ldflags "$(LDFLAGS)" ./cmd/devradar-scan
 
+.PHONY: deliver
+deliver: ## Delivers one local email outbox batch (requires DEVRADAR_DELIVERY_KEY)
+	@test -n "$$DEVRADAR_DELIVERY_KEY" || { echo "set DEVRADAR_DELIVERY_KEY to the serve process key"; exit 1; }
+	$(LOCAL_ENV) go run -ldflags "$(LDFLAGS)" ./cmd/devradar-deliver
+
 .PHONY: submit
 submit: ## Submits by image (SBOM auto-generated) or file. Usage: make submit IMAGE=repo:tag | SBOM=file [REF=img@sha256:..]
 	@test -n "$(DR_TOKEN)" || { echo "set DR_TOKEN (see 'make seed')"; exit 1; }
@@ -131,12 +137,12 @@ submit: ## Submits by image (SBOM auto-generated) or file. Usage: make submit IM
 # =============================================================================
 
 .PHONY: build
-build: ## Builds both binaries for the current platform (goreleaser snapshot)
+build: ## Builds all binaries for the current platform (goreleaser snapshot)
 	goreleaser build --clean --single-target --snapshot --timeout $(BUILD_TIMEOUT)
 	@echo "Binaries in ./dist"
 
 .PHONY: release
-release: ## Runs a snapshot release (goreleaser: serve via ko, scan via Dockerfile)
+release: ## Runs a snapshot release (serve/deliver via ko, scan via Dockerfile)
 	goreleaser release --snapshot --clean --timeout $(BUILD_TIMEOUT)
 
 .PHONY: scan-image

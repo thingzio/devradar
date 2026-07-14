@@ -4,20 +4,21 @@ How to deploy DevRadar to the shared Thingz GCP platform (`thingzio`) and how to
 ship updates afterward.
 
 > Design context: [README.md](README.md) · [DEVELOPMENT.md](DEVELOPMENT.md) · [ROADMAP.md](ROADMAP.md)
-> _Last updated: 2026-07-12._
+> _Last updated: 2026-07-14._
 
 ## What gets deployed
 
-Two Cloud Run units, both on the shared `thingzio-pg` Postgres and shared VPC:
+Three Cloud Run units use the shared `thingzio-pg` Postgres and shared VPC:
 
 | Unit | Kind | Image | Trigger |
 |---|---|---|---|
 | `devradar-saas-serve` | Cloud Run **service** (public) | `devradar-serve` (ko, pure Go) | HTTP |
 | `devradar-saas-scan` | Cloud Run **job** (single task) | `devradar-scan` (Dockerfile, scanners baked in) | Cloud Scheduler, every ~15 min (`var.scan_schedule`); per-SBOM 12h staleness window |
+| `devradar-saas-deliver` | Cloud Run **job** (single task) | `devradar-deliver` (ko, pure Go) | Cloud Scheduler, every minute; at most 50 leases and five concurrent sends |
 
 DevRadar **references** the shared Cloud SQL instance and `thingz` database — it
 creates neither. It creates only its own DB user (`devradar`), a GCS bucket for
-SBOM bytes, secrets, service accounts, and the two Cloud Run resources.
+SBOM bytes, secrets, service accounts, and the three Cloud Run resources.
 
 ## Prerequisites
 
@@ -181,18 +182,22 @@ reclone. Production rollout still requires explicit owner approval.
 
 ```bash
 make tf-init          # terraform init (GCS backend, state prefix "devradar")
-make tf-plan          # review — expect ~1 SQL user, 1 bucket, 5 secrets, SAs,
-                      #          WIF, AR repo, 1 service, 1 job, 1 scheduler
+make tf-plan          # review — expect ~1 SQL user, 1 bucket, 6 secrets, SAs,
+                      #          WIF, AR repo, 1 service, 2 jobs, 2 schedulers
 make tf-apply         # run by hand with an operator identity
 ```
 
-The Cloud Run service and job are created with a **public placeholder image**
-(`var.bootstrap_image`) so this first apply succeeds before any DevRadar image
-exists — the real images are pushed and deployed by CI in step 4. Terraform
-`ignore_changes` on the image field means CI's deploys are never reverted by a
-later `terraform apply`. This creates everything except the real images and the
-operator-supplied secret **values** (step 2). It also generates the token-flash
-key and stores its first secret version. Capture the outputs:
+The Cloud Run service and jobs are created with an **immutable digest-pinned
+public bootstrap image** (`var.bootstrap_image`) so this first apply succeeds
+before any DevRadar image exists. The delivery Scheduler is created paused, so
+that bootstrap image never runs on the automatic schedule with delivery
+secrets. CI resolves each real release tag to a digest, updates the delivery
+consumer first and serve producer last, then resumes delivery only after every
+update succeeds. Terraform `ignore_changes` preserves the deployed images and
+Scheduler state on later applies. This creates everything except the real
+images and operator-supplied secret **values** (step 2). It also generates
+separate token-flash and invitation-delivery keys and stores their first secret
+versions. Capture the outputs:
 
 ```bash
 terraform -chdir=infra/saas output
@@ -200,10 +205,11 @@ terraform -chdir=infra/saas output
 
 ### 2. Populate secret values
 
-Terraform creates five secret *containers*. It assembles
+Terraform creates six secret *containers*. It assembles
 `devradar-saas-database-url` from the generated DB password and generates
-`devradar-saas-token-flash-key` with `random_id`; neither needs tfvars or
-out-of-band population. The other three seed a **placeholder** version so the
+`devradar-saas-token-flash-key` and `devradar-saas-delivery-key` with separate
+`random_id` resources; none need tfvars or out-of-band population. The other
+three seed a **placeholder** version so the
 serve service can deploy before real values exist. They are populated two
 different ways — match each to its source of truth or the next `terraform apply`
 will revert it:
@@ -261,9 +267,9 @@ Create an **environment named `saas`** and set each variable from the outputs:
 
 ### 4. First release
 
-Tag a release; CI (`.github/workflows/release.yaml`) builds and pushes both
-images (serve via ko, scan via `Dockerfile.scan`) and deploys them to the Cloud
-Run resources Terraform already created:
+Tag a release; CI (`.github/workflows/release.yaml`) builds and pushes all three
+images (serve and deliver via ko, scan via `Dockerfile.scan`) and deploys them
+to the Cloud Run resources Terraform already created:
 
 ```bash
 git tag v0.1.0
@@ -274,8 +280,30 @@ Watch the `release` → `deploy` workflows. On success:
 
 ```bash
 gcloud run services describe devradar-saas-serve --region us-west1 --format 'value(status.url)'
+gcloud run jobs describe devradar-saas-deliver --region us-west1 --format 'value(name)'
 curl -s "$(…)/health"     # -> ok
 ```
+
+The release workflow resolves the three pushed images to full digest-pinned
+references and passes that immutable bundle to deploy. Deploy validates each
+literal registry/repository prefix and digest before it pauses delivery, then
+updates delivery, scan, and serve in order and resumes the schedule as its final
+operation. This is deliberately forward-only: it never rolls images back. Every
+mutation prefix is compatible—old producer/new consumer or new producer/new
+consumer; the workflow can never install a new producer over an old consumer.
+
+Before retrying any failed deployment, inspect both the Scheduler state and the
+exact image references on all three Cloud Run resources. Authentication,
+validation, or pause failure performs no image mutation and may leave the
+Scheduler in its prior state. Once pause succeeds, any later failure, timeout,
+or cancellation before the final resume leaves delivery paused. Rerun
+`.github/workflows/deploy.yaml` through `workflow_dispatch` with the same three
+full `@sha256:` image references. The immutable updates are idempotent, so the
+rerun safely converges from any mutation prefix and resumes only after every
+update succeeds. Never manually resume the Scheduler after a partial image
+mutation. If cancellation races the final resume request, all three image
+updates have already succeeded; inspect state and rerun the same immutable
+bundle before further operator action.
 
 ### 5. Verify the pipeline end-to-end
 
@@ -295,9 +323,8 @@ curl -s https://devradar.thingz.io/v1/images -H "Authorization: Bearer $DR_TOKEN
 
 ### 6. Harden
 
-Once the deploy is confirmed, set `deletion_protection = true` on both
-`google_cloud_run_v2_service.serve` and `google_cloud_run_v2_job.scan` in
-`infra/saas/cloudrun.tf`, then `make tf-apply`.
+Once the deploy is confirmed, set `deletion_protection = true` on the service
+and both jobs in `infra/saas/cloudrun.tf`, then `make tf-apply`.
 
 ---
 
@@ -307,9 +334,10 @@ Once the deploy is confirmed, set `deletion_protection = true` on both
 
 Apply infrastructure changes before releasing an image that depends on them.
 In particular, Terraform **must** be applied before deploying any image that
-requires `DEVRADAR_TOKEN_FLASH_KEY`; otherwise the serve process fails startup
-validation. This rollout remains owner-gated: review `make tf-plan`, obtain
-explicit owner approval, then run `make tf-apply` before tagging the release.
+requires `DEVRADAR_TOKEN_FLASH_KEY` or `DEVRADAR_DELIVERY_KEY`; otherwise the
+serve or delivery process fails startup validation. This rollout remains
+owner-gated: review `make tf-plan`, obtain explicit owner approval, then run
+`make tf-apply` before tagging the release.
 
 Bump the semver tag — that's the whole flow (the tag triggers the release
 workflow):
@@ -321,13 +349,32 @@ make bump-patch     # v0.1.0 -> v0.1.1   (also: bump-minor, bump-major)
 `bump` refuses if the tree is dirty or has unpushed commits, then creates a
 signed tag and pushes it. Equivalent by hand: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 
-CI builds + pushes both images tagged `vX.Y.Z` and updates the running service +
-job to that tag. **DB migrations run automatically** on startup (the advisory-lock
-runner applies any new `pkg/data/postgres/sql/migrations/NNN_*.sql`), so schema
-changes ship with the code — no manual migration step.
+CI builds and pushes all three images for `vX.Y.Z`, resolves the completed
+publication to one immutable three-image bundle, and updates the running
+service and jobs by digest. **DB migrations run automatically** on startup (the
+advisory-lock runner applies any new
+`pkg/data/postgres/sql/migrations/NNN_*.sql`), so schema changes ship with the
+code — no manual migration step.
 
-Manual redeploy of an existing tag (e.g. re-point to `latest`) via the
-`workflow_dispatch` on `.github/workflows/deploy.yaml`.
+Five durable database worker-slot leases bound aggregate provider concurrency
+across overlapping job executions. Slot leases survive database connection or
+process loss and expire after the Cloud Run execution timeout; per-delivery
+account/attempt leases continue to fence each outbox transition.
+
+Manual deployment through `workflow_dispatch` on
+`.github/workflows/deploy.yaml` does not accept a tag. Supply all three full
+references through the `delivery_image`, `scan_image`, and `serve_image`
+inputs, each with exactly one lowercase 64-hex SHA-256 digest:
+
+```text
+delivery_image = us-west1-docker.pkg.dev/thingzio/devradar-saas-images/devradar-deliver@sha256:<64 lowercase hex>
+scan_image     = us-west1-docker.pkg.dev/thingzio/devradar-saas-images/devradar-scan@sha256:<64 lowercase hex>
+serve_image    = us-west1-docker.pkg.dev/thingzio/devradar-saas-images/devradar-serve@sha256:<64 lowercase hex>
+```
+
+For a failed deployment, inspect Scheduler and Cloud Run image state first,
+then rerun with the same three references byte-for-byte. Never substitute a
+mutable tag or manually resume after a partial image mutation.
 
 ### Change infrastructure
 
@@ -377,13 +424,24 @@ it. Wait for the apply and Cloud Run revision rollout to finish before resuming
 release activity. Rotation invalidates any unread token flashes; their maximum
 lifetime is two minutes.
 
+The **delivery key** is independently Terraform-generated. Rotate it only with
+explicit owner approval after disabling invitation creation and verifying no
+pending or leased outbox row retains ciphertext; the worker intentionally has
+no old-key fallback:
+
+```bash
+terraform -chdir=infra/saas apply -replace=random_id.delivery_key
+```
+
 ---
 
 ## Operations
 
 - **Run a scan now:** `gcloud run jobs execute devradar-saas-scan --region us-west1 --wait`
+- **Run delivery now:** `gcloud run jobs execute devradar-saas-deliver --region us-west1 --wait`
 - **Logs:** `gcloud run services logs read devradar-saas-serve --region us-west1` /
-  `gcloud run jobs executions list --job devradar-saas-scan --region us-west1`
+  `gcloud run jobs executions list --job devradar-saas-scan --region us-west1` /
+  `gcloud run jobs executions list --job devradar-saas-deliver --region us-west1`
 - **Scan failures** are recorded in the `devradar_scan_failure` table (not just
   logs) — query it to see per-SBOM/per-scanner errors.
 - **DB access** to the shared instance is private-IP only; use the shared
@@ -400,8 +458,9 @@ lifetime is two minutes.
   API on apply is a no-op.
 - **`terraform validate` passes**, but the first real `plan`/`apply` against the
   live project is the true test — review the plan carefully.
-- **Two images, two build paths:** serve is ko (pure Go); scan is a Dockerfile
-  (needs grype/trivy/syft at runtime). Keep the Dockerfile scanner ARGs in sync
-  with `.settings.yaml`.
-- **Deferred:** email/webhook delivery and scan concurrency pooling. See
-  [ROADMAP.md](ROADMAP.md). `SEND_API_KEY` is used for magic-link email today.
+- **Three images, two build paths:** serve and deliver are ko (pure Go); scan is
+  a Dockerfile (needs grype/trivy/syft at runtime). Keep the Dockerfile scanner
+  ARGs in sync with `.settings.yaml`.
+- **Deferred:** webhook delivery and scan concurrency pooling. See
+  [ROADMAP.md](ROADMAP.md). `SEND_API_KEY` serves magic-link and invitation
+  email.

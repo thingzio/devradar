@@ -31,6 +31,28 @@ resource "google_storage_bucket_iam_member" "run_sboms" {
   member = "serviceAccount:${google_service_account.run.email}"
 }
 
+# Delivery has a separate identity: database connectivity and structured logs
+# only. Secret access is granted per-secret in secrets.tf.
+resource "google_service_account" "delivery" {
+  account_id   = "${var.prefix}-delivery"
+  display_name = "DevRadar email delivery runtime"
+  project      = var.project_id
+}
+
+locals {
+  delivery_roles = [
+    "roles/cloudsql.client",
+    "roles/logging.logWriter",
+  ]
+}
+
+resource "google_project_iam_member" "delivery" {
+  for_each = toset(local.delivery_roles)
+  project  = var.project_id
+  role     = each.value
+  member   = "serviceAccount:${google_service_account.delivery.email}"
+}
+
 # --- GitHub Actions deploy via Workload Identity Federation (keyless) ---
 
 resource "google_iam_workload_identity_pool" "github" {
@@ -83,6 +105,32 @@ resource "google_project_iam_member" "deployer" {
   member   = "serviceAccount:${google_service_account.deployer.email}"
 }
 
+# Deploys may pause/resume only scheduler jobs; they cannot create, delete, or
+# change schedules/targets. Terraform remains the scheduler configuration owner.
+resource "google_project_iam_custom_role" "delivery_scheduler_deployer" {
+  role_id     = "devradarDeliverySchedulerDeploy"
+  title       = "DevRadar delivery scheduler deploy control"
+  description = "Read and pause/resume Cloud Scheduler jobs during safe deploys"
+  project     = var.project_id
+  permissions = [
+    "cloudscheduler.jobs.enable",
+    "cloudscheduler.jobs.get",
+    "cloudscheduler.jobs.pause",
+  ]
+}
+
+resource "google_project_iam_member" "deployer_delivery_scheduler" {
+  project = var.project_id
+  role    = google_project_iam_custom_role.delivery_scheduler_deployer.id
+  member  = "serviceAccount:${google_service_account.deployer.email}"
+
+  condition {
+    title       = "delivery_scheduler_only"
+    description = "Restrict deploy pause/resume to the DevRadar delivery schedule"
+    expression  = "resource.name == 'projects/${var.project_id}/locations/${var.region}/jobs/${var.prefix}-deliver-scheduled'"
+  }
+}
+
 # Deployer may act as the runtime SA (required to deploy Cloud Run revisions).
 resource "google_service_account_iam_member" "deployer_run_sa" {
   service_account_id = google_service_account.run.name
@@ -90,17 +138,31 @@ resource "google_service_account_iam_member" "deployer_run_sa" {
   member             = "serviceAccount:${google_service_account.deployer.email}"
 }
 
-# --- Cloud Scheduler triggers the scan job ---
+resource "google_service_account_iam_member" "deployer_delivery_sa" {
+  service_account_id = google_service_account.delivery.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.deployer.email}"
+}
 
-# Dedicated SA for the scheduler to invoke the scan job.
+# --- Cloud Scheduler triggers bounded jobs ---
+
+# Dedicated SA for the scheduler to invoke jobs, with per-job grants below.
 resource "google_service_account" "scheduler" {
   account_id   = "${var.prefix}-scheduler"
-  display_name = "DevRadar scan scheduler"
+  display_name = "DevRadar job scheduler"
   project      = var.project_id
 }
 
 resource "google_cloud_run_v2_job_iam_member" "scheduler_invoke_scan" {
   name     = google_cloud_run_v2_job.scan.name
+  location = var.region
+  project  = var.project_id
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.scheduler.email}"
+}
+
+resource "google_cloud_run_v2_job_iam_member" "scheduler_invoke_delivery" {
+  name     = google_cloud_run_v2_job.delivery.name
   location = var.region
   project  = var.project_id
   role     = "roles/run.invoker"

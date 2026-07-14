@@ -162,3 +162,24 @@ CREATE INDEX IF NOT EXISTS idx_devradar_delivery_outbox_invitation_version
     ON devradar_delivery_outbox(invitation_id,invitation_version,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_devradar_delivery_outbox_account_created
     ON devradar_delivery_outbox(account_id,created_at DESC,id DESC);
+
+-- Five durable worker slots bound provider concurrency across overlapping job
+-- executions. Unlike session advisory locks, these leases survive connection
+-- loss. The lease exceeds the Cloud Run execution timeout; a killed execution
+-- therefore cannot overlap its replacement, while expired slots self-heal.
+CREATE TABLE IF NOT EXISTS devradar_delivery_slot (
+    slot              SMALLINT PRIMARY KEY CHECK (slot BETWEEN 1 AND 5),
+    lease_owner       TEXT CHECK (
+        lease_owner IS NULL OR (lease_owner=btrim(lease_owner) AND char_length(lease_owner) BETWEEN 1 AND 128)
+    ),
+    lease_generation  BIGINT NOT NULL DEFAULT 0 CHECK (lease_generation>=0),
+    lease_expires_at  TIMESTAMPTZ,
+    CONSTRAINT devradar_delivery_slot_lease_shape CHECK (
+        (lease_owner IS NULL AND lease_expires_at IS NULL) OR
+        (lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL)
+    )
+);
+
+INSERT INTO devradar_delivery_slot(slot)
+SELECT slot FROM generate_series(1,5) AS slot
+ON CONFLICT (slot) DO NOTHING;

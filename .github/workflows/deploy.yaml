@@ -1,29 +1,55 @@
 name: deploy
 
-# Deploys the already-pushed images to Cloud Run: updates the serve service and
-# the scan job to the given tag. Reusable (called by release) or manual.
+# Deploys an immutable bundle of already-pushed images to Cloud Run. Reusable
+# (called by release) or manual.
 on:
   workflow_call:
     inputs:
-      image_tag:
+      delivery_image:
+        type: string
+        required: true
+      scan_image:
+        type: string
+        required: true
+      serve_image:
         type: string
         required: true
   workflow_dispatch:
     inputs:
-      image_tag:
+      delivery_image:
+        description: Full devradar-deliver image reference pinned by digest
         type: string
-        default: latest
+        required: true
+      scan_image:
+        description: Full devradar-scan image reference pinned by digest
+        type: string
+        required: true
+      serve_image:
+        description: Full devradar-serve image reference pinned by digest
+        type: string
+        required: true
 
 permissions:
   contents: read
-  id-token: write
+
+concurrency:
+  group: deploy-saas
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
     environment: saas
     env:
-      TAG: ${{ inputs.image_tag }}
+      REGION: ${{ vars.REGION }}
+      EXPECTED_REGISTRY: ${{ vars.REGION }}-docker.pkg.dev/${{ vars.PROJECT_ID }}/devradar-saas-images
+      DELIVERY_IMAGE: ${{ inputs.delivery_image }}
+      SCAN_IMAGE: ${{ inputs.scan_image }}
+      SERVE_IMAGE: ${{ inputs.serve_image }}
     steps:
       - id: auth
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
@@ -33,14 +59,60 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
-      - name: Deploy serve service
+      - name: Validate immutable image bundle
+        id: preflight
         run: |
-          gcloud run services update devradar-saas-serve \
-            --region "${{ vars.REGION }}" \
-            --image "${{ vars.REGION }}-docker.pkg.dev/${{ vars.PROJECT_ID }}/devradar-saas-images/devradar-serve:${TAG}"
+          set -euo pipefail
+          validate_image() {
+            local image="$1" repository="$2" expected digest
+            expected="${EXPECTED_REGISTRY}/${repository}@"
+            [[ "$image" == "$expected"* ]] || {
+              echo "::error::invalid ${repository} image repository" >&2
+              return 1
+            }
+            digest="${image#"$expected"}"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+              echo "::error::invalid ${repository} image digest" >&2
+              return 1
+            }
+          }
+          validate_image "$DELIVERY_IMAGE" devradar-deliver
+          validate_image "$SCAN_IMAGE" devradar-scan
+          validate_image "$SERVE_IMAGE" devradar-serve
+          {
+            echo "delivery_image=${DELIVERY_IMAGE}"
+            echo "scan_image=${SCAN_IMAGE}"
+            echo "serve_image=${SERVE_IMAGE}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Pause delivery schedule
+        run: timeout 60s gcloud scheduler jobs pause devradar-saas-deliver-scheduled --location "${REGION}"
+
+      # Delivery consumes outbox rows produced by serve. Update the
+      # backward-compatible consumer before the producer.
+      - name: Deploy delivery job
+        env:
+          TARGET_IMAGE: ${{ steps.preflight.outputs.delivery_image }}
+        run: |
+          timeout 180s gcloud run jobs update devradar-saas-deliver \
+            --region "${REGION}" \
+            --image "${TARGET_IMAGE}"
 
       - name: Deploy scan job
+        env:
+          TARGET_IMAGE: ${{ steps.preflight.outputs.scan_image }}
         run: |
-          gcloud run jobs update devradar-saas-scan \
-            --region "${{ vars.REGION }}" \
-            --image "${{ vars.REGION }}-docker.pkg.dev/${{ vars.PROJECT_ID }}/devradar-saas-images/devradar-scan:${TAG}"
+          timeout 180s gcloud run jobs update devradar-saas-scan \
+            --region "${REGION}" \
+            --image "${TARGET_IMAGE}"
+
+      - name: Deploy serve service
+        env:
+          TARGET_IMAGE: ${{ steps.preflight.outputs.serve_image }}
+        run: |
+          timeout 180s gcloud run services update devradar-saas-serve \
+            --region "${REGION}" \
+            --image "${TARGET_IMAGE}"
+
+      - name: Resume delivery schedule
+        run: timeout 60s gcloud scheduler jobs resume devradar-saas-deliver-scheduled --location "${REGION}"

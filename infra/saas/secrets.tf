@@ -27,6 +27,30 @@ resource "google_secret_manager_secret_version" "token_flash_key" {
   }
 }
 
+# Pending invitation payloads use a separate durable application-level key so
+# delivery access never grants access to session token flashes.
+resource "random_id" "delivery_key" {
+  byte_length = 32
+}
+
+resource "google_secret_manager_secret" "delivery_key" {
+  secret_id = "${var.prefix}-delivery-key"
+  project   = var.project_id
+  replication {
+    auto {}
+  }
+  depends_on = [google_project_service.default]
+}
+
+resource "google_secret_manager_secret_version" "delivery_key" {
+  secret      = google_secret_manager_secret.delivery_key.id
+  secret_data = random_id.delivery_key.b64_std
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
 resource "google_secret_manager_secret" "database_url" {
   secret_id = "${var.prefix}-database-url"
   project   = var.project_id
@@ -127,6 +151,12 @@ resource "google_secret_manager_secret_iam_member" "run_token_flash_key" {
   member    = "serviceAccount:${google_service_account.run.email}"
 }
 
+resource "google_secret_manager_secret_iam_member" "run_delivery_key" {
+  secret_id = google_secret_manager_secret.delivery_key.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.run.email}"
+}
+
 resource "google_secret_manager_secret_iam_member" "run_send_api_key" {
   secret_id = google_secret_manager_secret.send_api_key.id
   role      = "roles/secretmanager.secretAccessor"
@@ -143,4 +173,24 @@ resource "google_secret_manager_secret_iam_member" "run_oauth_client_secret" {
   secret_id = google_secret_manager_secret.oauth_client_secret.id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.run.email}"
+}
+
+# The delivery runtime can read only the three secrets needed to lease,
+# decrypt, and send outbox rows.
+resource "google_secret_manager_secret_iam_member" "delivery_database_url" {
+  secret_id = google_secret_manager_secret.database_url.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.delivery.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "delivery_send_api_key" {
+  secret_id = google_secret_manager_secret.send_api_key.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.delivery.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "delivery_delivery_key" {
+  secret_id = google_secret_manager_secret.delivery_key.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.delivery.email}"
 }

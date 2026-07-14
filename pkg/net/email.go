@@ -7,10 +7,12 @@ package net
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -68,6 +70,41 @@ type Receipt struct {
 // seam (real Resend, a dev logger, or a test fake) rather than a concrete client.
 type Sender interface {
 	Send(context.Context, Message) (Receipt, error)
+}
+
+// LogSender is the explicit development-only sender. It logs the recipient and
+// invitation link while preserving the production sender's validation and
+// deterministic idempotency semantics.
+type LogSender struct {
+	Logger *slog.Logger
+}
+
+// Send logs one local delivery and returns a stable receipt derived from the
+// non-secret idempotency key.
+func (s LogSender) Send(ctx context.Context, message Message) (Receipt, error) {
+	if err := ctx.Err(); err != nil {
+		return Receipt{}, err
+	}
+	if err := validateMessage(message); err != nil {
+		return Receipt{}, err
+	}
+	logger := s.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Warn("dev mode: email not sent", "recipient", message.To, "link", firstMessageURL(message))
+	digest := sha256.Sum256([]byte(message.IdempotencyKey))
+	return Receipt{ID: fmt.Sprintf("local-%x", digest[:12])}, nil
+}
+
+func firstMessageURL(message Message) string {
+	for _, field := range strings.Fields(message.Text + " " + message.HTML) {
+		field = strings.Trim(field, `"'<>(),`)
+		if strings.HasPrefix(field, "https://") || strings.HasPrefix(field, "http://") {
+			return strings.TrimSuffix(field, `</a></p>`)
+		}
+	}
+	return ""
 }
 
 // ResendSender sends via the Resend API.
@@ -166,6 +203,8 @@ func IsTransientProviderError(err error) bool {
 		return false
 	}
 	return providerErr.StatusCode == http.StatusTooManyRequests ||
+		providerErr.StatusCode == http.StatusRequestTimeout ||
+		providerErr.StatusCode == http.StatusTooEarly ||
 		(providerErr.StatusCode >= 500 && providerErr.StatusCode <= 599) ||
 		(providerErr.StatusCode == http.StatusConflict && providerErr.Name == "concurrent_idempotent_requests")
 }
@@ -179,23 +218,39 @@ func IsPermanentProviderError(err error) bool {
 	return providerErr.StatusCode >= 400 && providerErr.StatusCode < 500
 }
 
+// IsPermanentSenderError reports failures that cannot succeed when retried
+// unchanged, including provider 4xx responses and locally invalid messages.
+func IsPermanentSenderError(err error) bool {
+	var invalid *invalidMessageError
+	return IsPermanentProviderError(err) || errors.As(err, &invalid)
+}
+
+type invalidMessageError struct {
+	message string
+}
+
+func (e *invalidMessageError) Error() string { return e.message }
+
 func validateMessage(message Message) error {
+	var err error
 	switch {
 	case strings.TrimSpace(message.To) == "":
-		return fmt.Errorf("email recipient is required")
+		err = fmt.Errorf("email recipient is required")
 	case len(message.To) > 320:
-		return fmt.Errorf("email recipient exceeds 320 bytes")
+		err = fmt.Errorf("email recipient exceeds 320 bytes")
 	case strings.TrimSpace(message.Subject) == "":
-		return fmt.Errorf("email subject is required")
+		err = fmt.Errorf("email subject is required")
 	case len(message.Subject) > 998:
-		return fmt.Errorf("email subject exceeds 998 bytes")
+		err = fmt.Errorf("email subject exceeds 998 bytes")
 	case message.HTML == "" && message.Text == "":
-		return fmt.Errorf("email body is required")
+		err = fmt.Errorf("email body is required")
 	case strings.TrimSpace(message.IdempotencyKey) == "":
-		return fmt.Errorf("email idempotency key is required")
+		err = fmt.Errorf("email idempotency key is required")
 	case len(message.IdempotencyKey) > 256:
-		return fmt.Errorf("email idempotency key exceeds 256 bytes")
-	default:
-		return nil
+		err = fmt.Errorf("email idempotency key exceeds 256 bytes")
 	}
+	if err != nil {
+		return &invalidMessageError{message: err.Error()}
+	}
+	return nil
 }

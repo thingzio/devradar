@@ -101,6 +101,8 @@ func TestProviderErrorClassificationAndScrubbing(t *testing.T) {
 		permanent bool
 	}{
 		{name: "rate limit", status: http.StatusTooManyRequests, body: `{"name":"rate_limit_exceeded","message":"later"}`, transient: true},
+		{name: "request timeout", status: http.StatusRequestTimeout, body: `{"name":"provider_error","message":"later"}`, transient: true},
+		{name: "too early", status: http.StatusTooEarly, body: `{"name":"provider_error","message":"later"}`, transient: true},
 		{name: "server", status: http.StatusBadGateway, body: `{"name":"internal_server_error","message":"later"}`, transient: true},
 		{name: "last server status", status: 599, body: `{"name":"internal_server_error","message":"later"}`, transient: true},
 		{name: "outside HTTP status", status: 600, body: `{"name":"internal_server_error","message":"later"}`},
@@ -168,5 +170,15 @@ func TestProviderErrorNameDoesNotExposeReflectedSecrets(t *testing.T) {
 				t.Fatalf("reflected-name error = %#v, %v", providerErr, err)
 			}
 		})
+	}
+}
+
+func TestInvalidMessageIsPermanentSenderError(t *testing.T) {
+	_, err := sendEmailTo(context.Background(), http.DefaultClient, "http://unused", "key", "sender@example.com", Message{})
+	if err == nil {
+		t.Fatal("invalid message succeeded")
+	}
+	if !IsPermanentSenderError(err) {
+		t.Fatalf("IsPermanentSenderError(%v) = false, want true", err)
 	}
 }
