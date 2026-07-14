@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -303,9 +305,14 @@ func TestAdminProductHealth(t *testing.T) {
 
 func isolatedAdminProductHealthStore(t *testing.T) *postgres.Store {
 	t.Helper()
+	return isolatedStoreAtVersion(t, latestMigrationVersion(t))
+}
+
+func isolatedStoreAtVersion(t *testing.T, version int) *postgres.Store {
+	t.Helper()
 	ctx := context.Background()
 	base := testStore(t)
-	schema := "devradar_product_health_" + randID(t)
+	schema := "devradar_isolated_" + randID(t)
 	quotedSchema := pq.QuoteIdentifier(schema)
 	if _, err := base.DB().ExecContext(ctx, `CREATE SCHEMA `+quotedSchema); err != nil {
 		t.Fatalf("create isolated schema: %v", err)
@@ -326,6 +333,16 @@ func isolatedAdminProductHealthStore(t *testing.T) *postgres.Store {
 		)`); err != nil {
 		t.Fatalf("precreate isolated schema version table: %v", err)
 	}
+	for _, migrationVersion := range migrationVersions(t) {
+		if migrationVersion <= version {
+			continue
+		}
+		if _, err := base.DB().ExecContext(ctx,
+			`INSERT INTO `+quotedSchema+`.devradar_schema_version (version) VALUES ($1)`,
+			migrationVersion); err != nil {
+			t.Fatalf("temporarily skip migration %d: %v", migrationVersion, err)
+		}
+	}
 
 	dsn, err := databaseURLWithSearchPath(config.DatabaseURL(), schema)
 	if err != nil {
@@ -335,7 +352,40 @@ func isolatedAdminProductHealthStore(t *testing.T) *postgres.Store {
 	if err != nil {
 		t.Fatalf("open isolated store: %v", err)
 	}
+	if _, err := isolated.DB().ExecContext(ctx,
+		`DELETE FROM devradar_schema_version WHERE version > $1`, version); err != nil {
+		t.Fatalf("remove skipped migration versions: %v", err)
+	}
 	return isolated
+}
+
+func latestMigrationVersion(t *testing.T) int {
+	t.Helper()
+	versions := migrationVersions(t)
+	if len(versions) == 0 {
+		t.Fatal("no migrations found")
+	}
+	return versions[len(versions)-1]
+}
+
+func migrationVersions(t *testing.T) []int {
+	t.Helper()
+	entries, err := os.ReadDir("sql/migrations")
+	if err != nil {
+		t.Fatalf("read migrations: %v", err)
+	}
+	versions := make([]int, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+		version, err := strconv.Atoi(strings.SplitN(entry.Name(), "_", 2)[0])
+		if err != nil {
+			t.Fatalf("parse migration version %q: %v", entry.Name(), err)
+		}
+		versions = append(versions, version)
+	}
+	return versions
 }
 
 func databaseURLWithSearchPath(dsn, schema string) (string, error) {
