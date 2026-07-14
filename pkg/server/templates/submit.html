@@ -86,7 +86,7 @@
     <p class="muted">Or grab a prebuilt binary from the <a href="https://github.com/thingzio/devradarctl/releases" rel="noopener noreferrer" target="_blank">releases page</a>. Submitting from an image needs <a href="https://github.com/anchore/syft" rel="noopener noreferrer" target="_blank">syft</a> on <code>PATH</code>; digest resolution is built in (no crane needed) and uses your ambient Docker credentials.</p>
 
     <h3 class="guide-h3">2. Submit an image</h3>
-    <p style="margin-top:0">Mint a token on the <a href="/tokens">Tokens &amp; settings</a> page, then:</p>
+    <p style="margin-top:0">{{if .CanManageCredentials}}Mint a token on the <a href="/tokens">Tokens &amp; settings</a> page{{else}}Use an API token issued by an account admin{{end}}, then:</p>
     <div class="copyable">
       <button class="copy-btn" type="button">Copy</button>
       <pre>export DEVRADAR_TOKEN=dr_xxxxxxxxxxxxxxxxxxxxxxxx
@@ -125,8 +125,8 @@ devradarctl submit --image "$IMAGE" --attestation cosign.att.jsonl</pre>
   <div class="guide-step">
     <div class="guide-step-n">1</div>
     <div class="guide-step-body">
-      <h2>Create an API token</h2>
-      <p>CI submits SBOMs with a <code>dr_</code> bearer token. Mint one on the <a href="/tokens">Tokens &amp; settings</a> page — it's shown once, so copy it immediately. Then export it in your shell:</p>
+      <h2>{{if .CanManageCredentials}}Create{{else}}Obtain{{end}} an API token</h2>
+      <p>CI submits SBOMs with a <code>dr_</code> bearer token. {{if .CanManageCredentials}}Mint one on the <a href="/tokens">Tokens &amp; settings</a> page — it's shown once, so copy it immediately.{{else}}Ask an account admin to issue one; it is shown only once when created.{{end}} Then export it in your shell:</p>
       <div class="copyable">
         <button class="copy-btn" type="button">Copy</button>
         <pre>export DR_TOKEN=dr_xxxxxxxxxxxxxxxxxxxxxxxx

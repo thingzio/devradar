@@ -36,10 +36,11 @@
   </div>
   {{else}}
   <div class="card">
-    <p class="muted" style="margin:0">No license data yet. Submit an SBOM (Syft CycloneDX with all layers is recommended) to populate this view — see <a href="/tokens">API tokens</a>.</p>
+    <p class="muted" style="margin:0">No license data yet. Submit an SBOM (Syft CycloneDX with all layers is recommended) to populate this view{{if .CanManageCredentials}} — see <a href="/tokens">API tokens</a>{{end}}.</p>
   </div>
   {{end}}
 
+  {{if .CanManageSettings}}
   <div class="card">
     <div class="card-head"><h2>Compliance policy</h2>{{if .PolicyActive}}<span class="pill">active</span>{{end}}</div>
     <p class="muted">Deny license categories to flag non-compliant packages. Policy is opt-in — with nothing denied, this view is descriptive only. Evaluation is live: changing the policy re-flags packages instantly.</p>
@@ -66,5 +67,6 @@
       <button class="btn" type="submit">Save policy</button>
     </form>
   </div>
+  {{end}}
 </main>
 {{template "foot" .}}

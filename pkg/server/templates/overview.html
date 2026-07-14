@@ -114,7 +114,7 @@
         {{else if not .License.Configured}}
         <p class="overview-signal-detail">No policy configured</p>
         <p class="muted">Captured licenses remain descriptive until you configure a policy.</p>
-        <p class="overview-signal-links"><a href="/licenses">View licenses →</a><a href="/tokens">Settings →</a></p>
+        <p class="overview-signal-links"><a href="/licenses">View licenses →</a>{{if .CanManageSettings}}<a href="/tokens">Settings →</a>{{end}}</p>
         {{else}}
         <p class="overview-signal-value">{{.License.Violations}} policy violation{{if ne .License.Violations 1}}s{{end}}</p>
         <p class="muted">Across {{.License.Packages}} catalogued package{{if ne .License.Packages 1}}s{{end}}</p>
@@ -169,10 +169,12 @@
   <div class="card">
     <div class="card-head"><h2>Welcome to DevRadar 👋</h2></div>
     <p style="margin:0 0 0.4rem">You're not tracking any images yet. DevRadar watches how an image's vulnerabilities and licenses change over time by rescanning its <strong>SBOM</strong> daily — so the first step is to submit one.</p>
-    <p class="muted" style="margin:0">It takes four copy-paste steps: create a token, generate the SBOM by digest, and POST it.</p>
+    <p class="muted" style="margin:0">It takes four copy-paste steps: {{if .CanManageCredentials}}create{{else}}obtain{{end}} a token, generate the SBOM by digest, and POST it.</p>
     <div class="empty-cta">
       <a href="/docs" class="btn">Submit your first SBOM →</a>
+      {{if .CanManageCredentials}}
       <a href="/tokens" class="btn secondary">Create an API token</a>
+      {{end}}
     </div>
   </div>
   {{end}}

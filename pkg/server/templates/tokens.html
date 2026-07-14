@@ -4,7 +4,7 @@
   <h1 class="page-title">Tokens &amp; settings</h1>
   <p class="sub">Choose what DevRadar surfaces, then manage credentials for SBOM submission.</p>
 
-  {{if .NewToken}}
+  {{if and .CanManageCredentials .NewToken}}
   <div class="msg ok">
     <strong>New token created — copy it now, it won't be shown again:</strong>
     <p><code>{{.NewToken}}</code></p>
@@ -12,8 +12,9 @@
   </div>
   {{end}}
 
-  {{if .AlertsSaved}}<div class="msg ok">Alert settings saved.</div>{{end}}
+  {{if and .CanManageSettings .AlertsSaved}}<div class="msg ok">Alert settings saved.</div>{{end}}
 
+  {{if .CanManageSettings}}
   <div class="card">
     <div class="card-head"><h2>Browser alerts</h2></div>
     <p class="muted">Create alerts from new image- and vulnerability-database changes. Email and webhook delivery can be added later without changing these rules.</p>
@@ -47,7 +48,9 @@
       <button class="btn" type="submit">Save alert settings</button>
     </form>
   </div>
+  {{end}}
 
+  {{if .CanManageCredentials}}
   <div class="card">
     <div class="card-head"><h2>API tokens</h2></div>
     <p class="muted">For submitting SBOMs from CI.</p>
@@ -75,7 +78,9 @@
       </tbody>
     </table>
   </div>
+  {{end}}
 
+  {{if .CanManageSettings}}
   <div class="card">
     <div class="card-head"><h2>Severity threshold</h2></div>
     <p class="muted">Default minimum severity for the read API and dashboard. Unrated (<code>unknown</code>) findings are always shown.</p>
@@ -88,5 +93,6 @@
       <button class="btn secondary" type="submit">Save</button>
     </form>
   </div>
+  {{end}}
 </main>
 {{template "foot" .}}

@@ -4,11 +4,13 @@
   <p class="crumb"><a href="/dashboard">← Dashboard</a></p>
   <div class="page-head">
     <h1 class="page-title">{{.Short}}</h1>
+    {{if .CanWriteEvidence}}
     <form method="post" action="/images/archive" data-confirm="Stop tracking {{.Short}} and all its versions? Findings and history are kept, but it drops from scans and the dashboard.">
       <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
       <input type="hidden" name="repo" value="{{.Repository}}">
       <button class="btn secondary" type="submit">Archive image</button>
     </form>
+    {{end}}
   </div>
 
   {{if .CanCompare}}

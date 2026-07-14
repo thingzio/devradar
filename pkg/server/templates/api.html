@@ -11,7 +11,7 @@
 
   <div class="card">
     <div class="card-head"><h2>Authentication</h2></div>
-    <p style="margin-top:0">Every <code>/v1</code> endpoint requires an API token minted in <a href="/tokens">Tokens &amp; settings</a>. Send it as a bearer token:</p>
+    <p style="margin-top:0">Every <code>/v1</code> endpoint requires {{if .CanManageCredentials}}an API token minted in <a href="/tokens">Tokens &amp; settings</a>{{else}}an account API token{{end}}. Send it as a bearer token:</p>
     <div class="copyable">
       <button class="copy-btn" type="button">Copy</button>
       <pre>curl -sS "{{.BaseURL}}/v1/images" \

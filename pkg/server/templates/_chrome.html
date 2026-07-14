@@ -35,8 +35,7 @@
     <div class="user-menu" id="user-menu" hidden>
       <div class="user-menu-header">{{.Email}}{{if .AccountName}}<br><span class="muted">{{.AccountName}} · {{.AccountRole}}</span>{{end}}</div>
       <div class="user-menu-divider"></div>
-      <a href="/tokens" class="user-menu-item">Settings</a>
-      <div class="user-menu-divider"></div>
+      {{if .CanManageCredentials}}<a href="/tokens" class="user-menu-item">Settings</a><div class="user-menu-divider"></div>{{end}}
       <form method="post" action="/auth/logout"><input type="hidden" name="csrf_token" data-csrf-cookie><button class="user-menu-item user-menu-signout" type="submit">Sign out</button></form>
     </div>
   </div>

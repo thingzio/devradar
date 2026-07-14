@@ -158,6 +158,21 @@ func RequireAccount(store *postgres.Store, accountsURL string) func(http.Handler
 	}
 }
 
+// RequireCapability authorizes an active account membership.
+// RequireAccount must run first so Access is present in the request context.
+func RequireCapability(capability account.Capability) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			access := AccessFromContext(r.Context())
+			if access == nil || !access.Can(capability) {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 func unavailableAccountURL(accountsURL string) string {
 	separator := "?"
 	if strings.Contains(accountsURL, "?") {

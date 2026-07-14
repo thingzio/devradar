@@ -112,49 +112,12 @@ func (s *Server) registerUI(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api", s.handleAPIDocs)
 	mux.HandleFunc("GET /openapi.yaml", s.handleOpenAPISpec)
 
-	requireUser := middleware.RequireUser(s.store, loginPath)
-	requireAccount := middleware.RequireAccount(s.store, "/accounts")
-	authed := func(next http.Handler) http.Handler {
-		return requireUser(requireAccount(next))
-	}
 	csrf := middleware.ValidateCSRF
 	// Logout is CSRF-protected (double-submit) so a cross-site page can't force a
 	// victim's session to be cleared. It intentionally does NOT require an active
 	// session (authed) — clearing an already-invalid cookie is harmless and idempotent.
 	mux.Handle("POST /auth/logout", csrf(http.HandlerFunc(s.handleLogout)))
-	mux.Handle("GET /overview", authed(http.HandlerFunc(s.handleOverview)))
-	mux.Handle("GET /search", authed(http.HandlerFunc(s.handleSearch)))
-	mux.Handle("GET /dashboard", authed(http.HandlerFunc(s.handleDashboard)))
-	mux.Handle("GET /trends", authed(http.HandlerFunc(s.handleTrends)))
-	mux.Handle("GET /images", authed(http.HandlerFunc(s.handleImageDetail)))
-	mux.Handle("GET /compare", authed(http.HandlerFunc(s.handleCompare)))
-	mux.Handle("GET /sboms/{id}", authed(http.HandlerFunc(s.handleSBOMDetail)))
-	mux.Handle("POST /sboms/{id}/archive", authed(csrf(http.HandlerFunc(s.handleArchiveSBOMUI))))
-	mux.Handle("POST /images/archive", authed(csrf(http.HandlerFunc(s.handleArchiveRepoUI))))
-	mux.Handle("GET /cves", authed(http.HandlerFunc(s.handleCVEList)))
-	mux.Handle("GET /work", authed(http.HandlerFunc(s.handleWorkQueue)))
-	mux.Handle("GET /cves/{cve}", authed(http.HandlerFunc(s.handleCVEDetail)))
-	mux.Handle("GET /licenses", authed(http.HandlerFunc(s.handleLicensesPage)))
-	mux.Handle("GET /licenses/family", authed(http.HandlerFunc(s.handleLicenseFamily)))
-	mux.Handle("GET /alerts", authed(http.HandlerFunc(s.handleAlerts)))
-	mux.Handle("GET /alerts/{id}", authed(http.HandlerFunc(s.handleAlertDetail)))
-	mux.Handle("POST /alerts/{id}/read", authed(csrf(http.HandlerFunc(s.handleMarkAlertRead))))
-	mux.Handle("POST /settings/license-policy", authed(csrf(http.HandlerFunc(s.handleSetLicensePolicy))))
-	mux.Handle("GET /docs", authed(http.HandlerFunc(s.handleSubmitGuide)))
-	// /submit is the historical path — keep it working (bookmarks, older links)
-	// by redirecting to the renamed /docs page.
-	mux.Handle("GET /submit", authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/docs", http.StatusMovedPermanently)
-	})))
-	// VEX upload is a multipart file POST: it cannot use the ValidateCSRF wrapper
-	// (which caps the body at 4KB), so the handler parses its own form and calls
-	// middleware.CheckCSRF after ParseMultipartForm.
-	mux.Handle("POST /vex/upload", authed(http.HandlerFunc(s.handleUploadVEX)))
-	mux.Handle("GET /tokens", authed(http.HandlerFunc(s.handleTokensPage)))
-	mux.Handle("POST /tokens", authed(csrf(http.HandlerFunc(s.handleCreateToken))))
-	mux.Handle("POST /tokens/{id}/revoke", authed(csrf(http.HandlerFunc(s.handleRevokeToken))))
-	mux.Handle("POST /settings/min-severity", authed(csrf(http.HandlerFunc(s.handleSetMinSeverity))))
-	mux.Handle("POST /settings/alerts", authed(csrf(http.HandlerFunc(s.handleSetAlertPolicy))))
+	s.registerAccountRoutes(mux)
 
 	s.registerAdmin(mux)
 }

@@ -10,10 +10,12 @@
   <div class="card">
     <div class="card-head">
       <h2>Fleet vulnerabilities</h2>
+      {{if .CanWriteEvidence}}
       <form class="inline" method="post" action="/vex/upload" enctype="multipart/form-data">
         <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
         <label class="btn secondary filelabel">Upload VEX<input type="file" name="vex" accept=".json,application/json" data-autosubmit hidden></label>
       </form>
+      {{end}}
     </div>
 
     {{/* Filter bar. All controls submit via GET so state lives in the URL and

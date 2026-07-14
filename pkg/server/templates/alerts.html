@@ -5,7 +5,7 @@
   <p class="sub">Actionable changes that matched your tenant alert settings.</p>
 
   <div class="card alert-card">
-    <div class="card-head"><h2>Alert history</h2><a class="muted" href="/tokens">Alert settings →</a></div>
+    <div class="card-head"><h2>Alert history</h2>{{if .CanManageSettings}}<a class="muted" href="/tokens">Alert settings →</a>{{end}}</div>
     <div class="alert-list">
       {{range .Alerts}}
       <a class="alert-item alert-{{.Kind}} {{if .Unread}}is-unread{{end}}" href="/alerts/{{.ID}}">
@@ -14,7 +14,7 @@
         <span class="alert-meta"><span class="sev-badge sev-b-{{.Severity}}">{{.Severity}}</span><span>{{.Cause}}</span><time>{{.CreatedAt.Format "2006-01-02 15:04"}}</time></span>
       </a>
       {{else}}
-      <div class="empty-cta"><span class="muted">No alerts yet. Enable browser alerts in Settings to evaluate new changes.</span><a class="btn secondary" href="/tokens">Open settings</a></div>
+      <div class="empty-cta"><span class="muted">No alerts yet.{{if .CanManageSettings}} Enable browser alerts in Settings to evaluate new changes.{{end}}</span>{{if .CanManageSettings}}<a class="btn secondary" href="/tokens">Open settings</a>{{end}}</div>
       {{end}}
     </div>
     {{if .NextCursor}}<p class="loadmore"><a href="/alerts?cursor={{.NextCursor}}">Older alerts →</a></p>{{end}}

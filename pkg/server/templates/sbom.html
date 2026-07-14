@@ -4,10 +4,12 @@
   <p class="crumb"><a href="/dashboard">Dashboard</a> / <a href="/images?repo={{.Repository}}">{{.Short}}</a></p>
   <div class="page-head">
     <h1 class="page-title">{{.Short}} <span class="muted mono">{{.ShortDigest}}</span></h1>
+    {{if .CanWriteEvidence}}
     <form method="post" action="/sboms/{{.SBOMID}}/archive" data-confirm="Stop tracking this SBOM (digest {{.ShortDigest}})? Findings and history are kept, but it drops from scans and the dashboard.">
       <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
       <button class="btn secondary" type="submit">Archive this version</button>
     </form>
+    {{end}}
   </div>
   <div class="chips">
     {{if .VersionTag}}<span class="tag">{{.VersionTag}}</span>{{end}}
