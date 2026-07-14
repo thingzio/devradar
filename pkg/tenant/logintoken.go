@@ -23,6 +23,9 @@ var ErrLoginTokenExpired = errors.New("login link expired")
 
 // NormalizeEmail trims and lowercases an address so the same mailbox maps to one
 // tenant regardless of how it was typed.
+//
+// Transitional: compatibility API until Task 4 moves the remaining
+// tenant-auth callers to authn.NormalizeEmail.
 func NormalizeEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
 }
@@ -31,6 +34,9 @@ func NormalizeEmail(email string) string {
 // its hash with a TTL, and returns the raw token for the emailed link. The email
 // is not required to belong to an existing tenant — first successful consume
 // creates the tenant (sign-up and sign-in are the same flow).
+//
+// Transitional: compatibility API until Task 4 moves the remaining
+// tenant-auth callers to postgres.Store.
 func CreateLoginToken(ctx context.Context, db *sql.DB, email string, ttl time.Duration) (string, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
@@ -52,6 +58,9 @@ func CreateLoginToken(ctx context.Context, db *sql.DB, email string, ttl time.Du
 // token — only the subsequent human POST consumes it. Returns the target email
 // on success, ErrLoginTokenExpired if the row exists but timed out, or
 // ErrLoginTokenInvalid if there is no such token (unknown or already consumed).
+//
+// Transitional: compatibility API until Task 4 moves the remaining
+// tenant-auth callers to postgres.Store.
 func PeekLoginToken(ctx context.Context, db *sql.DB, rawToken string) (email string, err error) {
 	var expired bool
 	err = db.QueryRowContext(ctx, `
@@ -75,6 +84,9 @@ func PeekLoginToken(ctx context.Context, db *sql.DB, rawToken string) (email str
 // atomically as part of consumption, so a link works at most once. Distinguishes
 // ErrLoginTokenExpired (row present but timed out) from ErrLoginTokenInvalid
 // (unknown or already used) so callers can give the right guidance.
+//
+// Transitional: compatibility API until Task 4 moves the remaining
+// tenant-auth callers to postgres.Store.
 func ConsumeLoginToken(ctx context.Context, db *sql.DB, rawToken string) (*Tenant, error) {
 	// Delete-and-return: the DELETE both enforces single-use and yields the email
 	// only if the row existed and had not expired.
@@ -106,6 +118,9 @@ func ConsumeLoginToken(ctx context.Context, db *sql.DB, rawToken string) (*Tenan
 }
 
 // PurgeExpiredLoginTokens deletes expired tokens (best-effort housekeeping).
+//
+// Transitional: compatibility API; postgres.Store owns auth
+// housekeeping.
 func PurgeExpiredLoginTokens(ctx context.Context, db *sql.DB) error {
 	_, err := db.ExecContext(ctx, `DELETE FROM devradar_login_token WHERE expires_at <= now()`)
 	return err

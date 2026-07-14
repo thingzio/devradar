@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thingzio/devradar/pkg/authn"
 	"github.com/thingzio/devradar/pkg/middleware"
 	"github.com/thingzio/devradar/pkg/tenant"
 )
@@ -86,7 +87,8 @@ func TestSession_Expired(t *testing.T) {
 	tenantID, _ := seedTenantToken(t, st)
 	h := srv.Handler()
 
-	raw, err := tenant.CreateSession(context.Background(), st.DB(), tenantID, -time.Hour)
+	userID := seedLegacyUser(t, st, tenantID)
+	raw, err := st.CreateSession(context.Background(), userID, &tenantID, -time.Hour)
 	if err != nil {
 		t.Fatalf("create expired session: %v", err)
 	}
@@ -209,7 +211,7 @@ func TestMagicLink_ConsumeAndSession(t *testing.T) {
 	h := srv.Handler()
 	ctx := context.Background()
 
-	raw, err := tenant.CreateLoginToken(ctx, st.DB(), "magic@example.com", 15*time.Minute)
+	raw, err := st.CreateLoginToken(ctx, "magic@example.com", 15*time.Minute)
 	if err != nil {
 		t.Fatalf("create login token: %v", err)
 	}
@@ -278,7 +280,7 @@ func TestMagicLink_VerifyRequiresCSRF(t *testing.T) {
 	h := srv.Handler()
 	ctx := context.Background()
 
-	raw, err := tenant.CreateLoginToken(ctx, st.DB(), "csrf-victim@example.com", 15*time.Minute)
+	raw, err := st.CreateLoginToken(ctx, "csrf-victim@example.com", 15*time.Minute)
 	if err != nil {
 		t.Fatalf("create login token: %v", err)
 	}
@@ -299,7 +301,74 @@ func TestMagicLink_VerifyRequiresCSRF(t *testing.T) {
 
 	// The token must survive (not consumed) — a subsequent legitimate confirm can
 	// still peek it. PeekLoginToken succeeds only if the token is still valid.
-	if _, err := tenant.PeekLoginToken(ctx, st.DB(), raw); err != nil {
+	if _, err := st.PeekLoginToken(ctx, raw); err != nil {
 		t.Errorf("token should be unconsumed after rejected CSRF POST, got: %v", err)
+	}
+}
+
+func TestMagicLink_MemberlessUserRedirectsToAccounts(t *testing.T) {
+	srv, st := testServer(t)
+	h := srv.Handler()
+	ctx := context.Background()
+	suffix, err := authn.NewToken("")
+	if err != nil {
+		t.Fatalf("generate email suffix: %v", err)
+	}
+	email := "memberless-magic-" + suffix[:8] + "@example.com"
+	var userID string
+	if err := st.DB().QueryRowContext(ctx, `
+		INSERT INTO devradar_user (email,email_verified_at)
+		VALUES ($1,now()) RETURNING id`, email).Scan(&userID); err != nil {
+		t.Fatalf("seed memberless user: %v", err)
+	}
+	raw, err := st.CreateLoginToken(ctx, email, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("create login token: %v", err)
+	}
+	getReq := httptest.NewRequest(http.MethodGet, "/auth/verify?token="+raw, nil)
+	getRec := httptest.NewRecorder()
+	h.ServeHTTP(getRec, getReq)
+	var csrfCookie *http.Cookie
+	for _, cookie := range getRec.Result().Cookies() {
+		if cookie.Name == middleware.CSRFCookieName() {
+			csrfCookie = cookie
+		}
+	}
+	if csrfCookie == nil {
+		t.Fatal("verify GET did not set CSRF cookie")
+	}
+	csrfToken := scrapeCSRF(t, getRec.Body.String())
+	postReq := httptest.NewRequest(http.MethodPost, "/auth/verify",
+		strings.NewReader("token="+raw+"&csrf_token="+csrfToken))
+	postReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	postReq.AddCookie(csrfCookie)
+	postRec := httptest.NewRecorder()
+	h.ServeHTTP(postRec, postReq)
+	if got := postRec.Header().Get("Location"); got != "/accounts" {
+		t.Fatalf("memberless verify redirect = %q, want /accounts", got)
+	}
+	var sessionRaw string
+	for _, cookie := range postRec.Result().Cookies() {
+		if cookie.Name == middleware.SessionCookieName() {
+			sessionRaw = cookie.Value
+		}
+	}
+	if sessionRaw == "" {
+		t.Fatal("memberless verify did not create user session")
+	}
+	session, err := st.ValidateSession(ctx, sessionRaw)
+	if err != nil {
+		t.Fatalf("validate memberless session: %v", err)
+	}
+	if session.User.ID != userID || session.ActiveAccountID != nil {
+		t.Fatalf("memberless session = %#v, want user %s with nil account", session, userID)
+	}
+	var accounts int
+	if err := st.DB().QueryRowContext(ctx,
+		`SELECT count(*) FROM devradar_tenant WHERE email=$1`, email).Scan(&accounts); err != nil {
+		t.Fatalf("count personal accounts: %v", err)
+	}
+	if accounts != 0 {
+		t.Fatalf("memberless login created %d personal accounts, want 0", accounts)
 	}
 }

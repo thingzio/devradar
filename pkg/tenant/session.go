@@ -15,6 +15,9 @@ var ErrSessionInvalid = errors.New("session expired or not found")
 
 // CreateSession generates a 256-bit token, stores its SHA-256 hash with a TTL,
 // and returns the raw token for the cookie.
+//
+// Transitional: compatibility API until Task 4 moves the remaining
+// tenant-auth callers to postgres.Store.
 func CreateSession(ctx context.Context, db *sql.DB, tenantID string, ttl time.Duration) (string, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
@@ -31,6 +34,9 @@ func CreateSession(ctx context.Context, db *sql.DB, tenantID string, ttl time.Du
 }
 
 // ValidateSession returns the tenant for a valid, unexpired session token.
+//
+// Transitional: compatibility API until Task 4 moves the remaining
+// tenant-auth callers to postgres.Store.
 func ValidateSession(ctx context.Context, db *sql.DB, rawToken string) (*Tenant, error) {
 	row := db.QueryRowContext(ctx, `
 		SELECT `+prefixed("t")+`
@@ -47,6 +53,9 @@ func ValidateSession(ctx context.Context, db *sql.DB, rawToken string) (*Tenant,
 }
 
 // DestroySession removes a session by its raw token (logout).
+//
+// Transitional: compatibility API until Task 4 moves the remaining
+// tenant-auth callers to postgres.Store.
 func DestroySession(ctx context.Context, db *sql.DB, rawToken string) error {
 	if _, err := db.ExecContext(ctx, `DELETE FROM devradar_session WHERE id = $1`, HashToken(rawToken)); err != nil {
 		return fmt.Errorf("destroy session: %w", err)
@@ -58,6 +67,9 @@ func DestroySession(ctx context.Context, db *sql.DB, rawToken string) error {
 // housekeeping). Expired sessions are already rejected by ValidateSession's
 // `expires_at > NOW()` guard, so this only reclaims dead rows — it can never log
 // out a live session. Mirrors PurgeExpiredLoginTokens.
+//
+// Transitional: compatibility API; postgres.Store owns auth
+// housekeeping.
 func PurgeExpiredSessions(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, `DELETE FROM devradar_session WHERE expires_at <= NOW()`); err != nil {
 		return fmt.Errorf("purge expired sessions: %w", err)

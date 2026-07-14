@@ -28,11 +28,26 @@ import (
 // authenticated browser routes (not just API-token routes).
 func seedSession(t *testing.T, st *postgres.Store, tenantID string) *http.Cookie {
 	t.Helper()
-	raw, err := tenant.CreateSession(context.Background(), st.DB(), tenantID, time.Hour)
+	userID := seedLegacyUser(t, st, tenantID)
+	raw, err := st.CreateSession(context.Background(), userID, &tenantID, time.Hour)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
 	return &http.Cookie{Name: middleware.SessionCookieName(), Value: raw}
+}
+
+func seedLegacyUser(t *testing.T, st *postgres.Store, tenantID string) string {
+	t.Helper()
+	ctx := context.Background()
+	if err := st.ReconcileLegacyAccount(ctx, tenantID); err != nil {
+		t.Fatalf("reconcile legacy account: %v", err)
+	}
+	var userID string
+	if err := st.DB().QueryRowContext(ctx,
+		`SELECT id FROM devradar_user WHERE legacy_tenant_id=$1`, tenantID).Scan(&userID); err != nil {
+		t.Fatalf("read legacy user: %v", err)
+	}
+	return userID
 }
 
 func testServer(t *testing.T) (*server.Server, *postgres.Store) {

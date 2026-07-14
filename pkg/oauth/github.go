@@ -2,8 +2,8 @@
 // A provider's only job is to turn an authorization code into a proven identity
 // — a stable per-user subject plus a provider-verified email. The rest of the
 // sign-in flow (tenant resolution, session minting) is provider-agnostic and
-// lives in pkg/tenant and pkg/server; adding a provider means adding a type here
-// that yields an Identity, nothing more.
+// lives in pkg/data/postgres and pkg/server; adding a provider means adding a
+// type here that yields an Identity, nothing more.
 package oauth
 
 import (
@@ -17,16 +17,17 @@ import (
 )
 
 // ErrNoVerifiedEmail is returned when the provider account has no primary,
-// verified email. DevRadar keys tenants on a verified email, so an unverified
+// verified email. DevRadar keys users on a verified email, so an unverified
 // account cannot be trusted to sign in (an attacker could set an unverified
 // address to someone else's and hijack their tenant). The caller surfaces this
 // to the user as "verify your email with the provider, or use the email link".
 var ErrNoVerifiedEmail = errors.New("no primary verified email on provider account")
 
 // Identity is the proven result of an OAuth exchange: a provider-stable subject
-// and a verified email. Both are trusted inputs to tenant.ResolveByIdentity.
+// and a verified email. Both are trusted inputs to
+// postgres.Store.ResolveDirectIdentity.
 type Identity struct {
-	Provider  string // e.g. tenant.ProviderGitHub
+	Provider  string // e.g. "github"
 	Subject   string // provider's immutable user id (GitHub: numeric id as text)
 	Email     string // primary, provider-verified email
 	AvatarURL string // optional profile image URL (cosmetic; may be "")

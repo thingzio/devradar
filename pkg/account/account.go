@@ -115,3 +115,10 @@ type VerifiedIdentity struct {
 	Email     string
 	AvatarURL string
 }
+
+// Session authenticates a user and optionally selects one active account.
+type Session struct {
+	User            User
+	ActiveAccountID *string
+	ExpiresAt       time.Time
+}

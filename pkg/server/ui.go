@@ -17,6 +17,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/thingzio/devradar/pkg/account"
+	"github.com/thingzio/devradar/pkg/authn"
 	"github.com/thingzio/devradar/pkg/config"
 	"github.com/thingzio/devradar/pkg/data"
 	"github.com/thingzio/devradar/pkg/data/postgres"
@@ -178,10 +180,14 @@ func (s *Server) registerAdmin(mux *http.ServeMux, db *sql.DB) {
 }
 
 func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
-	// Already signed in → straight to the dashboard.
+	// Already signed in → the selected account or account chooser.
 	if c, err := r.Cookie(middleware.SessionCookieName()); err == nil {
-		if _, err := tenant.ValidateSession(r.Context(), s.store.DB(), c.Value); err == nil {
-			http.Redirect(w, r, "/overview", http.StatusFound)
+		if session, err := s.store.ValidateSession(r.Context(), c.Value); err == nil && session.User.Status == "active" {
+			path := "/accounts"
+			if session.ActiveAccountID != nil {
+				path = "/overview"
+			}
+			http.Redirect(w, r, path, http.StatusFound)
 			return
 		}
 	}
@@ -205,7 +211,7 @@ func (s *Server) handleRequestLink(w http.ResponseWriter, r *http.Request) {
 	// email field, so a small ceiling is ample and bounds abuse of a pre-auth
 	// endpoint.
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
-	email := tenant.NormalizeEmail(r.FormValue("email"))
+	email := authn.NormalizeEmail(r.FormValue("email"))
 	if !looksLikeEmail(email) {
 		http.Redirect(w, r, loginPath+"?error=email", http.StatusSeeOther)
 		return
@@ -222,7 +228,7 @@ func (s *Server) handleRequestLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, err := tenant.CreateLoginToken(ctx, db, email, loginTokenTTL)
+	raw, err := s.store.CreateLoginToken(ctx, email, loginTokenTTL)
 	if err != nil {
 		slog.Error("create login token", "error", err)
 		http.Redirect(w, r, loginPath+"?error=server", http.StatusSeeOther)
@@ -256,7 +262,7 @@ func (s *Server) handleRequestLink(w http.ResponseWriter, r *http.Request) {
 // the landing page with the right message.
 func (s *Server) handleVerifyConfirm(w http.ResponseWriter, r *http.Request) {
 	token := r.URL.Query().Get("token")
-	if _, err := tenant.PeekLoginToken(r.Context(), s.store.DB(), token); err != nil {
+	if _, err := s.store.PeekLoginToken(r.Context(), token); err != nil {
 		http.Redirect(w, r, loginPath+"?error="+loginErrorCode(err), http.StatusFound)
 		return
 	}
@@ -273,23 +279,37 @@ func (s *Server) handleVerifyConfirm(w http.ResponseWriter, r *http.Request) {
 // POSTs, so reaching here means a human clicked the confirm button.
 func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	tn, err := tenant.ConsumeLoginToken(ctx, s.store.DB(), r.FormValue("token"))
+	identity, err := s.store.ConsumeLoginToken(ctx, r.FormValue("token"))
 	if err != nil {
 		slog.Info("magic link consume failed", "reason", loginErrorCode(err))
 		http.Redirect(w, r, loginPath+"?error="+loginErrorCode(err), http.StatusFound)
 		return
 	}
-	if tn.Status == tenant.StatusSuspended {
+	user, acct, err := s.store.ResolveDirectIdentity(ctx, identity)
+	if err != nil {
+		slog.Error("resolve magic-link identity", "error", err)
+		http.Redirect(w, r, loginPath+"?error=server", http.StatusFound)
+		return
+	}
+	if user.Status == "suspended" {
 		http.Redirect(w, r, loginPath+"?error=suspended", http.StatusFound)
 		return
 	}
-	sess, err := tenant.CreateSession(ctx, s.store.DB(), tn.ID, sessionTTL)
+	var activeAccountID *string
+	if acct != nil {
+		activeAccountID = &acct.ID
+	}
+	sess, err := s.store.CreateSession(ctx, user.ID, activeAccountID, sessionTTL)
 	if err != nil {
 		http.Redirect(w, r, loginPath+"?error=server", http.StatusFound)
 		return
 	}
 	middleware.SetSessionCookie(w, sess, int(sessionTTL.Seconds()))
-	http.Redirect(w, r, "/overview", http.StatusFound)
+	path := "/accounts"
+	if activeAccountID != nil {
+		path = "/overview"
+	}
+	http.Redirect(w, r, path, http.StatusFound)
 }
 
 // loginErrorCode maps a login-token error to the query code the landing page
@@ -297,9 +317,9 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 // distinguished so the user gets accurate guidance.
 func loginErrorCode(err error) string {
 	switch {
-	case errors.Is(err, tenant.ErrLoginTokenExpired):
+	case errors.Is(err, postgres.ErrLoginTokenExpired):
 		return "expired"
-	case errors.Is(err, tenant.ErrLoginTokenInvalid):
+	case errors.Is(err, postgres.ErrLoginTokenInvalid):
 		return "used"
 	default:
 		return "server"
@@ -308,7 +328,7 @@ func loginErrorCode(err error) string {
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(middleware.SessionCookieName()); err == nil {
-		_ = tenant.DestroySession(r.Context(), s.store.DB(), c.Value)
+		_ = s.store.DestroySession(r.Context(), c.Value)
 	}
 	middleware.ClearSessionCookie(w)
 	http.Redirect(w, r, loginPath, http.StatusFound)
@@ -368,24 +388,34 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tn, err := tenant.ResolveByIdentity(ctx, s.store.DB(), tenant.ProviderGitHub, id.Subject, id.Email, id.AvatarURL)
+	user, acct, err := s.store.ResolveDirectIdentity(ctx, account.VerifiedIdentity{
+		Provider: id.Provider, Subject: id.Subject, Email: id.Email, AvatarURL: id.AvatarURL,
+	})
 	if err != nil {
 		slog.Error("resolve identity", "error", err)
 		http.Redirect(w, r, loginPath+"?error=server", http.StatusFound)
 		return
 	}
-	if tn.Status == tenant.StatusSuspended {
+	if user.Status == "suspended" {
 		http.Redirect(w, r, loginPath+"?error=suspended", http.StatusFound)
 		return
 	}
 
-	sess, err := tenant.CreateSession(ctx, s.store.DB(), tn.ID, sessionTTL)
+	var activeAccountID *string
+	if acct != nil {
+		activeAccountID = &acct.ID
+	}
+	sess, err := s.store.CreateSession(ctx, user.ID, activeAccountID, sessionTTL)
 	if err != nil {
 		http.Redirect(w, r, loginPath+"?error=server", http.StatusFound)
 		return
 	}
 	middleware.SetSessionCookie(w, sess, int(sessionTTL.Seconds()))
-	http.Redirect(w, r, "/overview", http.StatusFound)
+	path := "/accounts"
+	if activeAccountID != nil {
+		path = "/overview"
+	}
+	http.Redirect(w, r, path, http.StatusFound)
 }
 
 // randomState returns a 256-bit URL-safe random string for the OAuth state.

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/thingzio/devradar/pkg/authn"
 	"github.com/thingzio/devradar/pkg/data/postgres"
 	"github.com/thingzio/devradar/pkg/gcs"
 	"github.com/thingzio/devradar/pkg/middleware"
@@ -101,14 +102,58 @@ func TestGitHubOAuth_HappyPath(t *testing.T) {
 		t.Error("callback should mint a session cookie")
 	}
 
-	// The GitHub avatar is persisted on the tenant for the nav to render.
+	// The GitHub avatar is person state and is persisted on the user.
 	var avatar string
 	if err := st.DB().QueryRowContext(context.Background(),
-		`SELECT avatar_url FROM devradar_tenant WHERE email='gh@example.com'`).Scan(&avatar); err != nil {
+		`SELECT avatar_url FROM devradar_user WHERE email='gh@example.com'`).Scan(&avatar); err != nil {
 		t.Fatalf("query avatar: %v", err)
 	}
 	if avatar != "https://avatars.githubusercontent.com/u/12345?v=4" {
 		t.Errorf("avatar_url = %q, want the GitHub avatar", avatar)
+	}
+}
+
+func TestGitHubOAuth_MemberlessUserRedirectsToAccounts(t *testing.T) {
+	suffix, err := authn.NewToken("")
+	if err != nil {
+		t.Fatalf("generate identity suffix: %v", err)
+	}
+	email := "memberless-github-" + suffix[:8] + "@example.com"
+	srv, st := oauthServer(t, fakeOAuth{id: &oauth.Identity{
+		Provider: tenant.ProviderGitHub, Subject: "memberless-" + suffix[8:16], Email: email,
+	}})
+	ctx := context.Background()
+	var userID string
+	if err := st.DB().QueryRowContext(ctx, `
+		INSERT INTO devradar_user (email,email_verified_at)
+		VALUES ($1,now()) RETURNING id`, email).Scan(&userID); err != nil {
+		t.Fatalf("seed memberless user: %v", err)
+	}
+	h := srv.Handler()
+	state := startFlow(t, h)
+	req := httptest.NewRequest(http.MethodGet,
+		"/auth/github/callback?state="+state.Value+"&code=abc", nil)
+	req.AddCookie(state)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if got := rec.Header().Get("Location"); got != "/accounts" {
+		t.Fatalf("memberless callback redirect = %q, want /accounts", got)
+	}
+	var sessionRaw string
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.Name == middleware.SessionCookieName() {
+			sessionRaw = cookie.Value
+		}
+	}
+	if sessionRaw == "" {
+		t.Fatal("memberless callback did not create user session")
+	}
+	session, err := st.ValidateSession(ctx, sessionRaw)
+	if err != nil {
+		t.Fatalf("validate memberless session: %v", err)
+	}
+	if session.User.ID != userID || session.ActiveAccountID != nil {
+		t.Fatalf("memberless session = %#v, want user %s with nil account", session, userID)
 	}
 }
 

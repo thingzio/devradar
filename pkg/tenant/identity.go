@@ -15,8 +15,9 @@ const (
 	ProviderGitHub    = "github"
 )
 
-// ResolveByIdentity maps an external sign-in to a tenant, provider-agnostically.
-// It is the single spine both the magic-link and OAuth flows funnel through:
+// ResolveByIdentity maps an external sign-in to a compatibility tenant,
+// provider-agnostically. It was the single spine for legacy magic-link and
+// OAuth flows:
 //
 //  1. If (provider, subject) is already linked, return that tenant. Keying on the
 //     provider's immutable subject means a later email change at the provider
@@ -32,6 +33,9 @@ const (
 // avatarURL is an optional cosmetic profile image from the provider; pass "" for
 // providers that have none (magic-link). When non-empty it is refreshed on the
 // tenant on every sign-in, since the provider avatar can change.
+//
+// Transitional: compatibility API until Task 4 moves the remaining
+// tenant-auth callers to postgres.Store.ResolveDirectIdentity.
 func ResolveByIdentity(ctx context.Context, db *sql.DB, provider, subject, email, avatarURL string) (*Tenant, error) {
 	email = NormalizeEmail(email)
 
