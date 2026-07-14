@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"net/http"
 
+	"github.com/thingzio/devradar/pkg/account"
 	"github.com/thingzio/devradar/pkg/config"
 	"github.com/thingzio/devradar/pkg/middleware"
-	"github.com/thingzio/devradar/pkg/tenant"
 )
 
 // handleAPIDocs renders the public REST API reference — a hand-written page in
@@ -15,19 +15,11 @@ import (
 // are open so DevRadar can be evaluated before sign-up. The nav adapts to
 // whether the viewer happens to be signed in.
 func (s *Server) handleAPIDocs(w http.ResponseWriter, r *http.Request) {
-	tn := s.currentTenant(r)
-	data := map[string]any{
-		"Title":    "API",
-		"Tab":      "api",
-		"SignedIn": tn != nil,
-		"BaseURL":  config.BaseURL(),
-		"Version":  s.opts.Version,
-	}
-	if tn != nil {
-		data["Email"] = tn.Email
-		data["AvatarURL"] = tn.AvatarURL
-	}
-	render(w, "api.html", data)
+	access := s.currentAccess(r)
+	render(w, "api.html", struct {
+		chromeView
+		BaseURL string
+	}{chromeView: s.chrome(access, "API", "api"), BaseURL: config.BaseURL()})
 }
 
 // handleOpenAPISpec serves the embedded OpenAPI document at a clean top-level
@@ -48,19 +40,19 @@ func (s *Server) handleOpenAPISpec(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(b)
 }
 
-// signedIn reports whether the request carries a valid session — used by public
-// pages to render the signed-in nav for logged-in visitors without gating access.
-// currentTenant returns the signed-in tenant for a request, or nil if the
-// session is missing/invalid. Used by public pages (e.g. API docs) whose nav
-// adapts to the viewer.
-func (s *Server) currentTenant(r *http.Request) *tenant.Tenant {
+// currentAccess returns active browser access for optional public-page chrome.
+func (s *Server) currentAccess(r *http.Request) *account.Access {
 	c, err := r.Cookie(middleware.SessionCookieName())
 	if err != nil {
 		return nil
 	}
-	tn, err := tenant.ValidateSession(r.Context(), s.store.DB(), c.Value)
+	session, err := s.store.ValidateSession(r.Context(), c.Value)
+	if err != nil || session.User.Status != "active" || session.ActiveAccountID == nil {
+		return nil
+	}
+	access, err := s.store.GetAccess(r.Context(), session.User.ID, *session.ActiveAccountID)
 	if err != nil {
 		return nil
 	}
-	return tn
+	return access
 }

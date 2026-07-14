@@ -12,7 +12,85 @@ import (
 	"github.com/thingzio/devradar/pkg/account"
 	"github.com/thingzio/devradar/pkg/authn"
 	"github.com/thingzio/devradar/pkg/data/postgres"
+	"github.com/thingzio/devradar/pkg/tenant"
 )
+
+func TestValidateAPITokenReturnsAccountAndTokenActor(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	email := "api-auth-" + randID(t)[:8] + "@example.com"
+	_, acct, err := st.ResolveDirectIdentity(ctx, account.VerifiedIdentity{
+		Provider: "magiclink", Subject: email, Email: email,
+	})
+	if err != nil || acct == nil {
+		t.Fatalf("resolve api account: account=%#v err=%v", acct, err)
+	}
+	raw, err := tenant.CreateAPIToken(ctx, st.DB(), acct.ID, "ci", time.Hour)
+	if err != nil {
+		t.Fatalf("create api token: %v", err)
+	}
+
+	gotAccount, actor, err := st.ValidateAPIToken(ctx, raw)
+	if err != nil {
+		t.Fatalf("validate api token: %v", err)
+	}
+	if gotAccount.ID != acct.ID {
+		t.Fatalf("api account = %s, want %s", gotAccount.ID, acct.ID)
+	}
+	if actor.Kind != account.ActorAPIToken || actor.APITokenID == "" || actor.UserID != "" {
+		t.Fatalf("api actor = %#v, want token-only actor", actor)
+	}
+
+	var first time.Time
+	if err := st.DB().QueryRowContext(ctx, `
+		SELECT last_used_at FROM devradar_api_token WHERE id=$1`, actor.APITokenID).Scan(&first); err != nil {
+		t.Fatalf("read first last_used_at: %v", err)
+	}
+	_, secondActor, err := st.ValidateAPIToken(ctx, raw)
+	if err != nil {
+		t.Fatalf("revalidate api token: %v", err)
+	}
+	var second time.Time
+	if err := st.DB().QueryRowContext(ctx, `
+		SELECT last_used_at FROM devradar_api_token WHERE id=$1`, actor.APITokenID).Scan(&second); err != nil {
+		t.Fatalf("read second last_used_at: %v", err)
+	}
+	if secondActor != actor || !second.Equal(first) {
+		t.Fatalf("rapid revalidation actor/time = %#v/%s, want %#v/%s", secondActor, second, actor, first)
+	}
+}
+
+func TestValidateAPITokenRejectsRevokedAndExpiredTokens(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	var accountID string
+	if err := st.DB().QueryRowContext(ctx, `
+		INSERT INTO devradar_tenant (email,name)
+		VALUES ($1,$1) RETURNING id`, "api-invalid-"+randID(t)[:8]+"@example.com").Scan(&accountID); err != nil {
+		t.Fatalf("seed api account: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		mutate string
+	}{
+		{name: "revoked", mutate: `DELETE FROM devradar_api_token WHERE token_hash=$1`},
+		{name: "expired", mutate: `UPDATE devradar_api_token SET expires_at=now()-interval '1 minute' WHERE token_hash=$1`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := tenant.CreateAPIToken(ctx, st.DB(), accountID, tc.name, time.Hour)
+			if err != nil {
+				t.Fatalf("create api token: %v", err)
+			}
+			if _, err := st.DB().ExecContext(ctx, tc.mutate, authn.HashToken(raw)); err != nil {
+				t.Fatalf("invalidate api token: %v", err)
+			}
+			if acct, actor, err := st.ValidateAPIToken(ctx, raw); err == nil || acct != nil || actor != (account.Actor{}) {
+				t.Fatalf("invalid token = %#v %#v %v, want nil/zero/error", acct, actor, err)
+			}
+		})
+	}
+}
 
 func TestResolveDirectIdentityCreatesOneAccount(t *testing.T) {
 	st := testStore(t)
@@ -719,6 +797,343 @@ func TestSessionLegacyNullUserRepairsAllNullCompatibilityRows(t *testing.T) {
 		siblingActiveAccountID == nil || *siblingActiveAccountID != accountID {
 		t.Fatalf("compatibility repair = name %q, role %q, identity %q, sibling %q/%v",
 			name, role, identityUserID, siblingUserID, siblingActiveAccountID)
+	}
+}
+
+func TestSessionMixedRevisionDirectAccountUsesIdentityOwner(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	user, acct, raw, nullSubject := seedMixedRevisionSession(t, st)
+
+	sameOwnerSubject := randID(t)
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_identity (tenant_id,user_id,provider,subject,email)
+		VALUES ($1,$2,'github',$3,$4)`, acct.ID, user.ID, sameOwnerSubject, user.Email); err != nil {
+		t.Fatalf("seed same-owner identity: %v", err)
+	}
+	var unrelatedUserID string
+	if err := st.DB().QueryRowContext(ctx, `
+		INSERT INTO devradar_user (email,email_verified_at)
+		VALUES ($1,now()) RETURNING id`, "unrelated-session-"+randID(t)[:8]+"@example.com").
+		Scan(&unrelatedUserID); err != nil {
+		t.Fatalf("seed unrelated session user: %v", err)
+	}
+	unrelatedSessionID := authn.HashToken("unrelated-live-" + randID(t))
+	siblingRaw := "mixed-sibling-" + randID(t)
+	expiredSessionID := authn.HashToken("mixed-expired-" + randID(t))
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_session (id,tenant_id,user_id,active_account_id,expires_at)
+		VALUES ($1,$2,$3,NULL,now()+interval '1 hour'),
+		       ($4,$2,NULL,NULL,now()+interval '1 hour'),
+		       ($5,$2,NULL,NULL,now()-interval '1 hour')`,
+		unrelatedSessionID, acct.ID, unrelatedUserID, authn.HashToken(siblingRaw), expiredSessionID); err != nil {
+		t.Fatalf("seed compatibility sessions: %v", err)
+	}
+
+	wantMembership := readMembershipSnapshot(t, st, acct.ID, user.ID)
+	wantUsers := countRows(t, st, `SELECT count(*) FROM devradar_user WHERE email=$1`, user.Email)
+	wantAccounts := countRows(t, st, `SELECT count(*) FROM devradar_tenant WHERE id=$1`, acct.ID)
+	wantMemberships := countRows(t, st, `
+		SELECT count(*) FROM devradar_account_member WHERE account_id=$1`, acct.ID)
+
+	session, err := st.ValidateSession(ctx, raw)
+	if err != nil {
+		t.Fatalf("validate mixed-revision session: %v", err)
+	}
+	if session.User.ID != user.ID || session.ActiveAccountID == nil || *session.ActiveAccountID != acct.ID {
+		t.Fatalf("repaired session = %#v, want user/account %s/%s", session, user.ID, acct.ID)
+	}
+
+	for subject, wantUserID := range map[string]string{
+		nullSubject:      user.ID,
+		sameOwnerSubject: user.ID,
+	} {
+		var gotUserID string
+		if err := st.DB().QueryRowContext(ctx, `
+			SELECT user_id FROM devradar_identity WHERE provider='github' AND subject=$1`, subject).
+			Scan(&gotUserID); err != nil {
+			t.Fatalf("read identity %s: %v", subject, err)
+		}
+		if gotUserID != wantUserID {
+			t.Fatalf("identity %s owner = %s, want %s", subject, gotUserID, wantUserID)
+		}
+	}
+	assertSessionOwner(t, st, siblingRaw, user.ID, &acct.ID)
+	var unrelatedOwner string
+	var unrelatedActive sql.NullString
+	if err := st.DB().QueryRowContext(ctx, `
+		SELECT user_id,active_account_id FROM devradar_session WHERE id=$1`, unrelatedSessionID).
+		Scan(&unrelatedOwner, &unrelatedActive); err != nil {
+		t.Fatalf("read unrelated live session: %v", err)
+	}
+	if unrelatedOwner != unrelatedUserID || unrelatedActive.Valid {
+		t.Fatalf("unrelated live session changed to %s/%v, want %s/NULL",
+			unrelatedOwner, unrelatedActive, unrelatedUserID)
+	}
+	var expiredOwner, expiredActive sql.NullString
+	if err := st.DB().QueryRowContext(ctx, `
+		SELECT user_id,active_account_id FROM devradar_session WHERE id=$1`, expiredSessionID).
+		Scan(&expiredOwner, &expiredActive); err != nil {
+		t.Fatalf("read expired session: %v", err)
+	}
+	if expiredOwner.Valid || expiredActive.Valid {
+		t.Fatalf("expired session changed to %v/%v, want NULL/NULL", expiredOwner, expiredActive)
+	}
+
+	assertMembershipSnapshot(t, readMembershipSnapshot(t, st, acct.ID, user.ID), wantMembership)
+	if got := countRows(t, st, `SELECT count(*) FROM devradar_user WHERE email=$1`, user.Email); got != wantUsers {
+		t.Fatalf("users with direct email = %d, want %d", got, wantUsers)
+	}
+	if got := countRows(t, st, `SELECT count(*) FROM devradar_user WHERE legacy_tenant_id=$1`, acct.ID); got != 0 {
+		t.Fatalf("modern repair created %d legacy users, want 0", got)
+	}
+	if got := countRows(t, st, `SELECT count(*) FROM devradar_tenant WHERE id=$1`, acct.ID); got != wantAccounts {
+		t.Fatalf("accounts = %d, want %d", got, wantAccounts)
+	}
+	if got := countRows(t, st, `SELECT count(*) FROM devradar_account_member WHERE account_id=$1`, acct.ID); got != wantMemberships {
+		t.Fatalf("memberships = %d, want %d", got, wantMemberships)
+	}
+}
+
+func TestSessionMixedRevisionPreservesModernMembershipState(t *testing.T) {
+	tests := []struct {
+		name       string
+		mutate     string
+		wantRole   account.Role
+		wantActive bool
+	}{
+		{
+			name: "demoted editor remains active",
+			mutate: `UPDATE devradar_account_member SET role='editor',updated_at=now()-interval '2 minutes'
+				WHERE account_id=$1 AND user_id=$2`,
+			wantRole: account.RoleEditor, wantActive: true,
+		},
+		{
+			name: "revoked admin remains unselected",
+			mutate: `UPDATE devradar_account_member SET revoked_at=now()-interval '1 minute',
+				updated_at=now()-interval '1 minute' WHERE account_id=$1 AND user_id=$2`,
+			wantRole: account.RoleAdmin, wantActive: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := testStore(t)
+			ctx := context.Background()
+			user, acct, raw, nullSubject := seedMixedRevisionSession(t, st)
+			if _, err := st.DB().ExecContext(ctx, tt.mutate, acct.ID, user.ID); err != nil {
+				t.Fatalf("mutate membership: %v", err)
+			}
+			wantMembership := readMembershipSnapshot(t, st, acct.ID, user.ID)
+
+			session, err := st.ValidateSession(ctx, raw)
+			if err != nil {
+				t.Fatalf("validate mixed-revision session: %v", err)
+			}
+			if session.User.ID != user.ID {
+				t.Fatalf("session user = %s, want %s", session.User.ID, user.ID)
+			}
+			if tt.wantActive != (session.ActiveAccountID != nil) {
+				t.Fatalf("active account = %v, want active=%v", session.ActiveAccountID, tt.wantActive)
+			}
+			if session.ActiveAccountID != nil && *session.ActiveAccountID != acct.ID {
+				t.Fatalf("active account = %s, want %s", *session.ActiveAccountID, acct.ID)
+			}
+			gotMembership := readMembershipSnapshot(t, st, acct.ID, user.ID)
+			assertMembershipSnapshot(t, gotMembership, wantMembership)
+			if gotMembership.role != tt.wantRole {
+				t.Fatalf("membership role = %s, want %s", gotMembership.role, tt.wantRole)
+			}
+			var identityOwner string
+			if err := st.DB().QueryRowContext(ctx, `
+				SELECT user_id FROM devradar_identity WHERE provider='github' AND subject=$1`, nullSubject).
+				Scan(&identityOwner); err != nil {
+				t.Fatalf("read repaired identity: %v", err)
+			}
+			if identityOwner != user.ID {
+				t.Fatalf("repaired identity owner = %s, want %s", identityOwner, user.ID)
+			}
+			if got := countRows(t, st, `SELECT count(*) FROM devradar_user WHERE legacy_tenant_id=$1`, acct.ID); got != 0 {
+				t.Fatalf("modern repair created %d legacy users, want 0", got)
+			}
+		})
+	}
+}
+
+func TestSessionMixedRevisionDoesNotCreateMissingModernMembership(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	user, acct, raw, nullSubject := seedMixedRevisionSession(t, st)
+	if _, err := st.DB().ExecContext(ctx, `
+		DELETE FROM devradar_account_member WHERE account_id=$1 AND user_id=$2`, acct.ID, user.ID); err != nil {
+		t.Fatalf("delete modern membership: %v", err)
+	}
+
+	session, err := st.ValidateSession(ctx, raw)
+	if err != nil {
+		t.Fatalf("validate mixed-revision session: %v", err)
+	}
+	if session.User.ID != user.ID || session.ActiveAccountID != nil {
+		t.Fatalf("session = %#v, want user %s with no active account", session, user.ID)
+	}
+	if got := countRows(t, st, `
+		SELECT count(*) FROM devradar_account_member WHERE account_id=$1`, acct.ID); got != 0 {
+		t.Fatalf("modern repair created %d memberships, want 0", got)
+	}
+	if got := countRows(t, st, `SELECT count(*) FROM devradar_user WHERE legacy_tenant_id=$1`, acct.ID); got != 0 {
+		t.Fatalf("modern repair created %d legacy users, want 0", got)
+	}
+	var identityOwner string
+	if err := st.DB().QueryRowContext(ctx, `
+		SELECT user_id FROM devradar_identity WHERE provider='github' AND subject=$1`, nullSubject).
+		Scan(&identityOwner); err != nil {
+		t.Fatalf("read repaired identity: %v", err)
+	}
+	if identityOwner != user.ID {
+		t.Fatalf("repaired identity owner = %s, want %s", identityOwner, user.ID)
+	}
+}
+
+func TestSessionMixedRevisionAmbiguousIdentityOwnersFailClosed(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	user, acct, raw, nullSubject := seedMixedRevisionSession(t, st)
+	var otherUserID string
+	otherEmail := "ambiguous-owner-" + randID(t)[:8] + "@example.com"
+	if err := st.DB().QueryRowContext(ctx, `
+		INSERT INTO devradar_user (email,email_verified_at)
+		VALUES ($1,now()) RETURNING id`, otherEmail).Scan(&otherUserID); err != nil {
+		t.Fatalf("seed other identity owner: %v", err)
+	}
+	otherSubject := randID(t)
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_identity (tenant_id,user_id,provider,subject,email)
+		VALUES ($1,$2,'github',$3,$4)`, acct.ID, otherUserID, otherSubject, otherEmail); err != nil {
+		t.Fatalf("seed ambiguous identity owner: %v", err)
+	}
+	wantMembership := readMembershipSnapshot(t, st, acct.ID, user.ID)
+
+	if session, err := st.ValidateSession(ctx, raw); err == nil || session != nil {
+		t.Fatalf("ambiguous validation = %#v, %v, want nil/error", session, err)
+	}
+	var nullOwner sql.NullString
+	if err := st.DB().QueryRowContext(ctx, `
+		SELECT user_id FROM devradar_identity WHERE provider='github' AND subject=$1`, nullSubject).
+		Scan(&nullOwner); err != nil {
+		t.Fatalf("read null identity after denial: %v", err)
+	}
+	if nullOwner.Valid {
+		t.Fatalf("ambiguous repair assigned null identity to %s", nullOwner.String)
+	}
+	var sessionOwner, activeAccount sql.NullString
+	if err := st.DB().QueryRowContext(ctx, `
+		SELECT user_id,active_account_id FROM devradar_session WHERE id=$1`, authn.HashToken(raw)).
+		Scan(&sessionOwner, &activeAccount); err != nil {
+		t.Fatalf("read session after denial: %v", err)
+	}
+	if sessionOwner.Valid || activeAccount.Valid {
+		t.Fatalf("ambiguous repair changed session to %v/%v", sessionOwner, activeAccount)
+	}
+	for subject, wantUserID := range map[string]string{
+		user.Email:   user.ID,
+		otherSubject: otherUserID,
+	} {
+		var gotUserID string
+		query := `SELECT user_id FROM devradar_identity WHERE subject=$1`
+		if err := st.DB().QueryRowContext(ctx, query, subject).Scan(&gotUserID); err != nil {
+			t.Fatalf("read non-null identity %s: %v", subject, err)
+		}
+		if gotUserID != wantUserID {
+			t.Fatalf("non-null identity %s changed to %s, want %s", subject, gotUserID, wantUserID)
+		}
+	}
+	assertMembershipSnapshot(t, readMembershipSnapshot(t, st, acct.ID, user.ID), wantMembership)
+	if got := countRows(t, st, `SELECT count(*) FROM devradar_user WHERE legacy_tenant_id=$1`, acct.ID); got != 0 {
+		t.Fatalf("ambiguous repair created %d legacy users, want 0", got)
+	}
+}
+
+type membershipSnapshot struct {
+	role       account.Role
+	createdBy  sql.NullString
+	acceptedAt time.Time
+	revokedAt  sql.NullTime
+	createdAt  time.Time
+	updatedAt  time.Time
+}
+
+func seedMixedRevisionSession(
+	t *testing.T,
+	st *postgres.Store,
+) (*account.User, *account.Account, string, string) {
+	t.Helper()
+	ctx := context.Background()
+	email := "mixed-revision-" + randID(t)[:8] + "@example.com"
+	user, acct, err := st.ResolveDirectIdentity(ctx, account.VerifiedIdentity{
+		Provider: "magiclink", Subject: email, Email: email,
+	})
+	if err != nil || acct == nil {
+		t.Fatalf("resolve direct identity: account=%#v err=%v", acct, err)
+	}
+	nullSubject := randID(t)
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_identity (tenant_id,user_id,provider,subject,email)
+		VALUES ($1,NULL,'github',$2,$3)`, acct.ID, nullSubject,
+		"second-provider-"+randID(t)[:8]+"@example.com"); err != nil {
+		t.Fatalf("seed old-revision identity: %v", err)
+	}
+	raw := "mixed-session-" + randID(t)
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_session (id,tenant_id,user_id,active_account_id,expires_at)
+		VALUES ($1,$2,NULL,NULL,now()+interval '1 hour')`, authn.HashToken(raw), acct.ID); err != nil {
+		t.Fatalf("seed old-revision session: %v", err)
+	}
+	return user, acct, raw, nullSubject
+}
+
+func readMembershipSnapshot(t *testing.T, st *postgres.Store, accountID, userID string) membershipSnapshot {
+	t.Helper()
+	var snapshot membershipSnapshot
+	if err := st.DB().QueryRowContext(context.Background(), `
+		SELECT role,created_by_user_id,accepted_at,revoked_at,created_at,updated_at
+		FROM devradar_account_member WHERE account_id=$1 AND user_id=$2`, accountID, userID).
+		Scan(&snapshot.role, &snapshot.createdBy, &snapshot.acceptedAt, &snapshot.revokedAt,
+			&snapshot.createdAt, &snapshot.updatedAt); err != nil {
+		t.Fatalf("read membership snapshot: %v", err)
+	}
+	return snapshot
+}
+
+func assertMembershipSnapshot(t *testing.T, got, want membershipSnapshot) {
+	t.Helper()
+	if got.role != want.role || got.createdBy != want.createdBy ||
+		!got.acceptedAt.Equal(want.acceptedAt) || got.revokedAt.Valid != want.revokedAt.Valid ||
+		(got.revokedAt.Valid && !got.revokedAt.Time.Equal(want.revokedAt.Time)) ||
+		!got.createdAt.Equal(want.createdAt) || !got.updatedAt.Equal(want.updatedAt) {
+		t.Fatalf("membership changed: got %#v, want %#v", got, want)
+	}
+}
+
+func countRows(t *testing.T, st *postgres.Store, query string, args ...any) int {
+	t.Helper()
+	var count int
+	if err := st.DB().QueryRowContext(context.Background(), query, args...).Scan(&count); err != nil {
+		t.Fatalf("count rows: %v", err)
+	}
+	return count
+}
+
+func assertSessionOwner(t *testing.T, st *postgres.Store, raw, wantUserID string, wantAccountID *string) {
+	t.Helper()
+	var userID string
+	var activeAccountID *string
+	if err := st.DB().QueryRowContext(context.Background(), `
+		SELECT user_id,active_account_id FROM devradar_session WHERE id=$1`, authn.HashToken(raw)).
+		Scan(&userID, &activeAccountID); err != nil {
+		t.Fatalf("read repaired session: %v", err)
+	}
+	if userID != wantUserID || !equalOptionalString(activeAccountID, wantAccountID) {
+		t.Fatalf("session owner/account = %s/%v, want %s/%v",
+			userID, activeAccountID, wantUserID, wantAccountID)
 	}
 }
 

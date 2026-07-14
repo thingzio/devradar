@@ -25,27 +25,21 @@ type workRow struct {
 }
 
 type workView struct {
-	Title      string
-	SignedIn   bool
-	Tab        string
-	Email      string
-	AvatarURL  string
-	Version    string
+	chromeView
 	Items      []workRow
 	NextCursor string
 }
 
 func (s *Server) handleWorkQueue(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
-	items, next, err := s.store.FleetCVEs(r.Context(), tn.ID, tenantMinSeverity(tn),
+	access := middleware.AccessFromContext(r.Context())
+	items, next, err := s.store.FleetCVEs(r.Context(), access.Account.ID, accountMinSeverity(&access.Account),
 		postgres.FleetCVEFilter{}, "risk", "desc", r.URL.Query().Get("cursor"), 100)
 	if err != nil {
 		http.Error(w, "failed to load work queue", http.StatusInternalServerError)
 		return
 	}
 	v := workView{
-		Title: "What should I fix?", SignedIn: true, Tab: "work", Email: tn.Email,
-		AvatarURL: tn.AvatarURL, Version: s.opts.Version, NextCursor: next, Items: workRows(items),
+		chromeView: s.chrome(access, "What should I fix?", "work"), NextCursor: next, Items: workRows(items),
 	}
 	render(w, "work.html", v)
 }

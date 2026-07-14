@@ -39,12 +39,7 @@ type compareRecommendationView struct {
 }
 
 type compareView struct {
-	Title                                  string
-	SignedIn                               bool
-	Tab                                    string
-	Email                                  string
-	AvatarURL                              string
-	Version                                string
+	chromeView
 	Comparison                             *postgres.SBOMComparison
 	Verdict                                string
 	Added, Resolved, Rerated, NewlyFixable []compareFindingRow
@@ -59,13 +54,13 @@ type compareRecommendationReader interface {
 }
 
 func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
+	access := middleware.AccessFromContext(r.Context())
 	fromID, toID := r.URL.Query().Get("from"), r.URL.Query().Get("to")
 	if fromID == "" || toID == "" {
 		http.Error(w, "from and to SBOMs are required", http.StatusBadRequest)
 		return
 	}
-	comparison, err := s.store.CompareSBOMs(r.Context(), tn.ID, fromID, toID)
+	comparison, err := s.store.CompareSBOMs(r.Context(), access.Account.ID, fromID, toID)
 	if errors.Is(err, postgres.ErrNotFound) {
 		http.NotFound(w, r)
 		return
@@ -79,8 +74,7 @@ func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := compareView{
-		Title: "Digest comparison", SignedIn: true, Tab: "images", Email: tn.Email,
-		AvatarURL: tn.AvatarURL, Version: s.opts.Version, Comparison: comparison,
+		chromeView: s.chrome(access, "Digest comparison", "images"), Comparison: comparison,
 		Verdict: comparisonVerdict(comparison.Verdict),
 	}
 	v.Added = compareFindingRows(comparison.Added)
@@ -105,8 +99,8 @@ func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
 			From: strings.Join(regression.From, ", "), To: strings.Join(regression.To, ", "), Reason: regression.Reason,
 		})
 	}
-	if err := applyCompareRecommendation(r.Context(), s.store, tn.ID, toID, &v); err != nil {
-		slog.Warn("load comparison upgrade guidance", "tenant_id", tn.ID, "sbom_id", toID, "error", err)
+	if err := applyCompareRecommendation(r.Context(), s.store, access.Account.ID, toID, &v); err != nil {
+		slog.Warn("load comparison upgrade guidance", "account_id", access.Account.ID, "sbom_id", toID, "error", err)
 	}
 	render(w, "compare.html", v)
 }

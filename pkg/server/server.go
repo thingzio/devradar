@@ -168,7 +168,7 @@ func (s *Server) Handler() http.Handler {
 	})
 
 	// Ingest + read API — API-token auth.
-	apiToken := middleware.RequireAPIToken(db)
+	apiToken := middleware.RequireAPIToken(s.store)
 	mux.Handle("POST /v1/sboms", apiToken(http.HandlerFunc(s.handleSubmitSBOM)))
 	mux.Handle("GET /v1/images", apiToken(http.HandlerFunc(s.handleListImages)))
 	mux.Handle("GET /v1/images/timeline", apiToken(http.HandlerFunc(s.handleTimeline)))
@@ -184,7 +184,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/vex", apiToken(http.HandlerFunc(s.handleListVEX)))
 
 	// Minimal passwordless UI (session auth) for minting API tokens.
-	s.registerUI(mux, db)
+	s.registerUI(mux)
 
 	return recoverPanics(securityHeaders(mux))
 }

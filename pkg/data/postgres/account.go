@@ -13,6 +13,16 @@ const accountColumns = `id,name,plan,status,min_severity,created_at,updated_at`
 
 const userColumns = `id,email,email_verified_at,status,avatar_url,tos_accepted_at,created_at,updated_at`
 
+var (
+	errCompatibilityOwnerAmbiguous = errors.New("compatibility account has ambiguous identity owners")
+	errCompatibilityOwnerMissing   = errors.New("modern compatibility account has no identity owner")
+)
+
+type compatibilityOwner struct {
+	userID string
+	legacy bool
+}
+
 // GetAccount returns the account identified by accountID, regardless of status.
 func (s *Store) GetAccount(ctx context.Context, accountID string) (*account.Account, error) {
 	var a account.Account
@@ -101,50 +111,107 @@ func (s *Store) ReconcileLegacyAccount(ctx context.Context, accountID string) er
 		}
 		return fmt.Errorf("lock legacy account: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE devradar_tenant SET name=left(btrim(email),80)
-		WHERE id=$1 AND name=''`, accountID); err != nil {
-		return fmt.Errorf("backfill legacy account name: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO devradar_user
-			(email,email_verified_at,status,avatar_url,tos_accepted_at,
-			 legacy_tenant_id,created_at,updated_at)
-		SELECT lower(btrim(email)),email_verified_at,'active',avatar_url,tos_accepted_at,
-		       id,created_at,updated_at
-		FROM devradar_tenant WHERE id=$1
-		ON CONFLICT (legacy_tenant_id) DO NOTHING`, accountID); err != nil {
-		return fmt.Errorf("backfill legacy user: %w", err)
-	}
-
-	var userID string
-	if err := tx.QueryRowContext(ctx,
-		`SELECT id FROM devradar_user WHERE legacy_tenant_id=$1`, accountID).Scan(&userID); err != nil {
-		return fmt.Errorf("read legacy user mapping: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO devradar_account_member (account_id,user_id,role,accepted_at)
-		SELECT t.id,$2,'admin',COALESCE(t.email_verified_at,t.created_at)
-		FROM devradar_tenant t WHERE t.id=$1
-		ON CONFLICT (account_id,user_id) DO NOTHING`, accountID, userID); err != nil {
-		return fmt.Errorf("backfill legacy membership: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE devradar_identity i SET user_id=$2
-		WHERE i.tenant_id=$1 AND i.user_id IS NULL`, accountID, userID); err != nil {
-		return fmt.Errorf("backfill legacy identities: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE devradar_session s
-		SET user_id=$2,active_account_id=$1
-		WHERE s.tenant_id=$1 AND s.user_id IS NULL AND s.expires_at>now()`,
-		accountID, userID); err != nil {
-		return fmt.Errorf("backfill legacy sessions: %w", err)
+	if err := reconcileCompatibilityAccount(ctx, tx, accountID); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit legacy account reconciliation: %w", err)
 	}
 	return nil
+}
+
+func reconcileCompatibilityAccount(
+	ctx context.Context,
+	tx *sql.Tx,
+	accountID string,
+) error {
+	owner, found, err := resolveCompatibilityOwner(ctx, tx, accountID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		user, err := ensureLegacyUser(ctx, tx, accountID)
+		if err != nil {
+			return err
+		}
+		owner = compatibilityOwner{userID: user.ID, legacy: true}
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE devradar_tenant SET name=left(btrim(email),80)
+		WHERE id=$1 AND name=''`, accountID); err != nil {
+		return fmt.Errorf("backfill compatibility account name: %w", err)
+	}
+	if owner.legacy {
+		if err := insertLegacyAdminMembership(ctx, tx, accountID, owner.userID); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE devradar_identity SET user_id=$2
+		WHERE tenant_id=$1 AND user_id IS NULL`, accountID, owner.userID); err != nil {
+		return fmt.Errorf("backfill compatibility identities: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE devradar_session s
+		SET user_id=$2,
+		    active_account_id=CASE WHEN EXISTS (
+			SELECT 1 FROM devradar_account_member m
+			JOIN devradar_tenant t ON t.id=m.account_id
+			WHERE m.account_id=$1 AND m.user_id=$2
+			  AND m.revoked_at IS NULL AND t.status='active'
+		    ) THEN $1::uuid ELSE NULL END
+		WHERE s.tenant_id=$1 AND s.user_id IS NULL AND s.expires_at>now()`,
+		accountID, owner.userID); err != nil {
+		return fmt.Errorf("backfill compatibility sessions: %w", err)
+	}
+	return nil
+}
+
+func resolveCompatibilityOwner(
+	ctx context.Context,
+	tx *sql.Tx,
+	accountID string,
+) (compatibilityOwner, bool, error) {
+	var legacyUserID string
+	err := tx.QueryRowContext(ctx,
+		`SELECT id FROM devradar_user WHERE legacy_tenant_id=$1`, accountID).Scan(&legacyUserID)
+	if err == nil {
+		return compatibilityOwner{userID: legacyUserID, legacy: true}, true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return compatibilityOwner{}, false, fmt.Errorf("read legacy compatibility owner: %w", err)
+	}
+
+	var ownerCount int
+	var identityUserID sql.NullString
+	if err := tx.QueryRowContext(ctx, `
+		SELECT count(DISTINCT user_id),min(user_id::text)
+		FROM devradar_identity
+		WHERE tenant_id=$1 AND user_id IS NOT NULL`, accountID).
+		Scan(&ownerCount, &identityUserID); err != nil {
+		return compatibilityOwner{}, false, fmt.Errorf("read modern compatibility owner: %w", err)
+	}
+	switch ownerCount {
+	case 1:
+		return compatibilityOwner{userID: identityUserID.String}, true, nil
+	case 0:
+		var hasModernState bool
+		if err := tx.QueryRowContext(ctx, `
+			SELECT EXISTS(
+				SELECT 1 FROM devradar_account_member WHERE account_id=$1
+				UNION ALL
+				SELECT 1 FROM devradar_session WHERE tenant_id=$1 AND user_id IS NOT NULL
+			)`, accountID).Scan(&hasModernState); err != nil {
+			return compatibilityOwner{}, false, fmt.Errorf("check modern compatibility state: %w", err)
+		}
+		if hasModernState {
+			return compatibilityOwner{}, false, errCompatibilityOwnerMissing
+		}
+		return compatibilityOwner{}, false, nil
+	default:
+		return compatibilityOwner{}, false, errCompatibilityOwnerAmbiguous
+	}
 }
 
 // ReconcileLegacyAccounts upgrades every account with incomplete legacy

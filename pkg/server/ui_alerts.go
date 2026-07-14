@@ -26,23 +26,13 @@ type alertRow struct {
 }
 
 type alertsView struct {
-	Title      string
-	SignedIn   bool
-	Tab        string
-	Email      string
-	AvatarURL  string
-	Version    string
+	chromeView
 	Alerts     []alertRow
 	NextCursor string
 }
 
 type alertDetailView struct {
-	Title                 string
-	SignedIn              bool
-	Tab                   string
-	Email                 string
-	AvatarURL             string
-	Version               string
+	chromeView
 	CSRFToken             string
 	Alert                 *postgres.Alert
 	AlertTitle            string
@@ -55,15 +45,14 @@ type alertDetailView struct {
 }
 
 func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
-	items, next, err := s.store.ListAlerts(r.Context(), tn.ID, r.URL.Query().Get("cursor"), 50)
+	access := middleware.AccessFromContext(r.Context())
+	items, next, err := s.store.ListAlerts(r.Context(), access.Account.ID, r.URL.Query().Get("cursor"), 50)
 	if err != nil {
 		http.Error(w, "failed to load alerts", http.StatusInternalServerError)
 		return
 	}
 	v := alertsView{
-		Title: "Alerts", SignedIn: true, Tab: "alerts", Email: tn.Email,
-		AvatarURL: tn.AvatarURL, Version: s.opts.Version, NextCursor: next,
+		chromeView: s.chrome(access, "Alerts", "alerts"), NextCursor: next,
 	}
 	for _, item := range items {
 		v.Alerts = append(v.Alerts, makeAlertRow(item))
@@ -72,8 +61,8 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAlertDetail(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
-	item, err := s.store.GetAlert(r.Context(), tn.ID, r.PathValue("id"))
+	access := middleware.AccessFromContext(r.Context())
+	item, err := s.store.GetAlert(r.Context(), access.Account.ID, r.PathValue("id"))
 	if errors.Is(err, postgres.ErrNotFound) {
 		http.NotFound(w, r)
 		return
@@ -83,26 +72,25 @@ func (s *Server) handleAlertDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := alertDetailView{
-		Title: alertTitle(item.Kind), SignedIn: true, Tab: "alerts", Email: tn.Email,
-		AvatarURL: tn.AvatarURL, Version: s.opts.Version, CSRFToken: issueCSRF(w), Alert: item,
+		chromeView: s.chrome(access, alertTitle(item.Kind), "alerts"), CSRFToken: issueCSRF(w), Alert: item,
 		AlertTitle: alertTitle(item.Kind), Description: alertDescription(item.Kind), CauseLabel: alertCause(item.Cause),
 		WorkURL: "/work#work-" + url.PathEscape(item.Exposure),
 	}
 	if item.EPSS != nil {
 		v.EPSSPercent = fmt.Sprintf("%.1f%%", *item.EPSS*100)
 	}
-	comparison, err := s.store.ComparePreviousSBOM(r.Context(), tn.ID, item.SBOMID)
+	comparison, err := s.store.ComparePreviousSBOM(r.Context(), access.Account.ID, item.SBOMID)
 	if err != nil {
-		slog.Warn("load alert preceding comparison", "tenant_id", tn.ID, "alert_id", item.ID, "sbom_id", item.SBOMID, "error", err)
+		slog.Warn("load alert preceding comparison", "account_id", access.Account.ID, "alert_id", item.ID, "sbom_id", item.SBOMID, "error", err)
 	} else if comparison != nil {
 		v.PreviousComparisonURL = "/compare?" + url.Values{
 			"from": {comparison.From.SBOMID},
 			"to":   {comparison.To.SBOMID},
 		}.Encode()
 	}
-	recommendation, err := s.store.RecommendUpgrade(r.Context(), tn.ID, item.SBOMID)
+	recommendation, err := s.store.RecommendUpgrade(r.Context(), access.Account.ID, item.SBOMID)
 	if err != nil {
-		slog.Warn("load alert upgrade recommendation", "tenant_id", tn.ID, "alert_id", item.ID, "sbom_id", item.SBOMID, "error", err)
+		slog.Warn("load alert upgrade recommendation", "account_id", access.Account.ID, "alert_id", item.ID, "sbom_id", item.SBOMID, "error", err)
 	} else if recommendation != nil {
 		v.RecommendationURL = "/compare?" + url.Values{
 			"from": {recommendation.Baseline.SBOMID},
@@ -113,9 +101,9 @@ func (s *Server) handleAlertDetail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMarkAlertRead(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
+	access := middleware.AccessFromContext(r.Context())
 	id := r.PathValue("id")
-	if err := s.store.MarkAlertRead(r.Context(), tn.ID, id); errors.Is(err, postgres.ErrNotFound) {
+	if err := s.store.MarkAlertRead(r.Context(), access.Account.ID, id); errors.Is(err, postgres.ErrNotFound) {
 		http.NotFound(w, r)
 		return
 	} else if err != nil {

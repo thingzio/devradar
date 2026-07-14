@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/thingzio/devradar/pkg/account"
+	"github.com/thingzio/devradar/pkg/authn"
 	"github.com/thingzio/devradar/pkg/config"
 	"github.com/thingzio/devradar/pkg/data"
 	"github.com/thingzio/devradar/pkg/data/postgres"
@@ -19,7 +21,7 @@ import (
 )
 
 // This file implements the operator admin console (/admin/*). Access is gated by
-// middleware.RequireAdmin (email allowlist, 404-on-deny); mutating routes are
+// middleware.RequirePlatformAdmin (email allowlist, 404-on-deny); mutating routes are
 // additionally wrapped in middleware.ValidateCSRF. Every action is audited to the
 // log (auditLog) — there is no audit table by design. Mutations follow
 // POST-redirect-GET with a ?msg= flash. The console is unlinked from the tenant
@@ -64,10 +66,10 @@ func adminDashboardData(
 
 // auditLog records an operator action. Log-only (slog.Warn), matching the
 // sibling services — no persisted audit table in v1.
-func auditLog(action string, tn *tenant.Tenant, path, remote, detail string) {
+func auditLog(action string, user *account.User, path, remote, detail string) {
 	email := "<anonymous>"
-	if tn != nil {
-		email = tn.Email
+	if user != nil {
+		email = user.Email
 	}
 	slog.Warn("admin action",
 		"action", action, "admin", email, "path", path, "remote", remote, "detail", detail)
@@ -88,8 +90,8 @@ func issueCSRF(w http.ResponseWriter) string {
 
 // handleAdminDashboard renders the live platform snapshot.
 func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
-	auditLog("view_dashboard", tn, r.URL.Path, r.RemoteAddr, "")
+	user := middleware.UserFromContext(r.Context())
+	auditLog("view_dashboard", user, r.URL.Path, r.RemoteAddr, "")
 
 	counts, err := s.store.AdminPlatformCounts(r.Context())
 	if err != nil {
@@ -113,7 +115,7 @@ func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("admin product health unavailable", "error", productHealthErr)
 	}
 
-	render(w, "admin_dashboard.html", s.adminBase(tn, "dashboard",
+	render(w, "admin_dashboard.html", s.adminBase(user, "dashboard",
 		adminDashboardData(counts, trendRows(deltas), productHealth, productHealthErr, time.Now())))
 }
 
@@ -162,8 +164,8 @@ func trendRows(deltas map[int]map[string]postgres.PlatformDelta) []trendRow {
 
 // handleAdminScans renders scan-job health.
 func (s *Server) handleAdminScans(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
-	auditLog("view_scans", tn, r.URL.Path, r.RemoteAddr, "")
+	user := middleware.UserFromContext(r.Context())
+	auditLog("view_scans", user, r.URL.Path, r.RemoteAddr, "")
 	ctx := r.Context()
 
 	runs, err := s.store.AdminRecentScanRuns(ctx, adminScanRunsMax)
@@ -201,7 +203,7 @@ func (s *Server) handleAdminScans(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	render(w, "admin_scans.html", s.adminBase(tn, "scans", map[string]any{
+	render(w, "admin_scans.html", s.adminBase(user, "scans", map[string]any{
 		"Title":     "Admin — Scans",
 		"CSRFToken": issueCSRF(w),
 		"Runs":      runs,
@@ -227,8 +229,8 @@ func (s *Server) handleAdminScanHistory(w http.ResponseWriter, r *http.Request) 
 
 // handleAdminTenants renders the searchable, paginated tenant list.
 func (s *Server) handleAdminTenants(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
-	auditLog("view_tenants", tn, r.URL.Path, r.RemoteAddr, "")
+	user := middleware.UserFromContext(r.Context())
+	auditLog("view_tenants", user, r.URL.Path, r.RemoteAddr, "")
 
 	query := r.URL.Query().Get("q")
 	page := clampInt(r.URL.Query().Get("page"), 1, 1<<20)
@@ -242,7 +244,7 @@ func (s *Server) handleAdminTenants(w http.ResponseWriter, r *http.Request) {
 	}
 	totalPages := (total + adminPageSize - 1) / adminPageSize
 
-	render(w, "admin_tenants.html", s.adminBase(tn, "tenants", map[string]any{
+	render(w, "admin_tenants.html", s.adminBase(user, "tenants", map[string]any{
 		"Title":      "Admin — Tenants",
 		"CSRFToken":  issueCSRF(w),
 		"Tenants":    tenants,
@@ -262,9 +264,9 @@ func (s *Server) handleAdminTenants(w http.ResponseWriter, r *http.Request) {
 // handleAdminTenantDetail renders one tenant with its activity rollup, tokens,
 // and management forms.
 func (s *Server) handleAdminTenantDetail(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
+	user := middleware.UserFromContext(r.Context())
 	id := r.PathValue("id")
-	auditLog("view_tenant", tn, r.URL.Path, r.RemoteAddr, "id="+id)
+	auditLog("view_tenant", user, r.URL.Path, r.RemoteAddr, "account_id="+id)
 
 	target, err := tenant.GetTenant(r.Context(), s.store.DB(), id)
 	if err != nil {
@@ -284,7 +286,7 @@ func (s *Server) handleAdminTenantDetail(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	render(w, "admin_tenant.html", s.adminBase(tn, "tenants", map[string]any{
+	render(w, "admin_tenant.html", s.adminBase(user, "tenants", map[string]any{
 		"Title":      "Admin — " + target.Email,
 		"CSRFToken":  issueCSRF(w),
 		"T":          target,
@@ -300,7 +302,7 @@ func (s *Server) handleAdminTenantDetail(w http.ResponseWriter, r *http.Request)
 // ── Mutations (CSRF-wrapped at the route; each audited + POST-redirect-GET) ─────
 
 func (s *Server) handleAdminSetPlan(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
+	user := middleware.UserFromContext(r.Context())
 	id := r.PathValue("id")
 	plan := r.FormValue("plan")
 	dest := "/admin/tenant/" + id
@@ -309,16 +311,16 @@ func (s *Server) handleAdminSetPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := tenant.SetPlan(r.Context(), s.store.DB(), id, plan); err != nil {
-		slog.Error("admin set plan", "id", id, "error", err)
+		slog.Error("admin set plan", "account_id", id, "error", err)
 		http.Redirect(w, r, dest+"?msg=error", http.StatusSeeOther)
 		return
 	}
-	auditLog("set_plan", tn, r.URL.Path, r.RemoteAddr, "id="+id+" plan="+plan)
+	auditLog("set_plan", user, r.URL.Path, r.RemoteAddr, "account_id="+id+" plan="+plan)
 	http.Redirect(w, r, dest+"?msg=plan_updated", http.StatusSeeOther)
 }
 
 func (s *Server) handleAdminSetStatus(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
+	user := middleware.UserFromContext(r.Context())
 	id := r.PathValue("id")
 	status := r.FormValue("status")
 	dest := "/admin/tenant/" + id
@@ -327,16 +329,16 @@ func (s *Server) handleAdminSetStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := tenant.SetStatus(r.Context(), s.store.DB(), id, status); err != nil {
-		slog.Error("admin set status", "id", id, "error", err)
+		slog.Error("admin set status", "account_id", id, "error", err)
 		http.Redirect(w, r, dest+"?msg=error", http.StatusSeeOther)
 		return
 	}
-	auditLog("set_status", tn, r.URL.Path, r.RemoteAddr, "id="+id+" status="+status)
+	auditLog("set_status", user, r.URL.Path, r.RemoteAddr, "account_id="+id+" status="+status)
 	http.Redirect(w, r, dest+"?msg=status_updated", http.StatusSeeOther)
 }
 
 func (s *Server) handleAdminSetMinSeverity(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
+	user := middleware.UserFromContext(r.Context())
 	id := r.PathValue("id")
 	sev := r.FormValue("min_severity")
 	dest := "/admin/tenant/" + id
@@ -345,28 +347,28 @@ func (s *Server) handleAdminSetMinSeverity(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err := tenant.SetMinSeverity(r.Context(), s.store.DB(), id, sev); err != nil {
-		slog.Error("admin set min_severity", "id", id, "error", err)
+		slog.Error("admin set min_severity", "account_id", id, "error", err)
 		http.Redirect(w, r, dest+"?msg=error", http.StatusSeeOther)
 		return
 	}
-	auditLog("set_min_severity", tn, r.URL.Path, r.RemoteAddr, "id="+id+" min_severity="+sev)
+	auditLog("set_min_severity", user, r.URL.Path, r.RemoteAddr, "account_id="+id+" min_severity="+sev)
 	http.Redirect(w, r, dest+"?msg=severity_updated", http.StatusSeeOther)
 }
 
 func (s *Server) handleAdminDeleteTenant(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
+	user := middleware.UserFromContext(r.Context())
 	id := r.PathValue("id")
 	if err := tenant.DeleteTenant(r.Context(), s.store.DB(), id); err != nil {
-		slog.Error("admin delete tenant", "id", id, "error", err)
+		slog.Error("admin delete tenant", "account_id", id, "error", err)
 		http.Redirect(w, r, "/admin/tenant/"+id+"?msg=error", http.StatusSeeOther)
 		return
 	}
-	auditLog("delete_tenant", tn, r.URL.Path, r.RemoteAddr, "id="+id)
+	auditLog("delete_tenant", user, r.URL.Path, r.RemoteAddr, "account_id="+id)
 	http.Redirect(w, r, "/admin/tenants?msg=tenant_deleted", http.StatusSeeOther)
 }
 
 func (s *Server) handleAdminRevokeToken(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
+	user := middleware.UserFromContext(r.Context())
 	id := r.PathValue("id")
 	tid := r.PathValue("tid")
 	dest := "/admin/tenant/" + id
@@ -375,13 +377,13 @@ func (s *Server) handleAdminRevokeToken(w http.ResponseWriter, r *http.Request) 
 		http.Redirect(w, r, dest+"?msg=error", http.StatusSeeOther)
 		return
 	}
-	auditLog("revoke_token", tn, r.URL.Path, r.RemoteAddr, "id="+id+" token="+tid)
+	auditLog("revoke_token", user, r.URL.Path, r.RemoteAddr, "account_id="+id+" token="+tid)
 	http.Redirect(w, r, dest+"?msg=token_revoked", http.StatusSeeOther)
 }
 
 func (s *Server) handleAdminInvite(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
-	email := tenant.NormalizeEmail(r.FormValue("email"))
+	user := middleware.UserFromContext(r.Context())
+	email := authn.NormalizeEmail(r.FormValue("email"))
 	if !looksLikeEmail(email) {
 		http.Redirect(w, r, "/admin/tenants?msg=invalid_email", http.StatusSeeOther)
 		return
@@ -391,12 +393,12 @@ func (s *Server) handleAdminInvite(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/admin/tenants?msg=error", http.StatusSeeOther)
 		return
 	}
-	auditLog("invite_tenant", tn, r.URL.Path, r.RemoteAddr, "email="+email)
+	auditLog("invite_tenant", user, r.URL.Path, r.RemoteAddr, "email="+email)
 	http.Redirect(w, r, "/admin/tenants?msg=tenant_invited", http.StatusSeeOther)
 }
 
 func (s *Server) handleAdminResetFailure(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
+	user := middleware.UserFromContext(r.Context())
 	idStr := r.PathValue("id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
@@ -408,19 +410,19 @@ func (s *Server) handleAdminResetFailure(w http.ResponseWriter, r *http.Request)
 		http.Redirect(w, r, "/admin/scans?msg=error", http.StatusSeeOther)
 		return
 	}
-	auditLog("reset_failure", tn, r.URL.Path, r.RemoteAddr, "id="+idStr)
+	auditLog("reset_failure", user, r.URL.Path, r.RemoteAddr, "id="+idStr)
 	http.Redirect(w, r, "/admin/scans?msg=failure_reset", http.StatusSeeOther)
 }
 
 func (s *Server) handleAdminRescan(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
+	user := middleware.UserFromContext(r.Context())
 	sbomID := r.PathValue("sbomID")
 	if err := s.store.AdminRequestRescan(r.Context(), sbomID); err != nil {
 		slog.Error("admin request rescan", "sbom", sbomID, "error", err)
 		http.Redirect(w, r, "/admin/scans?msg=error", http.StatusSeeOther)
 		return
 	}
-	auditLog("request_rescan", tn, r.URL.Path, r.RemoteAddr, "sbom="+sbomID)
+	auditLog("request_rescan", user, r.URL.Path, r.RemoteAddr, "sbom="+sbomID)
 	http.Redirect(w, r, "/admin/scans?msg=rescan_requested", http.StatusSeeOther)
 }
 
@@ -428,15 +430,15 @@ func (s *Server) handleAdminRescan(w http.ResponseWriter, r *http.Request) {
 
 // adminBase seeds the template data map with the fields the admin chrome and
 // sub-nav need, then merges the page-specific fields.
-func (s *Server) adminBase(tn *tenant.Tenant, active string, extra map[string]any) map[string]any {
+func (s *Server) adminBase(user *account.User, active string, extra map[string]any) map[string]any {
 	d := map[string]any{
 		"SignedIn": true,
 		"AdminTab": active,
 		"Version":  s.opts.Version,
 	}
-	if tn != nil {
-		d["Email"] = tn.Email
-		d["AvatarURL"] = tn.AvatarURL
+	if user != nil {
+		d["Email"] = user.Email
+		d["AvatarURL"] = user.AvatarURL
 	}
 	maps.Copy(d, extra)
 	return d

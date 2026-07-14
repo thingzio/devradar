@@ -77,7 +77,7 @@ func TestGitHubOAuth_LandingButton(t *testing.T) {
 // tenant and a session cookie, landing on /overview.
 func TestGitHubOAuth_HappyPath(t *testing.T) {
 	srv, st := oauthServer(t, fakeOAuth{id: &oauth.Identity{
-		Provider: tenant.ProviderGitHub, Subject: "12345", Email: "gh@example.com",
+		Provider: "github", Subject: "12345", Email: "gh@example.com",
 		AvatarURL: "https://avatars.githubusercontent.com/u/12345?v=4",
 	}})
 	h := srv.Handler()
@@ -120,7 +120,7 @@ func TestGitHubOAuth_MemberlessUserRedirectsToAccounts(t *testing.T) {
 	}
 	email := "memberless-github-" + suffix[:8] + "@example.com"
 	srv, st := oauthServer(t, fakeOAuth{id: &oauth.Identity{
-		Provider: tenant.ProviderGitHub, Subject: "memberless-" + suffix[8:16], Email: email,
+		Provider: "github", Subject: "memberless-" + suffix[8:16], Email: email,
 	}})
 	ctx := context.Background()
 	var userID string
@@ -161,7 +161,7 @@ func TestGitHubOAuth_MemberlessUserRedirectsToAccounts(t *testing.T) {
 // is rejected (CSRF defense) — no session minted.
 func TestGitHubOAuth_StateMismatch(t *testing.T) {
 	srv, _ := oauthServer(t, fakeOAuth{id: &oauth.Identity{
-		Provider: tenant.ProviderGitHub, Subject: "1", Email: "x@example.com",
+		Provider: "github", Subject: "1", Email: "x@example.com",
 	}})
 	h := srv.Handler()
 
@@ -218,7 +218,7 @@ func TestGitHubOAuth_Unverified(t *testing.T) {
 // is the join key) — not a second account.
 func TestGitHubOAuth_UnifiesWithMagicLink(t *testing.T) {
 	srv, st := oauthServer(t, fakeOAuth{id: &oauth.Identity{
-		Provider: tenant.ProviderGitHub, Subject: "999", Email: "same@example.com",
+		Provider: "github", Subject: "999", Email: "same@example.com",
 	}})
 	h := srv.Handler()
 	ctx := context.Background()

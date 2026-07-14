@@ -43,12 +43,7 @@ type overviewLicenseReader interface {
 }
 
 type overviewView struct {
-	Title     string
-	SignedIn  bool
-	Tab       string
-	Email     string
-	AvatarURL string
-	Version   string
+	chromeView
 	// Fleet headline stats.
 	ImageCount int
 	TotalCount int
@@ -79,23 +74,23 @@ type overviewView struct {
 // image/CVE search box, and a short top-risk images teaser. Search routing is
 // handled by handleSearch.
 func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
-	min := tenantMinSeverity(tn)
+	access := middleware.AccessFromContext(r.Context())
+	min := accountMinSeverity(&access.Account)
 
-	fs, err := s.store.FleetStats(r.Context(), tn.ID)
+	fs, err := s.store.FleetStats(r.Context(), access.Account.ID)
 	if err != nil {
 		http.Error(w, "failed to load overview", http.StatusInternalServerError)
 		return
 	}
 	// Top 5 images by risk (default sort), no filter.
-	images, _, err := s.store.ListRepoImages(r.Context(), tn.ID, min, "", "", "", "", "", 5)
+	images, _, err := s.store.ListRepoImages(r.Context(), access.Account.ID, min, "", "", "", "", "", 5)
 	if err != nil {
 		http.Error(w, "failed to load overview", http.StatusInternalServerError)
 		return
 	}
 
 	v := overviewView{
-		Title: "Overview", SignedIn: true, Tab: "overview", Email: tn.Email, AvatarURL: tn.AvatarURL, Version: s.opts.Version,
+		chromeView: s.chrome(access, "Overview", "overview"),
 		ImageCount: fs.Images, TotalCount: fs.Total, CriticalCT: fs.Critical, HighCT: fs.High,
 		KEVCount: fs.KEV, FixablePct: pct(fs.Fixable, fs.Total), FailureCT: fs.Failures,
 		HasData:    fs.Images > 0,
@@ -122,9 +117,9 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		row.Bar = severityBar(im.Counts)
 		v.TopImages = append(v.TopImages, row)
 	}
-	alerts, err := s.store.UnreadAlerts(r.Context(), tn.ID, 5)
+	alerts, err := s.store.UnreadAlerts(r.Context(), access.Account.ID, 5)
 	if err != nil {
-		slog.Warn("load overview alerts", "tenant_id", tn.ID, "error", err)
+		slog.Warn("load overview alerts", "account_id", access.Account.ID, "error", err)
 		v.AlertsUnavailable = true
 	} else {
 		for _, item := range alerts {
@@ -132,32 +127,32 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	work, _, err := s.store.FleetCVEs(r.Context(), tn.ID, min,
+	work, _, err := s.store.FleetCVEs(r.Context(), access.Account.ID, min,
 		postgres.FleetCVEFilter{}, "risk", "desc", "", 3)
 	if err != nil {
-		slog.Warn("load overview work", "tenant_id", tn.ID, "error", err)
+		slog.Warn("load overview work", "account_id", access.Account.ID, "error", err)
 		v.WorkUnavailable = true
 	} else {
 		v.WorkItems = workRows(work)
 	}
 
-	points, err := s.store.TenantPostureTrend(r.Context(), tn.ID, 30)
+	points, err := s.store.TenantPostureTrend(r.Context(), access.Account.ID, 30)
 	if err != nil {
-		slog.Warn("load overview trend", "tenant_id", tn.ID, "error", err)
+		slog.Warn("load overview trend", "account_id", access.Account.ID, "error", err)
 		v.TrendUnavailable = true
 	} else {
 		v.Trend = overviewTrend(points)
 	}
 
-	v.License, err = loadOverviewLicense(r.Context(), s.store, tn.ID)
+	v.License, err = loadOverviewLicense(r.Context(), s.store, access.Account.ID)
 	if err != nil {
-		slog.Warn("load overview license signal", "tenant_id", tn.ID, "error", err)
+		slog.Warn("load overview license signal", "account_id", access.Account.ID, "error", err)
 		v.LicenseUnavailable = true
 	}
 
-	v.ComparisonReady, err = s.store.ComparisonReadyRepositoryCount(r.Context(), tn.ID)
+	v.ComparisonReady, err = s.store.ComparisonReadyRepositoryCount(r.Context(), access.Account.ID)
 	if err != nil {
-		slog.Warn("load overview comparison readiness", "tenant_id", tn.ID, "error", err)
+		slog.Warn("load overview comparison readiness", "account_id", access.Account.ID, "error", err)
 		v.ComparisonUnavailable = true
 	}
 	render(w, "overview.html", v)

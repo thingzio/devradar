@@ -12,12 +12,7 @@ import (
 // licensesView is the whole Licenses page model. Charts are pre-rendered inline
 // SVG (no client JS), matching the rest of the UI.
 type licensesView struct {
-	Title     string
-	SignedIn  bool
-	Tab       string
-	Email     string
-	AvatarURL string
-	Version   string
+	chromeView
 	CSRFToken string // double-submit token for the policy form
 	HasData   bool
 	// Headline stats.
@@ -54,21 +49,21 @@ type familyLegendRow struct {
 // handleLicensesPage renders the Licenses tab: fleet license distribution
 // (category donut + family treemap) and the compliance-policy editor.
 func (s *Server) handleLicensesPage(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
+	access := middleware.AccessFromContext(r.Context())
 
-	policy, err := s.store.GetLicensePolicy(r.Context(), tn.ID)
+	policy, err := s.store.GetLicensePolicy(r.Context(), access.Account.ID)
 	if err != nil {
 		http.Error(w, "failed to load policy", http.StatusInternalServerError)
 		return
 	}
-	stats, err := s.store.FleetLicenseStats(r.Context(), tn.ID, policy)
+	stats, err := s.store.FleetLicenseStats(r.Context(), access.Account.ID, policy)
 	if err != nil {
 		http.Error(w, "failed to load licenses", http.StatusInternalServerError)
 		return
 	}
 
 	v := licensesView{
-		Title: "Licenses", SignedIn: true, Tab: "licenses", Email: tn.Email, AvatarURL: tn.AvatarURL, Version: s.opts.Version,
+		chromeView:   s.chrome(access, "Licenses", "licenses"),
 		CSRFToken:    issueCSRF(w),
 		HasData:      stats.Packages > 0,
 		PackageCount: stats.Packages,
@@ -119,15 +114,10 @@ func (s *Server) handleLicensesPage(w http.ResponseWriter, r *http.Request) {
 // licenseFamilyView is the family drill-down page model: every package across
 // the fleet carrying the selected license family.
 type licenseFamilyView struct {
-	Title     string
-	SignedIn  bool
-	Tab       string
-	Email     string
-	AvatarURL string
-	Version   string
-	Family    string // display label, e.g. "GPL"
-	Count     int
-	Packages  []licenseFamilyRow
+	chromeView
+	Family   string // display label, e.g. "GPL"
+	Count    int
+	Packages []licenseFamilyRow
 }
 
 // licenseFamilyRow is one package in the family drill-down table.
@@ -142,23 +132,22 @@ type licenseFamilyRow struct {
 // handleLicenseFamily renders the packages carrying a given license family —
 // the drill-down reached by clicking a family in the Licenses legend.
 func (s *Server) handleLicenseFamily(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
+	access := middleware.AccessFromContext(r.Context())
 	family := strings.TrimSpace(r.URL.Query().Get("family"))
 	if family == "" {
 		http.Redirect(w, r, "/licenses", http.StatusSeeOther)
 		return
 	}
 
-	pkgs, err := s.store.FleetLicensePackages(r.Context(), tn.ID, family)
+	pkgs, err := s.store.FleetLicensePackages(r.Context(), access.Account.ID, family)
 	if err != nil {
 		http.Error(w, "failed to load license packages", http.StatusInternalServerError)
 		return
 	}
 
 	v := licenseFamilyView{
-		Title: "Licenses · " + family, SignedIn: true, Tab: "licenses",
-		Email: tn.Email, AvatarURL: tn.AvatarURL, Version: s.opts.Version,
-		Family: family, Count: len(pkgs),
+		chromeView: s.chrome(access, "Licenses · "+family, "licenses"),
+		Family:     family, Count: len(pkgs),
 	}
 	for _, p := range pkgs {
 		v.Packages = append(v.Packages, licenseFamilyRow{
@@ -176,7 +165,7 @@ func (s *Server) handleLicenseFamily(w http.ResponseWriter, r *http.Request) {
 // (mirrors handleSetMinSeverity). Denied categories are checkboxes; exceptions
 // are comma/space-separated license-ID lists.
 func (s *Server) handleSetLicensePolicy(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
+	access := middleware.AccessFromContext(r.Context())
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
@@ -190,7 +179,7 @@ func (s *Server) handleSetLicensePolicy(w http.ResponseWriter, r *http.Request) 
 	p.AllowExceptions = splitLicenseList(r.FormValue("allow_exceptions"))
 	p.DenyExceptions = splitLicenseList(r.FormValue("deny_exceptions"))
 
-	if err := s.store.SetLicensePolicy(r.Context(), tn.ID, p); err != nil {
+	if err := s.store.SetLicensePolicy(r.Context(), access.Account.ID, p); err != nil {
 		http.Error(w, "failed to save policy", http.StatusInternalServerError)
 		return
 	}

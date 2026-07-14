@@ -40,8 +40,7 @@ type fleetTrendRow struct {
 }
 
 type trendsView struct {
-	Title, Tab, Email, AvatarURL, Version string
-	SignedIn                              bool
+	chromeView
 	Days                                  int
 	DayOptions                            []trendDayOption
 	SelectedRepository                    string
@@ -57,10 +56,10 @@ type trendsView struct {
 }
 
 func (s *Server) handleTrends(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
+	access := middleware.AccessFromContext(r.Context())
 	days := trendDays(r.URL.Query().Get("days"))
 	repository := r.URL.Query().Get("repository")
-	repositories, err := s.store.RepositoryPostureOptions(r.Context(), tn.ID)
+	repositories, err := s.store.RepositoryPostureOptions(r.Context(), access.Account.ID)
 	if err != nil {
 		http.Error(w, "failed to load posture trends", http.StatusInternalServerError)
 		return
@@ -81,16 +80,16 @@ func (s *Server) handleTrends(w http.ResponseWriter, r *http.Request) {
 	var points []postgres.TenantPosturePoint
 	var coverageStart *time.Time
 	if repository == "" {
-		points, err = s.store.TenantPostureTrend(r.Context(), tn.ID, days)
+		points, err = s.store.TenantPostureTrend(r.Context(), access.Account.ID, days)
 		if err == nil {
-			coverageStart, err = s.store.TenantPostureCoverageStart(r.Context(), tn.ID)
+			coverageStart, err = s.store.TenantPostureCoverageStart(r.Context(), access.Account.ID)
 		}
 	} else {
 		if selectedCoverage == nil {
 			http.NotFound(w, r)
 			return
 		}
-		points, err = s.store.RepositoryPostureTrend(r.Context(), tn.ID, repository, days)
+		points, err = s.store.RepositoryPostureTrend(r.Context(), access.Account.ID, repository, days)
 		coverageStart = selectedCoverage
 	}
 	if err != nil {
@@ -99,8 +98,7 @@ func (s *Server) handleTrends(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v := trendsView{
-		Title: "Fleet posture trends", SignedIn: true, Tab: "trends", Email: tn.Email,
-		AvatarURL: tn.AvatarURL, Version: s.opts.Version, Days: days,
+		chromeView: s.chrome(access, "Fleet posture trends", "trends"), Days: days,
 		DayOptions: trendDayOptions(days), SnapshotCount: len(points), SelectedRepository: repository,
 		RepositoryOptions: repositoryOptions,
 	}

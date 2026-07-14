@@ -39,12 +39,7 @@ var justifications = []string{
 }
 
 type cveListView struct {
-	Title       string
-	SignedIn    bool
-	Tab         string
-	Email       string
-	AvatarURL   string
-	Version     string
+	chromeView
 	CSRFToken   string // double-submit token for the VEX-upload form
 	MinSeverity string
 	Sort        string
@@ -68,8 +63,8 @@ type cveListView struct {
 // reach by default. VEX'd CVEs are shown (annotated + de-emphasized). Sortable,
 // filterable (VEX status/justification/KEV/fixable), paginated.
 func (s *Server) handleCVEList(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
-	min := tenantMinSeverity(tn)
+	access := middleware.AccessFromContext(r.Context())
+	min := accountMinSeverity(&access.Account)
 	q := r.URL.Query()
 	if v := q.Get("min_severity"); v != "" && data.ValidMinSeverity(v) {
 		min = v
@@ -80,13 +75,13 @@ func (s *Server) handleCVEList(w http.ResponseWriter, r *http.Request) {
 		KEVOnly:       q.Get("kev") == "true",
 		FixableOnly:   q.Get("fixable") == "true",
 	}
-	cves, next, err := s.store.FleetCVEs(r.Context(), tn.ID, min, filter, q.Get("sort"), q.Get("dir"), q.Get("cursor"), 100)
+	cves, next, err := s.store.FleetCVEs(r.Context(), access.Account.ID, min, filter, q.Get("sort"), q.Get("dir"), q.Get("cursor"), 100)
 	if err != nil {
 		http.Error(w, "failed to load CVEs", http.StatusInternalServerError)
 		return
 	}
 	v := cveListView{
-		Title: "CVEs", SignedIn: true, Tab: "cves", Email: tn.Email, AvatarURL: tn.AvatarURL, Version: s.opts.Version,
+		chromeView:  s.chrome(access, "CVEs", "cves"),
 		CSRFToken:   issueCSRF(w),
 		MinSeverity: min, Sort: q.Get("sort"), Dir: q.Get("dir"), NextCursor: next, HasData: len(cves) > 0,
 		FVex: filter.VEXState, FJust: filter.Justification, FKEV: filter.KEVOnly, FFixable: filter.FixableOnly,
@@ -119,12 +114,7 @@ type cveOccRow struct {
 }
 
 type cveDetailView struct {
-	Title       string
-	SignedIn    bool
-	Tab         string
-	Email       string
-	AvatarURL   string
-	Version     string
+	chromeView
 	CVE         string
 	KEV         bool
 	KEVAdded    string
@@ -136,9 +126,9 @@ type cveDetailView struct {
 // handleCVEDetail shows one CVE's enrichment context and every image/version it
 // affects across the tenant.
 func (s *Server) handleCVEDetail(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
+	access := middleware.AccessFromContext(r.Context())
 	cve := r.PathValue("cve")
-	d, err := s.store.CVEDetail(r.Context(), tn.ID, cve)
+	d, err := s.store.CVEDetail(r.Context(), access.Account.ID, cve)
 	if err != nil {
 		if errors.Is(err, postgres.ErrNotFound) {
 			http.Error(w, "CVE not found in your images", http.StatusNotFound)
@@ -148,8 +138,8 @@ func (s *Server) handleCVEDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := cveDetailView{
-		Title: cve, SignedIn: true, Tab: "cves", Email: tn.Email, AvatarURL: tn.AvatarURL, Version: s.opts.Version,
-		CVE: cve, KEV: d.KEV, KEVAdded: d.KEVAdded, EPSS: formatEPSS(d.EPSS),
+		chromeView: s.chrome(access, cve, "cves"),
+		CVE:        cve, KEV: d.KEV, KEVAdded: d.KEVAdded, EPSS: formatEPSS(d.EPSS),
 	}
 	repos := map[string]struct{}{}
 	for _, o := range d.Occurrences {
@@ -168,7 +158,7 @@ func (s *Server) handleCVEDetail(w http.ResponseWriter, r *http.Request) {
 // field "vex"). It reuses the same parse + persist path as the API, then
 // redirects back to /cves with a result summary in the query string.
 func (s *Server) handleUploadVEX(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
+	access := middleware.AccessFromContext(r.Context())
 	// Bound the whole request body BEFORE parsing. ParseMultipartForm's argument
 	// is only the in-memory threshold — larger parts stream to a temp file with no
 	// ceiling — so without this an authenticated user could exhaust container disk.
@@ -204,7 +194,7 @@ func (s *Server) handleUploadVEX(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/cves?upload_err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
-	_, matched, err := s.store.SaveVEXDocument(r.Context(), tn.ID, doc)
+	_, matched, err := s.store.SaveVEXDocument(r.Context(), access.Account.ID, doc)
 	if err != nil {
 		http.Redirect(w, r, "/cves?upload_err="+url.QueryEscape("failed to store VEX"), http.StatusSeeOther)
 		return

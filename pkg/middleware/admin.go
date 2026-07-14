@@ -1,14 +1,15 @@
 package middleware
 
 import (
-	"database/sql"
+	"context"
 	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
 
+	"github.com/thingzio/devradar/pkg/account"
 	"github.com/thingzio/devradar/pkg/config"
-	"github.com/thingzio/devradar/pkg/tenant"
+	"github.com/thingzio/devradar/pkg/data/postgres"
 )
 
 const anonymousUser = "<anonymous>"
@@ -24,12 +25,11 @@ func IsAdmin(email string) bool {
 	return slices.Contains(config.AdminUsers(), want)
 }
 
-// RequireAdmin gates the operator console. It layers on the normal session
-// cookie: resolve the session, then check the tenant email against the allowlist.
+// RequirePlatformAdmin gates the operator console using the actor user's email.
 // Any failure — no cookie, invalid session, not an admin — returns 404 (not 403)
-// so the console's existence is not disclosed to non-operators. On success the
-// tenant is injected into the request context.
-func RequireAdmin(db *sql.DB) func(http.Handler) http.Handler {
+// so the console's existence is not disclosed to non-operators. It does not
+// require an active account.
+func RequirePlatformAdmin(store *postgres.Store) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			cookie, err := r.Cookie(cookieName)
@@ -37,21 +37,31 @@ func RequireAdmin(db *sql.DB) func(http.Handler) http.Handler {
 				http.NotFound(w, r)
 				return
 			}
-			tn, err := tenant.ValidateSession(r.Context(), db, cookie.Value)
-			if err != nil || tn == nil || !IsAdmin(tn.Email) {
+			session, err := store.ValidateSession(r.Context(), cookie.Value)
+			if err != nil || session == nil || session.User.Status != "active" || !IsAdmin(session.User.Email) {
+				if session != nil && session.User.Status != "active" {
+					if destroyErr := store.DestroySession(r.Context(), cookie.Value); destroyErr != nil {
+						slog.Error("destroy suspended platform user session",
+							"user_id", session.User.ID, "path", r.URL.Path, "error", destroyErr)
+					}
+					ClearSessionCookie(w)
+				}
 				slog.Warn("admin access denied",
-					"path", r.URL.Path, "remote", r.RemoteAddr, "email", tenantEmail(tn))
+					"path", r.URL.Path, "remote", r.RemoteAddr, "email", sessionEmail(session))
 				http.NotFound(w, r)
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(WithTenant(r.Context(), tn)))
+			actor := account.Actor{Kind: account.ActorUser, UserID: session.User.ID}
+			ctx := context.WithValue(r.Context(), userContextKey, &session.User)
+			ctx = context.WithValue(ctx, actorContextKey, actor)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
 
-func tenantEmail(tn *tenant.Tenant) string {
-	if tn == nil {
+func sessionEmail(session *account.Session) string {
+	if session == nil {
 		return anonymousUser
 	}
-	return tn.Email
+	return session.User.Email
 }

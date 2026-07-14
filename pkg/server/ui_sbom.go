@@ -44,12 +44,7 @@ type failureRow struct {
 }
 
 type sbomDetailView struct {
-	Title       string
-	SignedIn    bool
-	Tab         string
-	Email       string
-	AvatarURL   string
-	Version     string
+	chromeView
 	MinSeverity string
 	CSRFToken   string // double-submit token for the archive form
 
@@ -100,9 +95,9 @@ type attestationView struct {
 // findings table (with a fixable-only filter), a package rollup, and scan
 // health (recorded failures).
 func (s *Server) handleSBOMDetail(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
+	access := middleware.AccessFromContext(r.Context())
 	id := r.PathValue("id")
-	min := tenantMinSeverity(tn)
+	min := accountMinSeverity(&access.Account)
 	if q := r.URL.Query().Get("min_severity"); q != "" && data.ValidMinSeverity(q) {
 		min = q
 	}
@@ -111,7 +106,7 @@ func (s *Server) handleSBOMDetail(w http.ResponseWriter, r *http.Request) {
 	sortKey := r.URL.Query().Get("sort")
 	sortDir := r.URL.Query().Get("dir")
 
-	detail, err := s.store.GetSBOM(r.Context(), tn.ID, id, min)
+	detail, err := s.store.GetSBOM(r.Context(), access.Account.ID, id, min)
 	if err != nil {
 		if errors.Is(err, postgres.ErrNotFound) {
 			http.Error(w, "SBOM not found", http.StatusNotFound)
@@ -121,18 +116,18 @@ func (s *Server) handleSBOMDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	findings, next, err := s.store.FindingsBySBOM(r.Context(), tn.ID, id, min, fixableOnly,
+	findings, next, err := s.store.FindingsBySBOM(r.Context(), access.Account.ID, id, min, fixableOnly,
 		showSuppressed, sortKey, sortDir, r.URL.Query().Get("cursor"), 100)
 	if err != nil {
 		http.Error(w, "failed to load findings", http.StatusInternalServerError)
 		return
 	}
-	pkgs, err := s.store.PackageRollup(r.Context(), tn.ID, id, min, 15)
+	pkgs, err := s.store.PackageRollup(r.Context(), access.Account.ID, id, min, 15)
 	if err != nil {
 		http.Error(w, "failed to load package rollup", http.StatusInternalServerError)
 		return
 	}
-	failures, err := s.store.FailuresBySBOM(r.Context(), tn.ID, id, 50)
+	failures, err := s.store.FailuresBySBOM(r.Context(), access.Account.ID, id, 50)
 	if err != nil {
 		http.Error(w, "failed to load scan health", http.StatusInternalServerError)
 		return
@@ -140,12 +135,7 @@ func (s *Server) handleSBOMDetail(w http.ResponseWriter, r *http.Request) {
 
 	repo, tag, _ := sbom.SplitRef(detail.ImageRef)
 	v := sbomDetailView{
-		Title:          shortDigest(detail.Digest),
-		SignedIn:       true,
-		Tab:            "images",
-		Email:          tn.Email,
-		AvatarURL:      tn.AvatarURL,
-		Version:        s.opts.Version,
+		chromeView:     s.chrome(access, shortDigest(detail.Digest), "images"),
 		MinSeverity:    min,
 		CSRFToken:      issueCSRF(w),
 		SBOMID:         detail.SBOMID,
@@ -171,7 +161,7 @@ func (s *Server) handleSBOMDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v.VerificationStatus = detail.VerificationStatus
-	if att, aerr := s.store.GetAttestation(r.Context(), tn.ID, id); aerr == nil {
+	if att, aerr := s.store.GetAttestation(r.Context(), access.Account.ID, id); aerr == nil {
 		v.Attestation = attestationPanel(att)
 	} else if !errors.Is(aerr, postgres.ErrNotFound) {
 		slog.Warn("load attestation evidence", "sbom_id", id, "error", aerr)
@@ -254,18 +244,18 @@ func formatEPSS(p *float32) string {
 // retained), tenant-scoped, idempotent. Redirects back to the image page (or the
 // dashboard if the repository can't be resolved) via POST-redirect-GET.
 func (s *Server) handleArchiveSBOMUI(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
+	access := middleware.AccessFromContext(r.Context())
 	id := r.PathValue("id")
 
 	// Resolve the repository before archiving so we can redirect to the image page.
 	dest := "/dashboard"
-	if detail, err := s.store.GetSBOM(r.Context(), tn.ID, id, data.DefaultMinSeverity); err == nil {
+	if detail, err := s.store.GetSBOM(r.Context(), access.Account.ID, id, data.DefaultMinSeverity); err == nil {
 		if repo, _, _ := sbom.SplitRef(detail.ImageRef); repo != "" {
 			dest = "/images?repo=" + url.QueryEscape(repo)
 		}
 	}
 
-	if err := s.store.ArchiveSBOM(r.Context(), tn.ID, id); err != nil {
+	if err := s.store.ArchiveSBOM(r.Context(), access.Account.ID, id); err != nil {
 		if errors.Is(err, postgres.ErrNotFound) {
 			http.Error(w, "SBOM not found", http.StatusNotFound)
 			return
@@ -280,13 +270,13 @@ func (s *Server) handleArchiveSBOMUI(w http.ResponseWriter, r *http.Request) {
 // repository) from the UI — the "stop tracking this image" action on the image
 // page. Soft archive, tenant-scoped, idempotent. Redirects to the dashboard.
 func (s *Server) handleArchiveRepoUI(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
+	access := middleware.AccessFromContext(r.Context())
 	repo := r.FormValue("repo")
 	if repo == "" {
 		http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 		return
 	}
-	if _, err := s.store.ArchiveRepo(r.Context(), tn.ID, repo); err != nil {
+	if _, err := s.store.ArchiveRepo(r.Context(), access.Account.ID, repo); err != nil {
 		http.Error(w, "failed to archive image", http.StatusInternalServerError)
 		return
 	}

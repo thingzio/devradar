@@ -37,12 +37,7 @@ type eventRow struct {
 }
 
 type imageDetailView struct {
-	Title       string
-	SignedIn    bool
-	Tab         string
-	Email       string
-	AvatarURL   string
-	Version     string
+	chromeView
 	MinSeverity string
 	CSRFToken   string // double-submit token for the archive form
 
@@ -107,13 +102,13 @@ type packageRow struct {
 // and the cross-digest change log. The repository is a ?repo= query param
 // (repositories contain slashes, so it can't be a path wildcard).
 func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
+	access := middleware.AccessFromContext(r.Context())
 	repo := r.URL.Query().Get("repo")
 	if repo == "" {
 		http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 		return
 	}
-	min := tenantMinSeverity(tn)
+	min := accountMinSeverity(&access.Account)
 	if q := r.URL.Query().Get("min_severity"); q != "" && data.ValidMinSeverity(q) {
 		min = q
 	}
@@ -122,7 +117,7 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 	// independently of the change log via its own cursor param. ErrNotFound ⇒
 	// unknown image.
 	sbomSort, sbomDir := r.URL.Query().Get("sbom_sort"), r.URL.Query().Get("sbom_dir")
-	sboms, sbomNext, err := s.store.SBOMsForRepo(r.Context(), tn.ID, repo,
+	sboms, sbomNext, err := s.store.SBOMsForRepo(r.Context(), access.Account.ID, repo,
 		sbomSort, sbomDir, r.URL.Query().Get("sbom_cursor"), 50)
 	if err != nil {
 		if errors.Is(err, postgres.ErrNotFound) {
@@ -139,7 +134,7 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 	// made the dropdown look inert); ?unrated=1 opts them back in.
 	includeUnrated := r.URL.Query().Get("unrated") == "1"
 	evSort, evDir := r.URL.Query().Get("ev_sort"), r.URL.Query().Get("ev_dir")
-	events, next, err := s.store.RepoTimeline(r.Context(), tn.ID, repo, min, includeUnrated,
+	events, next, err := s.store.RepoTimeline(r.Context(), access.Account.ID, repo, min, includeUnrated,
 		evSort, evDir, r.URL.Query().Get("cursor"), 50)
 	if err != nil {
 		http.Error(w, "failed to load change log", http.StatusInternalServerError)
@@ -147,7 +142,7 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Severity-over-time from scan runs, rendered as a stacked column chart.
-	sevpts, _ := s.store.RepoSeverityTimeline(r.Context(), tn.ID, repo, 60)
+	sevpts, _ := s.store.RepoSeverityTimeline(r.Context(), access.Account.ID, repo, 60)
 	var points []stackPoint
 	for _, p := range sevpts {
 		points = append(points, stackPoint{Label: p.Day, Segs: []stackSeg{
@@ -157,7 +152,7 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Authoritative header totals (independent of SBOM-list paging).
-	sum, err := s.store.RepoSummary(r.Context(), tn.ID, repo)
+	sum, err := s.store.RepoSummary(r.Context(), access.Account.ID, repo)
 	if err != nil {
 		if errors.Is(err, postgres.ErrNotFound) {
 			http.Error(w, "image not found", http.StatusNotFound)
@@ -170,7 +165,7 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 	// Scan issues for this image, so the dashboard's "scan issue" flag is
 	// explainable here. Best-effort — a failure to load failures shouldn't 500 the
 	// page.
-	failures, _ := s.store.FailuresByRepo(r.Context(), tn.ID, repo, 50)
+	failures, _ := s.store.FailuresByRepo(r.Context(), access.Account.ID, repo, 50)
 
 	// License inventory for this image, classified + evaluated against the tenant
 	// policy. Best-effort (licenses are additive). Filterable by name/category,
@@ -185,8 +180,8 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 	pkgSort := r.URL.Query().Get("pkg_sort")
 	pkgDir := r.URL.Query().Get("pkg_dir")
 	pkgPage := clampInt(r.URL.Query().Get("pkg_page"), 1, 1<<20)
-	policy, _ := s.store.GetLicensePolicy(r.Context(), tn.ID)
-	pkgs, pkgTotal, pkgViolations, _ := s.store.PackagesByRepo(r.Context(), tn.ID, repo, policy,
+	policy, _ := s.store.GetLicensePolicy(r.Context(), access.Account.ID)
+	pkgs, pkgTotal, pkgViolations, _ := s.store.PackagesByRepo(r.Context(), access.Account.ID, repo, policy,
 		postgres.RepoPackageQuery{
 			NameFilter: pkgQuery, Category: pkgCategory, Sort: pkgSort, Dir: pkgDir,
 			Offset: (pkgPage - 1) * pkgPageSize, Limit: pkgPageSize,
@@ -194,12 +189,7 @@ func (s *Server) handleImageDetail(w http.ResponseWriter, r *http.Request) {
 	pkgTotalPages := (pkgTotal + pkgPageSize - 1) / pkgPageSize
 
 	v := imageDetailView{
-		Title:             lastPath(repo),
-		SignedIn:          true,
-		Tab:               "images",
-		Email:             tn.Email,
-		AvatarURL:         tn.AvatarURL,
-		Version:           s.opts.Version,
+		chromeView:        s.chrome(access, lastPath(repo), "images"),
 		MinSeverity:       min,
 		CSRFToken:         issueCSRF(w),
 		Repository:        repo,

@@ -34,12 +34,7 @@ type barSeg struct {
 
 // dashboardView is the whole page model.
 type dashboardView struct {
-	Title       string
-	SignedIn    bool
-	Tab         string
-	Email       string
-	AvatarURL   string
-	Version     string
+	chromeView
 	MinSeverity string
 	Query       string   // active image name search
 	Label       string   // active label filter
@@ -64,15 +59,15 @@ type dashboardView struct {
 // handleDashboard renders the Images tab: fleet headline stats + a sortable,
 // searchable, risk-ranked table of tracked images.
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
-	min := tenantMinSeverity(tn)
+	access := middleware.AccessFromContext(r.Context())
+	min := accountMinSeverity(&access.Account)
 	if q := r.URL.Query().Get("min_severity"); q != "" && data.ValidMinSeverity(q) {
 		min = q
 	}
 
 	// Headline stats are fleet-wide (all active images), computed independently of
 	// the paginated image list below — summing one page would undercount.
-	fs, err := s.store.FleetStats(r.Context(), tn.ID)
+	fs, err := s.store.FleetStats(r.Context(), access.Account.ID)
 	if err != nil {
 		http.Error(w, "failed to load dashboard", http.StatusInternalServerError)
 		return
@@ -83,21 +78,16 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	query := q.Get("q")
 	label := q.Get("label")
-	images, next, err := s.store.ListRepoImages(r.Context(), tn.ID, min, query, label,
+	images, next, err := s.store.ListRepoImages(r.Context(), access.Account.ID, min, query, label,
 		q.Get("sort"), q.Get("dir"), q.Get("cursor"), 50)
 	if err != nil {
 		http.Error(w, "failed to load dashboard", http.StatusInternalServerError)
 		return
 	}
-	labels, _ := s.store.TenantLabels(r.Context(), tn.ID)
+	labels, _ := s.store.TenantLabels(r.Context(), access.Account.ID)
 
 	v := dashboardView{
-		Title:       "Images",
-		SignedIn:    true,
-		Tab:         "images",
-		Email:       tn.Email,
-		AvatarURL:   tn.AvatarURL,
-		Version:     s.opts.Version,
+		chromeView:  s.chrome(access, "Images", "images"),
 		MinSeverity: min,
 		Query:       query,
 		Label:       label,

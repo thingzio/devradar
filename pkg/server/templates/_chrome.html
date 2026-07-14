@@ -33,7 +33,7 @@
       {{if .AvatarURL}}<img class="user-avatar user-avatar-img" src="{{.AvatarURL}}" alt="" referrerpolicy="no-referrer">{{else}}<span class="user-avatar">{{if .Email}}{{slice .Email 0 1}}{{else}}?{{end}}</span>{{end}}
     </button>
     <div class="user-menu" id="user-menu" hidden>
-      <div class="user-menu-header">{{.Email}}</div>
+      <div class="user-menu-header">{{.Email}}{{if .AccountName}}<br><span class="muted">{{.AccountName}} · {{.AccountRole}}</span>{{end}}</div>
       <div class="user-menu-divider"></div>
       <a href="/tokens" class="user-menu-item">Settings</a>
       <div class="user-menu-divider"></div>

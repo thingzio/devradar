@@ -101,8 +101,9 @@ func TestSession_Expired(t *testing.T) {
 	}
 }
 
-// TestSession_SuspendedTenant redirects to login with ?error=suspended.
-func TestSession_SuspendedTenant(t *testing.T) {
+// TestSession_SuspendedAccount redirects to the chooser without clearing the
+// authenticated user's session.
+func TestSession_SuspendedAccount(t *testing.T) {
 	srv, st := testServer(t)
 	tenantID, _ := seedTenantToken(t, st)
 	h := srv.Handler()
@@ -119,8 +120,16 @@ func TestSession_SuspendedTenant(t *testing.T) {
 	if rec.Code != http.StatusFound {
 		t.Fatalf("suspended session: status = %d, want 302", rec.Code)
 	}
-	if loc := rec.Header().Get("Location"); !strings.Contains(loc, "error=suspended") {
-		t.Errorf("redirect = %q, want ?error=suspended", loc)
+	if loc := rec.Header().Get("Location"); loc != "/accounts?error=unavailable" {
+		t.Errorf("redirect = %q, want unavailable chooser", loc)
+	}
+	for _, responseCookie := range rec.Result().Cookies() {
+		if responseCookie.Name == middleware.SessionCookieName() && responseCookie.MaxAge < 0 {
+			t.Fatal("suspended account cleared user session cookie")
+		}
+	}
+	if _, err := st.ValidateSession(context.Background(), cookie.Value); err != nil {
+		t.Fatalf("suspended account destroyed user session: %v", err)
 	}
 }
 
@@ -133,6 +142,51 @@ func TestSession_NoCookie(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusFound {
 		t.Errorf("no cookie: status = %d, want 302", rec.Code)
+	}
+}
+
+func TestAccessContextChromeUsesActorAndAccountFields(t *testing.T) {
+	srv, st := testServer(t)
+	accountID, _ := seedTenantToken(t, st)
+	userID := seedLegacyUser(t, st, accountID)
+	ctx := context.Background()
+	actorEmail := "actor-" + accountID[:8] + "@example.com"
+	actorAvatar := "https://avatars.githubusercontent.com/u/12345"
+	accountName := "Shared account " + accountID[:8]
+	legacyEmail := tenantEmail(t, st, accountID)
+	legacyAvatar := "https://avatars.githubusercontent.com/u/67890"
+	if _, err := st.DB().ExecContext(ctx, `
+		UPDATE devradar_user SET email=$2,avatar_url=$3 WHERE id=$1`,
+		userID, actorEmail, actorAvatar); err != nil {
+		t.Fatalf("set actor profile: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		UPDATE devradar_tenant SET name=$2,avatar_url=$3 WHERE id=$1`,
+		accountID, accountName, legacyAvatar); err != nil {
+		t.Fatalf("set account chrome fields: %v", err)
+	}
+	raw, err := st.CreateSession(ctx, userID, &accountID, time.Hour)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/overview", nil)
+	req.AddCookie(&http.Cookie{Name: middleware.SessionCookieName(), Value: raw})
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("overview status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{actorEmail, actorAvatar, accountName, "admin"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("overview chrome missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{legacyEmail, legacyAvatar} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("overview chrome contains legacy account identity %q", forbidden)
+		}
 	}
 }
 

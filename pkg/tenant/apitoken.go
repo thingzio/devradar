@@ -128,6 +128,12 @@ func ValidateAPIToken(ctx context.Context, db *sql.DB, rawToken string) (*Tenant
 	return t, nil
 }
 
+func prefixed(a string) string {
+	return a + `.id, ` + a + `.email, ` + a + `.email_verified_at, ` + a + `.plan, ` +
+		a + `.status, ` + a + `.min_severity, ` + a + `.avatar_url, ` + a + `.tos_accepted_at, ` +
+		a + `.created_at, ` + a + `.updated_at`
+}
+
 // CountAPITokens returns how many API tokens a tenant currently holds. Used to
 // enforce a per-tenant issuance cap so a compromised session (or a bug) can't
 // mint unbounded credentials.

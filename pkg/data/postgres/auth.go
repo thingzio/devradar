@@ -18,9 +18,45 @@ var (
 	ErrLoginTokenExpired = errors.New("login link expired")
 	// ErrSessionInvalid identifies an unknown or expired browser session.
 	ErrSessionInvalid = errors.New("session expired or not found")
+	// ErrAPITokenInvalid identifies an unknown, revoked, or expired API token.
+	ErrAPITokenInvalid = errors.New("invalid or revoked API token")
 )
 
 var errIdentityLinkRace = errors.New("identity linked concurrently")
+
+const apiTokenLastUsedCoarsening = time.Minute
+
+// ValidateAPIToken resolves a raw account credential without loading a human
+// user or membership. last_used_at is refreshed at most once per minute.
+func (s *Store) ValidateAPIToken(
+	ctx context.Context,
+	raw string,
+) (*account.Account, account.Actor, error) {
+	var acct account.Account
+	var tokenID string
+	err := s.db.QueryRowContext(ctx, `
+		WITH bumped AS (
+			UPDATE devradar_api_token SET last_used_at=now()
+			WHERE token_hash=$1
+			  AND (expires_at IS NULL OR expires_at>now())
+			  AND (last_used_at IS NULL OR last_used_at<now()-$2::interval)
+		)
+		SELECT t.id,t.name,t.plan,t.status,t.min_severity,t.created_at,t.updated_at,a.id
+		FROM devradar_api_token a
+		JOIN devradar_tenant t ON t.id=a.tenant_id
+		WHERE a.token_hash=$1
+		  AND (a.expires_at IS NULL OR a.expires_at>now())`,
+		authn.HashToken(raw), apiTokenLastUsedCoarsening.String()).
+		Scan(&acct.ID, &acct.Name, &acct.Plan, &acct.Status, &acct.MinSeverity,
+			&acct.CreatedAt, &acct.UpdatedAt, &tokenID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, account.Actor{}, ErrAPITokenInvalid
+	}
+	if err != nil {
+		return nil, account.Actor{}, fmt.Errorf("validate api token: %w", err)
+	}
+	return &acct, account.Actor{Kind: account.ActorAPIToken, APITokenID: tokenID}, nil
+}
 
 // ResolveDirectIdentity resolves a verified identity to its authoritative user.
 // Only a user created by this direct-signup transaction receives a new account.
@@ -518,36 +554,8 @@ func (s *Store) repairLegacySession(ctx context.Context, hash, accountID string)
 	if !sessionAccountID.Valid || sessionAccountID.String != accountID {
 		return ErrSessionInvalid
 	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE devradar_tenant SET name=left(btrim(email),80)
-		WHERE id=$1 AND name=''`, accountID); err != nil {
-		return fmt.Errorf("backfill legacy session account name: %w", err)
-	}
-	user, err := ensureLegacyUser(ctx, tx, accountID)
-	if err != nil {
+	if err := reconcileCompatibilityAccount(ctx, tx, accountID); err != nil {
 		return err
-	}
-	if err := insertLegacyAdminMembership(ctx, tx, accountID, user.ID); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE devradar_identity
-		SET user_id=$2
-		WHERE tenant_id=$1 AND user_id IS NULL`, accountID, user.ID); err != nil {
-		return fmt.Errorf("backfill legacy session identities: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE devradar_session s
-		SET user_id=$1,
-		    active_account_id=CASE WHEN EXISTS (
-			SELECT 1 FROM devradar_account_member m
-			JOIN devradar_tenant t ON t.id=m.account_id
-			WHERE m.account_id=$2 AND m.user_id=$1
-			  AND m.revoked_at IS NULL AND t.status='active'
-		    ) THEN $2::uuid ELSE NULL END
-		WHERE s.tenant_id=$2 AND s.user_id IS NULL AND s.expires_at>now()`,
-		user.ID, accountID); err != nil {
-		return fmt.Errorf("backfill legacy session owner: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit legacy session repair: %w", err)

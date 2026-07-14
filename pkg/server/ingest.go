@@ -82,8 +82,8 @@ const maxAttestationBytes = 1 << 20
 // store bytes + row. Thin and idempotent; no scanning or conversion here.
 func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	tn := middleware.TenantFromContext(ctx)
-	if tn == nil {
+	acct := middleware.AccountFromContext(ctx)
+	if acct == nil {
 		writeError(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
@@ -179,11 +179,11 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 	// id), and the second submitter could never see "their" SBOM. Scoping by
 	// tenant preserves per-tenant idempotency and dedup while keeping isolation.
 	h := sha256.New()
-	h.Write([]byte(tn.ID))
+	h.Write([]byte(acct.ID))
 	h.Write([]byte{0}) // domain separator
 	h.Write(raw)
 	id := fmt.Sprintf("%x", h.Sum(nil))
-	objectPath := fmt.Sprintf("gs://%s/%s/%s", config.SBOMBucket(), tn.ID, id)
+	objectPath := fmt.Sprintf("gs://%s/%s/%s", config.SBOMBucket(), acct.ID, id)
 
 	// Record the row first so we learn the canonical id and whether this is new.
 	// The store keys on (tenant_id, digest, format): one SBOM per digest+format
@@ -197,7 +197,7 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 	// repository, is always admitted; only brand-new growth past a cap is rejected.
 	effID, inserted, status, err := s.store.UpsertSBOMWithLimit(ctx, &postgres.SBOM{
 		ID:           id,
-		TenantID:     tn.ID,
+		TenantID:     acct.ID,
 		ImageRef:     imageRef,
 		Repository:   repository,
 		Version:      version,
@@ -283,8 +283,8 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 	// we report the STORED status so the response reflects the actual evidence.
 	var verificationStatus string
 	if canonicalBytes {
-		verificationStatus = s.verifyAttestation(ctx, tn.ID, effID, raw, subj.Digest, req.Attestation)
-	} else if st, err := s.store.GetVerificationStatus(ctx, tn.ID, effID); err == nil {
+		verificationStatus = s.verifyAttestation(ctx, acct.ID, effID, raw, subj.Digest, req.Attestation)
+	} else if st, err := s.store.GetVerificationStatus(ctx, acct.ID, effID); err == nil {
 		verificationStatus = st
 	} else {
 		verificationStatus = attest.StatusUnverified

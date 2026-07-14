@@ -87,7 +87,7 @@ const (
 // Auth is passwordless: enter an email, receive a one-time link, click it to get
 // a session, then mint API tokens for CI. If no email sender is configured
 // (local dev), the magic link is logged instead of sent.
-func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
+func (s *Server) registerUI(mux *http.ServeMux) {
 	mux.Handle("GET /static/", http.FileServerFS(staticFS))
 	mux.HandleFunc("GET /", s.handleLanding)
 	mux.HandleFunc("POST /auth/login", s.handleRequestLink)
@@ -112,7 +112,11 @@ func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /api", s.handleAPIDocs)
 	mux.HandleFunc("GET /openapi.yaml", s.handleOpenAPISpec)
 
-	authed := middleware.RequireAuth(db, loginPath)
+	requireUser := middleware.RequireUser(s.store, loginPath)
+	requireAccount := middleware.RequireAccount(s.store, "/accounts")
+	authed := func(next http.Handler) http.Handler {
+		return requireUser(requireAccount(next))
+	}
 	csrf := middleware.ValidateCSRF
 	// Logout is CSRF-protected (double-submit) so a cross-site page can't force a
 	// victim's session to be cleared. It intentionally does NOT require an active
@@ -152,14 +156,14 @@ func (s *Server) registerUI(mux *http.ServeMux, db *sql.DB) {
 	mux.Handle("POST /settings/min-severity", authed(csrf(http.HandlerFunc(s.handleSetMinSeverity))))
 	mux.Handle("POST /settings/alerts", authed(csrf(http.HandlerFunc(s.handleSetAlertPolicy))))
 
-	s.registerAdmin(mux, db)
+	s.registerAdmin(mux)
 }
 
-// registerAdmin wires the operator console. Every route is gated by RequireAdmin
+// registerAdmin wires the operator console. Every route is gated by RequirePlatformAdmin
 // (email allowlist, 404 for non-admins — so the surface stays hidden); mutating
 // POSTs are additionally CSRF-validated. See handler_admin.go.
-func (s *Server) registerAdmin(mux *http.ServeMux, db *sql.DB) {
-	admin := middleware.RequireAdmin(db)
+func (s *Server) registerAdmin(mux *http.ServeMux) {
+	admin := middleware.RequirePlatformAdmin(s.store)
 	csrf := middleware.ValidateCSRF
 
 	mux.Handle("GET /admin", admin(http.HandlerFunc(s.handleAdminDashboard)))
@@ -428,8 +432,8 @@ func randomState() (string, error) {
 }
 
 func (s *Server) handleTokensPage(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
-	tokens, err := tenant.ListAPITokens(r.Context(), s.store.DB(), tn.ID)
+	access := middleware.AccessFromContext(r.Context())
+	tokens, err := tenant.ListAPITokens(r.Context(), s.store.DB(), access.Account.ID)
 	if err != nil {
 		http.Error(w, "failed to list tokens", http.StatusInternalServerError)
 		return
@@ -437,16 +441,16 @@ func (s *Server) handleTokensPage(w http.ResponseWriter, r *http.Request) {
 	// Read-and-delete the one-time token flash (set by handleCreateToken). Shown
 	// exactly once, never carried in the URL. A failure to read is non-fatal — the
 	// page still renders, just without the banner.
-	newToken, err := tenant.ConsumeTokenFlash(r.Context(), s.store.DB(), tn.ID, config.TokenFlashKey())
+	newToken, err := tenant.ConsumeTokenFlash(r.Context(), s.store.DB(), access.Account.ID, config.TokenFlashKey())
 	if err != nil {
 		slog.Error("consume token flash", "error", err)
 	}
-	alertPolicy, err := s.store.EnsureAlertPolicy(r.Context(), tn.ID)
+	alertPolicy, err := s.store.EnsureAlertPolicy(r.Context(), access.Account.ID)
 	if err != nil {
 		http.Error(w, "failed to load alert settings", http.StatusInternalServerError)
 		return
 	}
-	labels, err := s.store.TenantLabels(r.Context(), tn.ID)
+	labels, err := s.store.TenantLabels(r.Context(), access.Account.ID)
 	if err != nil {
 		http.Error(w, "failed to load alert settings", http.StatusInternalServerError)
 		return
@@ -460,21 +464,29 @@ func (s *Server) handleTokensPage(w http.ResponseWriter, r *http.Request) {
 		_, ok := selected[label]
 		labelOptions = append(labelOptions, alertLabelOption{Label: label, Selected: ok})
 	}
-	render(w, "tokens.html", map[string]any{
-		"Title":       "Tokens & settings",
-		"SignedIn":    true,
-		"Email":       tn.Email,
-		"AvatarURL":   tn.AvatarURL,
-		"Tokens":      tokens,
-		"NewToken":    newToken, // shown once after creation
-		"CSRFToken":   issueCSRF(w),
-		"MinSeverity": tenantMinSeverity(tn),
-		"Severities":  []string{"critical", "high", "medium", "low", "negligible"},
-		"AlertPolicy": alertPolicy,
-		"AlertLabels": labelOptions,
-		"AlertsSaved": r.URL.Query().Get("alerts") == "saved",
-		"Version":     s.opts.Version,
+	render(w, "tokens.html", tokensView{
+		chromeView:  s.chrome(access, "Tokens & settings", ""),
+		Tokens:      tokens,
+		NewToken:    newToken,
+		CSRFToken:   issueCSRF(w),
+		MinSeverity: accountMinSeverity(&access.Account),
+		Severities:  []string{"critical", "high", "medium", "low", "negligible"},
+		AlertPolicy: alertPolicy,
+		AlertLabels: labelOptions,
+		AlertsSaved: r.URL.Query().Get("alerts") == "saved",
 	})
+}
+
+type tokensView struct {
+	chromeView
+	Tokens      []tenant.APITokenInfo
+	NewToken    string
+	CSRFToken   string
+	MinSeverity string
+	Severities  []string
+	AlertPolicy *postgres.AlertPolicy
+	AlertLabels []alertLabelOption
+	AlertsSaved bool
 }
 
 type alertLabelOption struct {
@@ -483,7 +495,7 @@ type alertLabelOption struct {
 }
 
 func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
+	access := middleware.AccessFromContext(r.Context())
 	name := r.FormValue("name")
 	if name == "" {
 		name = "api-token"
@@ -494,7 +506,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	// Enforce the per-tenant token cap ATOMICALLY inside the insert (0 disables it)
 	// so a bug or compromised session can't mint unbounded credentials — the old
 	// count-then-create was raceable. ErrTokenLimit → 429.
-	raw, err := tenant.CreateAPITokenWithLimit(r.Context(), s.store.DB(), tn.ID, name, ttl, config.MaxTokensPerTenant())
+	raw, err := tenant.CreateAPITokenWithLimit(r.Context(), s.store.DB(), access.Account.ID, name, ttl, config.MaxTokensPerTenant())
 	if errors.Is(err, tenant.ErrTokenLimit) {
 		http.Error(w, fmt.Sprintf("token limit reached (%d per tenant); revoke an unused token first",
 			config.MaxTokensPerTenant()), http.StatusTooManyRequests)
@@ -507,7 +519,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	// Stash the raw token server-side for one-time display and redirect to a clean
 	// URL — never put the secret in the query string (browser history, Referer,
 	// logs). The /tokens page reads-and-deletes it once.
-	if err := tenant.StashTokenFlash(r.Context(), s.store.DB(), tn.ID, raw, tokenFlashTTL, config.TokenFlashKey()); err != nil {
+	if err := tenant.StashTokenFlash(r.Context(), s.store.DB(), access.Account.ID, raw, tokenFlashTTL, config.TokenFlashKey()); err != nil {
 		slog.Error("stash token flash", "error", err)
 		http.Error(w, "failed to create token", http.StatusInternalServerError)
 		return
@@ -516,8 +528,8 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
-	if err := tenant.RevokeAPIToken(r.Context(), s.store.DB(), tn.ID, r.PathValue("id")); err != nil {
+	access := middleware.AccessFromContext(r.Context())
+	if err := tenant.RevokeAPIToken(r.Context(), s.store.DB(), access.Account.ID, r.PathValue("id")); err != nil {
 		http.Error(w, "failed to revoke token", http.StatusBadRequest)
 		return
 	}
@@ -525,13 +537,13 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSetMinSeverity(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
+	access := middleware.AccessFromContext(r.Context())
 	sev := r.FormValue("min_severity")
 	if !data.ValidMinSeverity(sev) {
 		http.Error(w, "invalid min_severity", http.StatusBadRequest)
 		return
 	}
-	if err := tenant.SetMinSeverity(r.Context(), s.store.DB(), tn.ID, sev); err != nil {
+	if err := tenant.SetMinSeverity(r.Context(), s.store.DB(), access.Account.ID, sev); err != nil {
 		http.Error(w, "failed to update setting", http.StatusInternalServerError)
 		return
 	}
@@ -539,7 +551,7 @@ func (s *Server) handleSetMinSeverity(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSetAlertPolicy(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
+	access := middleware.AccessFromContext(r.Context())
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
@@ -549,7 +561,7 @@ func (s *Server) handleSetAlertPolicy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid min_severity", http.StatusBadRequest)
 		return
 	}
-	knownLabels, err := s.store.TenantLabels(r.Context(), tn.ID)
+	knownLabels, err := s.store.TenantLabels(r.Context(), access.Account.ID)
 	if err != nil {
 		http.Error(w, "failed to update alert settings", http.StatusInternalServerError)
 		return
@@ -574,7 +586,7 @@ func (s *Server) handleSetAlertPolicy(w http.ResponseWriter, r *http.Request) {
 		IncludeDB:         r.FormValue("include_db") == "on",
 		Labels:            allowed,
 	}
-	if err := s.store.UpdateAlertPolicy(r.Context(), tn.ID, policy); err != nil {
+	if err := s.store.UpdateAlertPolicy(r.Context(), access.Account.ID, policy); err != nil {
 		http.Error(w, "failed to update alert settings", http.StatusInternalServerError)
 		return
 	}
@@ -591,13 +603,13 @@ func render(w http.ResponseWriter, name string, dataV any) {
 	}
 }
 
-// tenantMinSeverity resolves a tenant's effective default threshold, falling
+// accountMinSeverity resolves an account's effective default threshold, falling
 // back to the platform default when unset.
-func tenantMinSeverity(tn *tenant.Tenant) string {
-	if tn.MinSeverity == "" {
+func accountMinSeverity(acct *account.Account) string {
+	if acct.MinSeverity == "" {
 		return data.DefaultMinSeverity
 	}
-	return tn.MinSeverity
+	return acct.MinSeverity
 }
 
 // scanStatus renders the scan heartbeat shown in the UI header: a relative

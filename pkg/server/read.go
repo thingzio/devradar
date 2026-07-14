@@ -6,24 +6,24 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/thingzio/devradar/pkg/account"
 	"github.com/thingzio/devradar/pkg/data"
 	"github.com/thingzio/devradar/pkg/data/postgres"
 	"github.com/thingzio/devradar/pkg/middleware"
-	"github.com/thingzio/devradar/pkg/tenant"
 )
 
 // minSeverity resolves the effective threshold for a request: an explicit,
 // valid ?min_severity= query param wins; otherwise the tenant's default; each
 // endpoint resolves independently, so /findings and /events can differ.
-func minSeverity(r *http.Request, tn *tenant.Tenant) (string, bool) {
+func minSeverity(r *http.Request, acct *account.Account) (string, bool) {
 	if q := r.URL.Query().Get("min_severity"); q != "" {
 		if !data.ValidMinSeverity(q) {
 			return "", false
 		}
 		return q, true
 	}
-	if tn.MinSeverity != "" {
-		return tn.MinSeverity, true
+	if acct.MinSeverity != "" {
+		return acct.MinSeverity, true
 	}
 	return data.DefaultMinSeverity, true
 }
@@ -33,17 +33,17 @@ func minSeverity(r *http.Request, tn *tenant.Tenant) (string, bool) {
 // with a severity rollup. Paginated (?limit, ?cursor). ?min_severity trims the
 // breakdown.
 func (s *Server) handleListImages(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
-	if tn == nil {
+	acct := middleware.AccountFromContext(r.Context())
+	if acct == nil {
 		writeError(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
-	min, ok := minSeverity(r, tn)
+	min, ok := minSeverity(r, acct)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid min_severity (want critical|high|medium|low|negligible)")
 		return
 	}
-	images, next, err := s.store.ListRepoImages(r.Context(), tn.ID, min, r.URL.Query().Get("q"),
+	images, next, err := s.store.ListRepoImages(r.Context(), acct.ID, min, r.URL.Query().Get("q"),
 		r.URL.Query().Get("label"), r.URL.Query().Get("sort"), r.URL.Query().Get("dir"), r.URL.Query().Get("cursor"), pageLimit(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list images")
@@ -56,8 +56,8 @@ func (s *Server) handleListImages(w http.ResponseWriter, r *http.Request) {
 // generation first. The repository is a `repo=` query param (not a path segment)
 // because it contains slashes a stdlib ServeMux wildcard can't capture.
 func (s *Server) handleImageSBOMs(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
-	if tn == nil {
+	acct := middleware.AccountFromContext(r.Context())
+	if acct == nil {
 		writeError(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
@@ -67,7 +67,7 @@ func (s *Server) handleImageSBOMs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	sboms, next, err := s.store.SBOMsForRepo(r.Context(), tn.ID, repo,
+	sboms, next, err := s.store.SBOMsForRepo(r.Context(), acct.ID, repo,
 		q.Get("sort"), q.Get("dir"), q.Get("cursor"), pageLimit(r))
 	if err != nil {
 		writeReadErr(w, err, "failed to list sboms")
@@ -80,12 +80,12 @@ func (s *Server) handleImageSBOMs(w http.ResponseWriter, r *http.Request) {
 // (CUJ-3). The image is a `repo=` query param (its slashes preclude a path
 // wildcard); the legacy `ref=` param is still honored for an exact image_ref.
 func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
-	if tn == nil {
+	acct := middleware.AccountFromContext(r.Context())
+	if acct == nil {
 		writeError(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
-	min, ok := minSeverity(r, tn)
+	min, ok := minSeverity(r, acct)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid min_severity")
 		return
@@ -94,7 +94,7 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 	// Preferred: group by repository across every version/digest. The API keeps
 	// the documented contract: unknown-severity events are always surfaced.
 	if repo := r.URL.Query().Get("repo"); repo != "" {
-		events, next, err := s.store.RepoTimeline(r.Context(), tn.ID, repo, min, true,
+		events, next, err := s.store.RepoTimeline(r.Context(), acct.ID, repo, min, true,
 			r.URL.Query().Get("sort"), r.URL.Query().Get("dir"), r.URL.Query().Get("cursor"), pageLimit(r))
 		if err != nil {
 			writeReadErr(w, err, "failed to load timeline")
@@ -110,7 +110,7 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing repo (or legacy ref) query parameter")
 		return
 	}
-	events, err := s.store.ImageTimeline(r.Context(), tn.ID, ref, min, pageLimit(r))
+	events, err := s.store.ImageTimeline(r.Context(), acct.ID, ref, min, pageLimit(r))
 	if err != nil {
 		writeReadErr(w, err, "failed to load timeline")
 		return
@@ -120,24 +120,24 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 
 // handleGetSBOM returns one SBOM's metadata + severity breakdown.
 func (s *Server) handleGetSBOM(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
-	if tn == nil {
+	acct := middleware.AccountFromContext(r.Context())
+	if acct == nil {
 		writeError(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
-	min, ok := minSeverity(r, tn)
+	min, ok := minSeverity(r, acct)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid min_severity")
 		return
 	}
-	sb, err := s.store.GetSBOM(r.Context(), tn.ID, r.PathValue("id"), min)
+	sb, err := s.store.GetSBOM(r.Context(), acct.ID, r.PathValue("id"), min)
 	if err != nil {
 		writeReadErr(w, err, "failed to load sbom")
 		return
 	}
 	// Attach verification evidence when present. A missing row is the normal
 	// "no attestation submitted" case, not an error.
-	if att, aerr := s.store.GetAttestation(r.Context(), tn.ID, sb.SBOMID); aerr == nil {
+	if att, aerr := s.store.GetAttestation(r.Context(), acct.ID, sb.SBOMID); aerr == nil {
 		sb.Attestation = att
 	} else if !errors.Is(aerr, postgres.ErrNotFound) {
 		slog.Warn("load attestation evidence", "sbom_id", sb.SBOMID, "error", aerr)
@@ -148,12 +148,12 @@ func (s *Server) handleGetSBOM(w http.ResponseWriter, r *http.Request) {
 // handleArchiveSBOM stops tracking an SBOM (status='archived'): it drops from
 // the scan set and the images list; findings/events are retained. Idempotent.
 func (s *Server) handleArchiveSBOM(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
-	if tn == nil {
+	acct := middleware.AccountFromContext(r.Context())
+	if acct == nil {
 		writeError(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
-	if err := s.store.ArchiveSBOM(r.Context(), tn.ID, r.PathValue("id")); err != nil {
+	if err := s.store.ArchiveSBOM(r.Context(), acct.ID, r.PathValue("id")); err != nil {
 		writeReadErr(w, err, "failed to archive sbom")
 		return
 	}
@@ -163,12 +163,12 @@ func (s *Server) handleArchiveSBOM(w http.ResponseWriter, r *http.Request) {
 // handleFindings returns current findings for one of the tenant's SBOMs,
 // filtered to ?min_severity (or the tenant default); unknown always included.
 func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
-	if tn == nil {
+	acct := middleware.AccountFromContext(r.Context())
+	if acct == nil {
 		writeError(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
-	min, ok := minSeverity(r, tn)
+	min, ok := minSeverity(r, acct)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid min_severity")
 		return
@@ -176,7 +176,7 @@ func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
 	fixableOnly := r.URL.Query().Get("fixable") == "true"
 	showSuppressed := r.URL.Query().Get("suppressed") == "true"
 	q := r.URL.Query()
-	findings, next, err := s.store.FindingsBySBOM(r.Context(), tn.ID, r.PathValue("id"), min,
+	findings, next, err := s.store.FindingsBySBOM(r.Context(), acct.ID, r.PathValue("id"), min,
 		fixableOnly, showSuppressed, q.Get("sort"), q.Get("dir"), q.Get("cursor"), pageLimit(r))
 	if err != nil {
 		writeReadErr(w, err, "failed to load findings")
@@ -188,17 +188,17 @@ func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
 // handleEvents returns the change history for one of the tenant's SBOMs,
 // filtered to ?min_severity (or the tenant default); unknown always included.
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
-	if tn == nil {
+	acct := middleware.AccountFromContext(r.Context())
+	if acct == nil {
 		writeError(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
-	min, ok := minSeverity(r, tn)
+	min, ok := minSeverity(r, acct)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid min_severity")
 		return
 	}
-	events, next, err := s.store.EventsBySBOM(r.Context(), tn.ID, r.PathValue("id"), min,
+	events, next, err := s.store.EventsBySBOM(r.Context(), acct.ID, r.PathValue("id"), min,
 		r.URL.Query().Get("cursor"), pageLimit(r))
 	if err != nil {
 		writeReadErr(w, err, "failed to load events")
@@ -212,8 +212,8 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 // — e.g. Trivy finding 0 CVEs on an EOL distro it has no advisories for — so a
 // silently-absent scanner is visible here rather than just missing from findings.
 func (s *Server) handleFailures(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
-	if tn == nil {
+	acct := middleware.AccountFromContext(r.Context())
+	if acct == nil {
 		writeError(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
@@ -223,7 +223,7 @@ func (s *Server) handleFailures(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	failures, err := s.store.FailuresBySBOM(r.Context(), tn.ID, r.PathValue("id"), limit)
+	failures, err := s.store.FailuresBySBOM(r.Context(), acct.ID, r.PathValue("id"), limit)
 	if err != nil {
 		writeReadErr(w, err, "failed to load failures")
 		return

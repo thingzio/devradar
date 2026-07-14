@@ -79,12 +79,12 @@ func newAdminMetricsConfig() *adminMetricsConfig {
 // handleAdminMetrics renders GCP Cloud Monitoring series for the serve service
 // and scan job. Disabled (informational) when no GCP project is resolvable.
 func (s *Server) handleAdminMetrics(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
-	auditLog("view_metrics", tn, r.URL.Path, r.RemoteAddr, "")
+	user := middleware.UserFromContext(r.Context())
+	auditLog("view_metrics", user, r.URL.Path, r.RemoteAddr, "")
 
 	cfg := newAdminMetricsConfig()
 	if cfg == nil {
-		render(w, "admin_metrics.html", s.adminBase(tn, "metrics", map[string]any{
+		render(w, "admin_metrics.html", s.adminBase(user, "metrics", map[string]any{
 			"Title":    "Admin — Metrics",
 			"Disabled": true,
 		}))
@@ -108,7 +108,7 @@ func (s *Server) handleAdminMetrics(w http.ResponseWriter, r *http.Request) {
 	// on error we surface a short note but still render the raw series.
 	analysis, analysisErr := analyzeMetrics(r.Context(), raw)
 
-	render(w, "admin_metrics.html", s.adminBase(tn, "metrics", map[string]any{
+	render(w, "admin_metrics.html", s.adminBase(user, "metrics", map[string]any{
 		"Title":       "Admin — Metrics",
 		"Disabled":    false,
 		"ProjectID":   cfg.projectID,

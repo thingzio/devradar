@@ -12,14 +12,9 @@ import (
 // digest, and POST it — all with copy-paste examples targeting this deployment's
 // own base URL so a user can paste them verbatim.
 func (s *Server) handleSubmitGuide(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
-	render(w, "submit.html", map[string]any{
-		"Title":     "Docs",
-		"SignedIn":  true,
-		"Tab":       "docs",
-		"Email":     tn.Email,
-		"AvatarURL": tn.AvatarURL,
-		"Version":   s.opts.Version,
-		"BaseURL":   config.BaseURL(),
-	})
+	access := middleware.AccessFromContext(r.Context())
+	render(w, "submit.html", struct {
+		chromeView
+		BaseURL string
+	}{chromeView: s.chrome(access, "Docs", "docs"), BaseURL: config.BaseURL()})
 }

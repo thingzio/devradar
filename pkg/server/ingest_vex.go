@@ -17,8 +17,8 @@ const maxVEXBytes = 5 << 20 // 5 MiB
 // is a tenant assertion (unverified); it suppresses not_affected/fixed findings
 // as a read-time overlay, never mutating findings.
 func (s *Server) handleSubmitVEX(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
-	if tn == nil {
+	acct := middleware.AccountFromContext(r.Context())
+	if acct == nil {
 		writeError(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
@@ -37,7 +37,7 @@ func (s *Server) handleSubmitVEX(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
-	id, matched, err := s.store.SaveVEXDocument(r.Context(), tn.ID, doc)
+	id, matched, err := s.store.SaveVEXDocument(r.Context(), acct.ID, doc)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to store VEX document")
 		return
@@ -54,12 +54,12 @@ func (s *Server) handleSubmitVEX(w http.ResponseWriter, r *http.Request) {
 
 // handleListVEX returns the tenant's submitted VEX documents (metadata only).
 func (s *Server) handleListVEX(w http.ResponseWriter, r *http.Request) {
-	tn := middleware.TenantFromContext(r.Context())
-	if tn == nil {
+	acct := middleware.AccountFromContext(r.Context())
+	if acct == nil {
 		writeError(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
-	docs, err := s.store.ListVEXDocuments(r.Context(), tn.ID)
+	docs, err := s.store.ListVEXDocuments(r.Context(), acct.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list VEX documents")
 		return

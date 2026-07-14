@@ -1,23 +1,28 @@
-// Package middleware provides HTTP auth and the tenant context. DevRadar has two
-// passwordless auth surfaces: API tokens (Bearer) for CI submitting SBOMs, and
-// magic-link session cookies for the token-minting UI.
+// Package middleware provides HTTP authentication and typed request access.
 package middleware
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
 	"strings"
 
-	"github.com/thingzio/devradar/pkg/tenant"
+	"github.com/thingzio/devradar/pkg/account"
+	"github.com/thingzio/devradar/pkg/data/postgres"
 )
 
-type contextKey string
+type contextKey uint8
 
-const tenantContextKey contextKey = "tenant"
+const (
+	userContextKey contextKey = iota
+	sessionContextKey
+	accessContextKey
+	accountContextKey
+	actorContextKey
+)
 
 const (
 	cookieSecure = "__Host-session"
@@ -43,7 +48,7 @@ func SessionCookieName() string { return cookieName }
 
 // RequireAPIToken validates an Authorization: Bearer token. API routes; 401 JSON
 // on failure.
-func RequireAPIToken(db *sql.DB) func(http.Handler) http.Handler {
+func RequireAPIToken(store *postgres.Store) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token := bearer(r)
@@ -51,24 +56,25 @@ func RequireAPIToken(db *sql.DB) func(http.Handler) http.Handler {
 				writeError(w, http.StatusUnauthorized, "missing or invalid authorization header")
 				return
 			}
-			tn, err := tenant.ValidateAPIToken(r.Context(), db, token)
+			acct, actor, err := store.ValidateAPIToken(r.Context(), token)
 			if err != nil {
 				slog.Debug("invalid api token", "error", err)
 				writeError(w, http.StatusUnauthorized, "invalid api token")
 				return
 			}
-			if tn.Status == tenant.StatusSuspended {
+			if acct.Status == "suspended" {
 				writeError(w, http.StatusForbidden, "account suspended")
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(WithTenant(r.Context(), tn)))
+			ctx := context.WithValue(r.Context(), accountContextKey, acct)
+			ctx = context.WithValue(ctx, actorContextKey, actor)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
 
-// RequireAuth validates the session cookie. UI routes; redirects to loginURL on
-// failure.
-func RequireAuth(db *sql.DB, loginURL string) func(http.Handler) http.Handler {
+// RequireUser authenticates a browser user without requiring an active account.
+func RequireUser(store *postgres.Store, loginURL string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			cookie, err := r.Cookie(cookieName)
@@ -76,13 +82,17 @@ func RequireAuth(db *sql.DB, loginURL string) func(http.Handler) http.Handler {
 				http.Redirect(w, r, loginURL, http.StatusFound)
 				return
 			}
-			tn, err := tenant.ValidateSession(r.Context(), db, cookie.Value)
+			session, err := store.ValidateSession(r.Context(), cookie.Value)
 			if err != nil {
 				ClearSessionCookie(w)
 				http.Redirect(w, r, loginURL, http.StatusFound)
 				return
 			}
-			if tn.Status == tenant.StatusSuspended {
+			if session.User.Status != "active" {
+				if err := store.DestroySession(r.Context(), cookie.Value); err != nil {
+					slog.Error("destroy suspended user session",
+						"user_id", session.User.ID, "path", r.URL.Path, "error", err)
+				}
 				ClearSessionCookie(w)
 				http.Redirect(w, r, loginURL+"?error=suspended", http.StatusFound)
 				return
@@ -96,22 +106,94 @@ func RequireAuth(db *sql.DB, loginURL string) func(http.Handler) http.Handler {
 					SetCSRFCookie(w, token)
 				}
 			}
-			next.ServeHTTP(w, r.WithContext(WithTenant(r.Context(), tn)))
+			actor := account.Actor{Kind: account.ActorUser, UserID: session.User.ID}
+			ctx := context.WithValue(r.Context(), userContextKey, &session.User)
+			ctx = context.WithValue(ctx, sessionContextKey, session)
+			ctx = context.WithValue(ctx, actorContextKey, actor)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
 
-// TenantFromContext returns the authenticated tenant, or nil.
-func TenantFromContext(ctx context.Context) *tenant.Tenant {
-	if t, ok := ctx.Value(tenantContextKey).(*tenant.Tenant); ok {
-		return t
+// RequireAccount revalidates the selected active account and membership.
+// RequireUser must wrap it so the authenticated session is present in context.
+func RequireAccount(store *postgres.Store, accountsURL string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			session, _ := r.Context().Value(sessionContextKey).(*account.Session)
+			user := UserFromContext(r.Context())
+			if session == nil || user == nil {
+				http.Redirect(w, r, accountsURL, http.StatusFound)
+				return
+			}
+			if session.ActiveAccountID == nil {
+				http.Redirect(w, r, accountsURL, http.StatusFound)
+				return
+			}
+			access, err := store.GetAccess(r.Context(), user.ID, *session.ActiveAccountID)
+			if errors.Is(err, postgres.ErrNotFound) {
+				reconcileErr := store.ReconcileLegacyAccount(r.Context(), *session.ActiveAccountID)
+				switch {
+				case reconcileErr == nil:
+					access, err = store.GetAccess(r.Context(), user.ID, *session.ActiveAccountID)
+				case !errors.Is(reconcileErr, postgres.ErrNotFound):
+					err = reconcileErr
+				}
+			}
+			if errors.Is(err, postgres.ErrNotFound) {
+				http.Redirect(w, r, unavailableAccountURL(accountsURL), http.StatusFound)
+				return
+			}
+			if err != nil {
+				slog.Error("load account access", "error", err)
+				http.Error(w, "failed to load account", http.StatusInternalServerError)
+				return
+			}
+			actor := account.Actor{Kind: account.ActorUser, UserID: access.Actor.ID}
+			ctx := context.WithValue(r.Context(), accessContextKey, access)
+			ctx = context.WithValue(ctx, accountContextKey, &access.Account)
+			ctx = context.WithValue(ctx, actorContextKey, actor)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+func unavailableAccountURL(accountsURL string) string {
+	separator := "?"
+	if strings.Contains(accountsURL, "?") {
+		separator = "&"
+	}
+	return accountsURL + separator + "error=unavailable"
+}
+
+// UserFromContext returns the authenticated browser user, or nil.
+func UserFromContext(ctx context.Context) *account.User {
+	if user, ok := ctx.Value(userContextKey).(*account.User); ok {
+		return user
 	}
 	return nil
 }
 
-// WithTenant attaches a tenant to a context (exported for tests).
-func WithTenant(ctx context.Context, tn *tenant.Tenant) context.Context {
-	return context.WithValue(ctx, tenantContextKey, tn)
+// AccessFromContext returns the active browser account access, or nil.
+func AccessFromContext(ctx context.Context) *account.Access {
+	if access, ok := ctx.Value(accessContextKey).(*account.Access); ok {
+		return access
+	}
+	return nil
+}
+
+// AccountFromContext returns the authenticated API or browser account, or nil.
+func AccountFromContext(ctx context.Context) *account.Account {
+	if acct, ok := ctx.Value(accountContextKey).(*account.Account); ok {
+		return acct
+	}
+	return nil
+}
+
+// ActorFromContext returns the authenticated user or API-token actor.
+func ActorFromContext(ctx context.Context) account.Actor {
+	actor, _ := ctx.Value(actorContextKey).(account.Actor)
+	return actor
 }
 
 // SetSessionCookie sets the session cookie with the scheme-appropriate flags.
