@@ -1,0 +1,25 @@
+{{template "head" .}}
+{{template "nav" .}}
+<main class="page-content narrow">
+  <h1 class="page-title">Account settings</h1>
+  <p class="sub">Shared settings for {{.AccountName}}.</p>
+  {{if .CanManageSettings}}
+  {{if .Renamed}}<div class="msg ok">Account name updated.</div>{{end}}
+
+  <div class="card">
+    <div class="card-head"><h2>Account name</h2></div>
+    <form class="row" method="post" action="/account/settings/name">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <label for="account-name">Account name</label>
+      <input id="account-name" type="text" name="name" value="{{.AccountName}}" data-max-codepoints="80" required>
+      <button class="btn" type="submit">Save name</button>
+    </form>
+  </div>
+
+  <div class="card settings-links">
+    <div><h2>Security policy</h2><p class="muted">Manage browser alert and severity policy.</p><a href="/tokens">Alert and severity settings →</a></div>
+    <div><h2>License policy</h2><p class="muted">Manage account-wide license rules.</p><a href="/licenses">License settings →</a></div>
+  </div>
+  {{end}}
+</main>
+{{template "foot" .}}

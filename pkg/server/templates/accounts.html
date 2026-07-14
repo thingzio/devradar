@@ -1,0 +1,39 @@
+{{template "head" .}}
+{{template "nav" .}}
+<main class="page-content narrow">
+  <h1 class="page-title">Accounts</h1>
+  <p class="sub">Choose the account whose evidence and policy you want to work with.</p>
+
+  {{if eq .Error "unavailable"}}<div class="msg err">That account is no longer available to you.</div>{{end}}
+  {{if .Left}}<div class="msg ok">You left the account.</div>{{end}}
+
+  {{if .Accounts}}
+  <div class="account-list">
+    {{range .Accounts}}
+    <article class="card account-row">
+      <div>
+        <h2>{{.Account.Name}}</h2>
+        <span class="pill">{{.Membership.Role}}</span>
+      </div>
+      <div class="account-actions">
+        <form method="post" action="/accounts/select">
+          <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+          <input type="hidden" name="account_id" value="{{.Account.ID}}">
+          <button class="btn" type="submit">Open account</button>
+        </form>
+        <form method="post" action="/accounts/{{.Account.ID}}/leave" data-confirm="Leave {{.Account.Name}}? You will need a new invitation to return.">
+          <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+          <button class="btn danger" type="submit">Leave</button>
+        </form>
+      </div>
+    </article>
+    {{end}}
+  </div>
+  {{else}}
+  <div class="card empty-account">
+    <h2>No account access</h2>
+    <p class="muted">Ask an account admin for an invitation. Once accepted, the account will appear here.</p>
+  </div>
+  {{end}}
+</main>
+{{template "foot" .}}

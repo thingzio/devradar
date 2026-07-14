@@ -590,6 +590,28 @@ func (s *Store) SelectSessionAccount(ctx context.Context, raw, userID, accountID
 	return nil
 }
 
+// ClearSessionAccount clears the selected and compatibility account only when
+// the same session user still has accountID selected. The comparison prevents
+// a stale leave/revoke response from clobbering a newer account switch.
+func (s *Store) ClearSessionAccount(
+	ctx context.Context,
+	raw, userID, accountID string,
+) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE devradar_session
+		SET tenant_id=NULL,active_account_id=NULL
+		WHERE id=$1 AND user_id=$2 AND active_account_id=$3`,
+		authn.HashToken(raw), userID, accountID)
+	if err != nil {
+		return false, fmt.Errorf("clear session account: %w", err)
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("read session account clear result: %w", err)
+	}
+	return updated == 1, nil
+}
+
 // DestroySession invalidates a browser session.
 func (s *Store) DestroySession(ctx context.Context, raw string) error {
 	if _, err := s.db.ExecContext(ctx,

@@ -18,7 +18,17 @@ func TestRoleMatrixTemplateControls(t *testing.T) {
 		t.Run(string(role), func(t *testing.T) {
 			t.Parallel()
 			chrome := chromeForRole(role)
+			member := account.Access{
+				Actor:      account.User{ID: "member-id", Email: "member@example.com"},
+				Membership: account.Membership{Role: account.RoleReader},
+			}
 			pages := map[string]string{
+				"account_settings": renderTemplateForRole(t, "account_settings.html", accountSettingsView{
+					chromeView: chrome, CSRFToken: "csrf",
+				}),
+				"account_members": renderTemplateForRole(t, "account_members.html", accountMembersView{
+					chromeView: chrome, Members: []account.Access{member}, CSRFToken: "csrf",
+				}),
 				"alerts": renderTemplateForRole(t, "alerts.html", alertsView{chromeView: chrome}),
 				"api": renderTemplateForRole(t, "api.html", struct {
 					chromeView
@@ -56,17 +66,23 @@ func TestRoleMatrixTemplateControls(t *testing.T) {
 			assertTemplateControl(t, pages["overview_empty"], `href="/tokens" class="btn secondary">Create an API token`, role.Can(account.ManageCredentials))
 			assertTemplateControl(t, pages["submit"], `href="/tokens">Tokens &amp; settings`, role.Can(account.ManageCredentials))
 			assertTemplateControl(t, pages["api"], `href="/tokens">Tokens &amp; settings`, role.Can(account.ManageCredentials))
+			assertTemplateControl(t, pages["account_settings"], `action="/account/settings/name"`, role.Can(account.ManageSettings))
+			assertTemplateControl(t, pages["account_members"], `action="/account/members/member-id/role"`, role.Can(account.ManageMembers))
+			assertTemplateControl(t, pages["account_members"], `action="/account/members/member-id/revoke"`, role.Can(account.ManageMembers))
 
 			for name, page := range pages {
 				assertTemplateControl(t, page, `href="/tokens" class="user-menu-item"`, role.Can(account.ManageCredentials))
+				assertTemplateControl(t, page, `href="/accounts" class="user-menu-item"`, true)
+				assertTemplateControl(t, page, `href="/account/settings" class="user-menu-item"`, role.Can(account.ManageSettings))
+				assertTemplateControl(t, page, `href="/account/members" class="user-menu-item"`, role.Can(account.ManageMembers))
 				if !role.Can(account.ManageCredentials) && strings.Contains(page, `href="/tokens"`) {
 					t.Errorf("%s rendered an admin-only token entry point", name)
 				}
 				if !role.Can(account.ManageSettings) && strings.Contains(page, `action="/settings/`) {
 					t.Errorf("%s rendered an admin-only settings entry point", name)
 				}
-				if strings.Contains(page, `action="/account/members`) {
-					t.Errorf("%s rendered a future member mutation control", name)
+				if !role.Can(account.ManageMembers) && strings.Contains(page, `action="/account/members`) {
+					t.Errorf("%s rendered an admin-only member mutation control", name)
 				}
 			}
 		})
@@ -78,6 +94,8 @@ func TestAccountTemplateAdminEntryPointInventory(t *testing.T) {
 
 	want := []string{
 		"templates/_chrome.html",
+		"templates/account_members.html",
+		"templates/account_settings.html",
 		"templates/alerts.html",
 		"templates/api.html",
 		"templates/licenses.html",
@@ -94,7 +112,8 @@ func TestAccountTemplateAdminEntryPointInventory(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if bytes.Contains(body, []byte(`/tokens`)) || bytes.Contains(body, []byte(`/settings/`)) {
+		if bytes.Contains(body, []byte(`/tokens`)) || bytes.Contains(body, []byte(`/settings/`)) ||
+			bytes.Contains(body, []byte(`/account/`)) {
 			got = append(got, path)
 		}
 		return nil
@@ -105,6 +124,50 @@ func TestAccountTemplateAdminEntryPointInventory(t *testing.T) {
 	sort.Strings(got)
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("account template entry-point files = %q, want %q", got, want)
+	}
+}
+
+func TestAccountsTemplateHasEqualRoleControlsAndNoCreatorPrivilege(t *testing.T) {
+	t.Parallel()
+	for _, role := range []account.Role{account.RoleAdmin, account.RoleEditor, account.RoleReader} {
+		access := account.Access{
+			Actor:      account.User{ID: "user-id", Email: "member@example.com"},
+			Account:    account.Account{ID: "account-id", Name: "Shared account"},
+			Membership: account.Membership{AccountID: "account-id", UserID: "user-id", Role: role},
+		}
+		page := renderTemplateForRole(t, "accounts.html", accountsView{
+			chromeView: chromeView{Title: "Accounts", SignedIn: true},
+			Accounts:   []account.Access{access}, CSRFToken: "csrf",
+		})
+		for _, marker := range []string{
+			`action="/accounts/select"`, `action="/accounts/account-id/leave"`, ">" + string(role) + "<",
+		} {
+			if !strings.Contains(page, marker) {
+				t.Errorf("%s account chooser missing %q", role, marker)
+			}
+		}
+		for _, forbidden := range []string{"owner", "creator", "Create account"} {
+			if strings.Contains(strings.ToLower(page), strings.ToLower(forbidden)) {
+				t.Errorf("%s account chooser exposed hidden privilege/action %q", role, forbidden)
+			}
+		}
+	}
+}
+
+func TestAccountSettingsNameUsesUnicodeCodePointLimit(t *testing.T) {
+	t.Parallel()
+	page := renderTemplateForRole(t, "account_settings.html", accountSettingsView{
+		chromeView: chromeForRole(account.RoleAdmin), CSRFToken: "csrf",
+	})
+	if !strings.Contains(page, `data-max-codepoints="80"`) {
+		t.Fatal("account name input missing Unicode code-point limit")
+	}
+	if strings.Contains(page, `maxlength="80"`) {
+		t.Fatal("account name input uses UTF-16 maxlength instead of code-point validation")
+	}
+	if !strings.Contains(page, `<label for="account-name">Account name</label>`) ||
+		!strings.Contains(page, `id="account-name"`) {
+		t.Fatal("account name input is not associated with an explicit label")
 	}
 }
 

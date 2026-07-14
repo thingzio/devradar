@@ -56,6 +56,11 @@ func TestRoleMatrix(t *testing.T) {
 		{"revoke token", http.MethodPost, "/tokens/00000000-0000-0000-0000-000000000000/revoke", account.ManageCredentials, false},
 		{"minimum severity", http.MethodPost, "/settings/min-severity", account.ManageSettings, false},
 		{"alert policy", http.MethodPost, "/settings/alerts", account.ManageSettings, false},
+		{"account settings", http.MethodGet, "/account/settings", account.ManageSettings, false},
+		{"account name", http.MethodPost, "/account/settings/name", account.ManageSettings, false},
+		{"account members", http.MethodGet, "/account/members", account.ManageMembers, false},
+		{"member role", http.MethodPost, "/account/members/00000000-0000-0000-0000-000000000000/role", account.ManageMembers, false},
+		{"member revoke", http.MethodPost, "/account/members/00000000-0000-0000-0000-000000000000/revoke", account.ManageMembers, false},
 	}
 
 	for _, role := range []account.Role{account.RoleAdmin, account.RoleEditor, account.RoleReader} {

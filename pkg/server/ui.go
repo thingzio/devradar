@@ -117,6 +117,10 @@ func (s *Server) registerUI(mux *http.ServeMux) {
 	// victim's session to be cleared. It intentionally does NOT require an active
 	// session (authed) — clearing an already-invalid cookie is harmless and idempotent.
 	mux.Handle("POST /auth/logout", csrf(http.HandlerFunc(s.handleLogout)))
+	requireUser := middleware.RequireUser(s.store, loginPath)
+	mux.Handle("GET /accounts", requireUser(http.HandlerFunc(s.handleAccounts)))
+	mux.Handle("POST /accounts/select", requireUser(csrf(http.HandlerFunc(s.handleSelectAccount))))
+	mux.Handle("POST /accounts/{id}/leave", requireUser(csrf(http.HandlerFunc(s.handleLeaveAccount))))
 	s.registerAccountRoutes(mux)
 
 	s.registerAdmin(mux)

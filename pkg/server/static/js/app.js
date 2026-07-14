@@ -41,6 +41,21 @@
     });
   });
 
+  // HTML maxlength counts UTF-16 code units, while account names are bounded
+  // by Unicode code points. Keep browser validation aligned with the Go/SQL
+  // contract without weakening the server-side check.
+  document.addEventListener("DOMContentLoaded", function () {
+    document.querySelectorAll("[data-max-codepoints]").forEach(function (el) {
+      var max = Number(el.getAttribute("data-max-codepoints"));
+      function validate() {
+        var tooLong = Array.from(el.value).length > max;
+        el.setCustomValidity(tooLong ? "Use " + max + " characters or fewer." : "");
+      }
+      el.addEventListener("input", validate);
+      validate();
+    });
+  });
+
   // Confirm-before-submit. Forms with [data-confirm="message"] prompt before
   // submitting (destructive admin actions), replacing inline onsubmit=return confirm().
   document.addEventListener("DOMContentLoaded", function () {

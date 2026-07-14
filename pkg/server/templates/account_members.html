@@ -1,0 +1,43 @@
+{{template "head" .}}
+{{template "nav" .}}
+<main class="page-content">
+  <h1 class="page-title">Account members</h1>
+  <p class="sub">All admins are equal. An account must always retain at least one active admin.</p>
+  {{if .CanManageMembers}}
+  {{if .Changed}}<div class="msg ok">Membership updated.</div>{{end}}
+
+  <div class="card table-scroll">
+    <table>
+      <thead><tr><th>Member</th><th>Role</th><th>Joined</th><th></th></tr></thead>
+      <tbody>
+        {{range .Members}}
+        <tr>
+          <td>{{.Actor.Email}}</td>
+          <td>
+            <form class="row member-role-form" method="post" action="/account/members/{{.Actor.ID}}/role">
+              <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+              <select name="role" aria-label="Role for {{.Actor.Email}}">
+                <option value="admin" {{if eq .Membership.Role "admin"}}selected{{end}}>Admin</option>
+                <option value="editor" {{if eq .Membership.Role "editor"}}selected{{end}}>Editor</option>
+                <option value="reader" {{if eq .Membership.Role "reader"}}selected{{end}}>Reader</option>
+              </select>
+              <button class="btn secondary" type="submit">Update</button>
+            </form>
+          </td>
+          <td>{{.Membership.AcceptedAt.Format "2006-01-02"}}</td>
+          <td>
+            <form method="post" action="/account/members/{{.Actor.ID}}/revoke" data-confirm="Remove {{.Actor.Email}} from this account?">
+              <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+              <button class="btn danger" type="submit">Remove</button>
+            </form>
+          </td>
+        </tr>
+        {{else}}
+        <tr><td colspan="4" class="muted">No active members.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+</main>
+{{template "foot" .}}

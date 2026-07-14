@@ -5,6 +5,7 @@ import "github.com/thingzio/devradar/pkg/account"
 type chromeView struct {
 	Title                string
 	SignedIn             bool
+	HasAccount           bool
 	Tab                  string
 	Email                string
 	AvatarURL            string
@@ -25,6 +26,7 @@ func (s *Server) chrome(access *account.Access, title, tab string) chromeView {
 		return view
 	}
 	view.SignedIn = true
+	view.HasAccount = true
 	view.Email = access.Actor.Email
 	view.AvatarURL = access.Actor.AvatarURL
 	view.AccountName = access.Account.Name
@@ -35,5 +37,14 @@ func (s *Server) chrome(access *account.Access, title, tab string) chromeView {
 	view.CanManageSettings = access.Can(account.ManageSettings)
 	view.CanManageCredentials = access.Can(account.ManageCredentials)
 	view.CanManageMembers = access.Can(account.ManageMembers)
+	return view
+}
+
+func (s *Server) userChrome(user *account.User, title, tab string) chromeView {
+	view := chromeView{Title: title, SignedIn: true, Tab: tab, Version: s.opts.Version}
+	if user != nil {
+		view.Email = user.Email
+		view.AvatarURL = user.AvatarURL
+	}
 	return view
 }

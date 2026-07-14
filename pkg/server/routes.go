@@ -47,6 +47,11 @@ var browserRoutePolicy = []browserRoute{
 	{"POST /tokens/{id}/revoke", account.ManageCredentials, true, (*Server).handleRevokeToken},
 	{"POST /settings/min-severity", account.ManageSettings, true, (*Server).handleSetMinSeverity},
 	{"POST /settings/alerts", account.ManageSettings, true, (*Server).handleSetAlertPolicy},
+	{"GET /account/settings", account.ManageSettings, false, (*Server).handleAccountSettings},
+	{"POST /account/settings/name", account.ManageSettings, true, (*Server).handleUpdateAccountName},
+	{"GET /account/members", account.ManageMembers, false, (*Server).handleAccountMembers},
+	{"POST /account/members/{id}/role", account.ManageMembers, true, (*Server).handleChangeMemberRole},
+	{"POST /account/members/{id}/revoke", account.ManageMembers, true, (*Server).handleRevokeMembership},
 }
 
 func (s *Server) registerAccountRoutes(mux *http.ServeMux) {

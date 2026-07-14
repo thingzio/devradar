@@ -797,6 +797,16 @@ table.findings td { vertical-align: middle; }
   display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap;
 }
 
+/* Account chooser and administration */
+.account-list { display: grid; gap: 0.9rem; }
+.account-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin: 0; }
+.account-row h2 { margin-bottom: 0.45rem; }
+.account-actions { display: flex; align-items: center; gap: 0.65rem; flex-wrap: wrap; }
+.empty-account { text-align: center; padding: 2.5rem 1.5rem; }
+.settings-links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.5rem; }
+.member-role-form { flex-wrap: nowrap; }
+.table-scroll { overflow-x: auto; }
+
 @media (max-width: 640px) {
   .landing .hero-signin form.row,
   .landing .lp-cta-form {
@@ -823,4 +833,6 @@ table.findings td { vertical-align: middle; }
   .overview-work-priority { flex-direction: row; align-items: center; flex-wrap: wrap; }
   .overview-work-open { justify-self: start; }
   .compare-grid { grid-template-columns: 1fr; }
+  .account-row { align-items: flex-start; flex-direction: column; }
+  .settings-links { grid-template-columns: 1fr; }
 }

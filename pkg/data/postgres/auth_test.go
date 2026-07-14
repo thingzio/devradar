@@ -553,6 +553,44 @@ func TestSessionDualWriteValidationAndSelection(t *testing.T) {
 	}
 }
 
+func TestSessionCompareAndClearAccount(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	email := "session-clear-" + randID(t)[:8] + "@example.com"
+	user, firstAccount, err := st.ResolveDirectIdentity(ctx, account.VerifiedIdentity{
+		Provider: "magiclink", Subject: email, Email: email,
+	})
+	if err != nil {
+		t.Fatalf("resolve direct identity: %v", err)
+	}
+	secondAccountID := seedAccountMembership(t, st, user.ID, "reader")
+	raw, err := st.CreateSession(ctx, user.ID, &firstAccount.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create selected session: %v", err)
+	}
+
+	cleared, err := st.ClearSessionAccount(ctx, raw, user.ID, firstAccount.ID)
+	if err != nil || !cleared {
+		t.Fatalf("clear exact session account = %v, %v; want true, nil", cleared, err)
+	}
+	assertSessionAccounts(t, st, raw, nil, nil)
+
+	if err := st.SelectSessionAccount(ctx, raw, user.ID, secondAccountID); err != nil {
+		t.Fatalf("select newer account: %v", err)
+	}
+	cleared, err = st.ClearSessionAccount(ctx, raw, user.ID, firstAccount.ID)
+	if err != nil || cleared {
+		t.Fatalf("clear stale selection = %v, %v; want false, nil", cleared, err)
+	}
+	assertSessionAccounts(t, st, raw, &secondAccountID, &secondAccountID)
+
+	cleared, err = st.ClearSessionAccount(ctx, raw, firstAccount.ID, secondAccountID)
+	if err != nil || cleared {
+		t.Fatalf("clear with wrong user = %v, %v; want false, nil", cleared, err)
+	}
+	assertSessionAccounts(t, st, raw, &secondAccountID, &secondAccountID)
+}
+
 func TestSelectSessionAccountRevalidatesAuthorizationPredicates(t *testing.T) {
 	tests := []struct {
 		name   string

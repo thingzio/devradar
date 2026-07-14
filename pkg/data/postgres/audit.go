@@ -155,21 +155,21 @@ func authorizeAuditActor(ctx context.Context, tx *sql.Tx, accountID string, acto
 	return nil
 }
 
-// UpdateAccountNameAudited changes the account display name with durable user
-// or platform attribution.
+// UpdateAccountNameAudited changes the account display name with durable admin
+// user attribution.
 func (s *Store) UpdateAccountNameAudited(ctx context.Context, accountID, name string, actor account.Actor, requestID string) error {
 	if name == "" || name != strings.TrimSpace(name) || utf8.RuneCountInString(name) > 80 {
 		return fmt.Errorf("invalid account name")
 	}
-	return s.WithAudit(ctx, accountID, actor, AuditEvent{
+	return s.withLockedAccountAudit(ctx, accountID, actor, AuditEvent{
 		Action: "account.name.update", TargetType: "account", TargetID: accountID,
 		Outcome: "success", RequestID: requestID,
-	}, func(tx *sql.Tx) error {
-		changed, err := updateAccountName(ctx, tx, accountID, name)
-		if err == nil && !changed {
-			return errAuditNoMutation
+	}, func(tx *sql.Tx) (bool, error) {
+		if err := requireAdminMembership(ctx, tx, accountID, actor); err != nil {
+			return false, err
 		}
-		return err
+		changed, err := updateAccountName(ctx, tx, accountID, name)
+		return changed, err
 	})
 }
 
