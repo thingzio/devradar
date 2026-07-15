@@ -41,6 +41,20 @@ func TestAccountSharingFeatureFlagIsTerraformManagedAndDisabledByDefault(t *test
 	t.Fatal("serve service does not set DEVRADAR_ACCOUNT_SHARING_ENABLED")
 }
 
+func TestDeliveryJobUsesCloudRunGen2MinimumMemory(t *testing.T) {
+	t.Parallel()
+
+	cloudRun, err := os.ReadFile("cloudrun.tf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivery := terraformResourceBlock(t, string(cloudRun),
+		"google_cloud_run_v2_job", "delivery")
+	if !regexp.MustCompile(`(?m)^\s*memory\s*=\s*"512Mi"\s*$`).MatchString(delivery) {
+		t.Fatalf("delivery job must use at least 512Mi with Cloud Run gen2:\n%s", delivery)
+	}
+}
+
 func terraformVariableBlock(t *testing.T, source, name string) string {
 	t.Helper()
 	pattern := `(?ms)^variable "` + regexp.QuoteMeta(name) + `" \{\n(.*?^\})`
