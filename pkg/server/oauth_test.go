@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -214,23 +215,29 @@ func TestGitHubOAuth_Unverified(t *testing.T) {
 }
 
 // TestGitHubOAuth_UnifiesWithMagicLink: signing in with GitHub whose verified
-// email matches an existing magic-link tenant resolves to the SAME tenant (email
-// is the join key) — not a second account.
+// email matches an existing magic-link user resolves to the same user and
+// account membership rather than creating a second account.
 func TestGitHubOAuth_UnifiesWithMagicLink(t *testing.T) {
+	suffix, err := authn.NewToken("")
+	if err != nil {
+		t.Fatalf("generate identity suffix: %v", err)
+	}
+	email := "same-" + suffix[:8] + "@example.com"
+	subject := "unify-" + suffix[8:16]
 	srv, st := oauthServer(t, fakeOAuth{id: &oauth.Identity{
-		Provider: "github", Subject: "999", Email: "same@example.com",
+		Provider: "github", Subject: subject, Email: email,
 	}})
 	h := srv.Handler()
 	ctx := context.Background()
 
-	// Pre-existing tenant created via the magic-link flow.
-	_, existing, err := st.ResolveDirectIdentity(ctx, account.VerifiedIdentity{
-		Provider: "magiclink", Subject: "same@example.com", Email: "same@example.com",
+	// Pre-existing user and account created via the magic-link flow.
+	existingUser, existingAccount, err := st.ResolveDirectIdentity(ctx, account.VerifiedIdentity{
+		Provider: "magiclink", Subject: email, Email: email,
 	})
 	if err != nil {
 		t.Fatalf("seed magic-link account: %v", err)
 	}
-	if existing == nil {
+	if existingAccount == nil {
 		t.Fatal("seed magic-link account: no account")
 	}
 
@@ -240,18 +247,29 @@ func TestGitHubOAuth_UnifiesWithMagicLink(t *testing.T) {
 	req.AddCookie(state)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusFound {
-		t.Fatalf("callback: status = %d, want 302", rec.Code)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/overview" {
+		t.Fatalf("callback: status=%d location=%q, want 302 /overview",
+			rec.Code, rec.Header().Get("Location"))
 	}
 
-	// Exactly one tenant exists for that email, and the GitHub identity links to it.
-	var linked string
+	// The new identity owns the existing user directly. tenant_id is only a
+	// legacy compatibility mapping and remains null for additional identities.
+	var linkedUser string
+	var compatibilityAccount sql.NullString
+	var accounts int
 	if err := st.DB().QueryRowContext(ctx, `
-		SELECT tenant_id FROM devradar_identity WHERE provider='github' AND subject='999'`).
-		Scan(&linked); err != nil {
+		SELECT i.user_id,i.tenant_id,
+		       (SELECT count(*) FROM devradar_tenant WHERE email=$2)
+		FROM devradar_identity i WHERE i.provider='github' AND i.subject=$1`, subject, email).
+		Scan(&linkedUser, &compatibilityAccount, &accounts); err != nil {
 		t.Fatalf("query identity: %v", err)
 	}
-	if linked != existing.ID {
-		t.Errorf("github identity linked to tenant %s, want existing %s", linked, existing.ID)
+	if linkedUser != existingUser.ID || compatibilityAccount.Valid || accounts != 1 {
+		t.Errorf("github identity user/compatibility account/account count = %s/%v/%d, want %s/null/1",
+			linkedUser, compatibilityAccount, accounts, existingUser.ID)
+	}
+	access, err := st.GetAccess(ctx, existingUser.ID, existingAccount.ID)
+	if err != nil || access.Membership.Role != account.RoleAdmin {
+		t.Fatalf("existing account membership = %#v, %v", access, err)
 	}
 }
