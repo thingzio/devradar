@@ -180,16 +180,32 @@ func TestAccessContextChromeUsesActorAndAccountFields(t *testing.T) {
 		t.Fatalf("overview status = %d, want 200", rec.Code)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{actorEmail, actorAvatar, accountName, "Admin"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("overview chrome missing %q", want)
-		}
+	wantHeader := "Account: " + accountName + "<br>User: " + actorEmail + " (Admin)"
+	if got := extractUserMenuHeader(t, body); got != wantHeader {
+		t.Errorf("overview user menu header = %q, want %q", got, wantHeader)
+	}
+	if !strings.Contains(body, actorAvatar) {
+		t.Errorf("overview chrome missing actor avatar %q", actorAvatar)
 	}
 	for _, forbidden := range []string{legacyEmail, legacyAvatar} {
 		if strings.Contains(body, forbidden) {
 			t.Errorf("overview chrome contains legacy account identity %q", forbidden)
 		}
 	}
+}
+
+func extractUserMenuHeader(t *testing.T, body string) string {
+	t.Helper()
+	const open = `<div class="user-menu-header">`
+	_, tail, found := strings.Cut(body, open)
+	if !found {
+		t.Fatal("rendered page missing user menu header")
+	}
+	header, _, found := strings.Cut(tail, "</div>")
+	if !found {
+		t.Fatal("rendered user menu header is not closed")
+	}
+	return header
 }
 
 // TestRevokeAPIToken_CrossTenant verifies tenant B cannot revoke tenant A's

@@ -104,15 +104,15 @@ func TestAccountMenuLabelsAccountAndUser(t *testing.T) {
 			var body bytes.Buffer
 			err := templates.ExecuteTemplate(&body, "nav", chromeView{
 				SignedIn: true, HasAccount: true,
-				Email: "member@example.com", AccountName: "member@example.com",
+				Email: "member@example.com", AccountName: "Security Platform",
 				AccountRole: test.role,
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := "Account: member@example.com<br>User: member@example.com (" + test.label + ")"
-			if !strings.Contains(body.String(), want) {
-				t.Fatalf("account menu missing %q: %s", want, body.String())
+			want := "Account: Security Platform<br>User: member@example.com (" + test.label + ")"
+			if got := extractUserMenuHeader(t, body.String()); got != want {
+				t.Fatalf("account menu header = %q, want %q", got, want)
 			}
 		})
 	}
@@ -123,13 +123,13 @@ func TestAccountMenuWithoutSelectionLabelsOnlyUser(t *testing.T) {
 	var body bytes.Buffer
 	if err := templates.ExecuteTemplate(&body, "nav", chromeView{
 		SignedIn: true, Email: "member@example.com",
+		AccountName: "must not render", AccountRole: account.RoleAdmin,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(body.String(), "User: member@example.com") ||
-		strings.Contains(body.String(), "Account:") ||
-		strings.Contains(body.String(), "(Admin)") {
-		t.Fatalf("chooser account menu identity is incorrect: %s", body.String())
+	want := "User: member@example.com"
+	if got := extractUserMenuHeader(t, body.String()); got != want {
+		t.Fatalf("chooser account menu header = %q, want %q", got, want)
 	}
 }
 
@@ -280,6 +280,20 @@ func renderTemplateForRole(t *testing.T, name string, view any) string {
 		t.Fatalf("render %s: %v", name, err)
 	}
 	return body.String()
+}
+
+func extractUserMenuHeader(t *testing.T, body string) string {
+	t.Helper()
+	const open = `<div class="user-menu-header">`
+	_, tail, found := strings.Cut(body, open)
+	if !found {
+		t.Fatal("rendered page missing user menu header")
+	}
+	header, _, found := strings.Cut(tail, "</div>")
+	if !found {
+		t.Fatal("rendered user menu header is not closed")
+	}
+	return header
 }
 
 func assertTemplateControl(t *testing.T, body, marker string, want bool) {
