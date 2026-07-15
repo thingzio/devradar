@@ -1139,7 +1139,7 @@ func TestActivateSBOMCompatibilityWrapper(t *testing.T) {
 	st := isolatedAdminProductHealthStore(t)
 	accountID, _ := seedAuditAccount(t, st)
 	sb := seedAuditPendingSBOM(t, st, accountID)
-	if err := st.ActivateSBOM(context.Background(), sb.ID); err != nil {
+	if err := st.ActivateSBOM(context.Background(), accountID, sb.ID); err != nil {
 		t.Fatalf("compatibility activation: %v", err)
 	}
 	var status string
@@ -1149,6 +1149,48 @@ func TestActivateSBOMCompatibilityWrapper(t *testing.T) {
 	}
 	if status != "active" {
 		t.Fatalf("compatibility activation status = %q, want active", status)
+	}
+}
+
+func TestActivateSBOMRejectsInactiveAccount(t *testing.T) {
+	st := isolatedAdminProductHealthStore(t)
+	ctx := context.Background()
+	accountID, userID := seedAuditAccount(t, st)
+	sb := seedAuditPendingSBOM(t, st, accountID)
+	auditedSBOM := seedAuditPendingSBOM(t, st, accountID)
+	if _, err := st.DB().ExecContext(ctx,
+		`UPDATE devradar_tenant SET status='suspended' WHERE id=$1`, accountID); err != nil {
+		t.Fatalf("suspend account: %v", err)
+	}
+	if err := st.ActivateSBOM(ctx, accountID, sb.ID); !errors.Is(err, postgres.ErrAccountInactive) {
+		t.Fatalf("inactive activation error = %v, want ErrAccountInactive", err)
+	}
+	var status string
+	if err := st.DB().QueryRowContext(ctx,
+		`SELECT status FROM devradar_sbom WHERE id=$1`, sb.ID).Scan(&status); err != nil {
+		t.Fatalf("read pending SBOM: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("inactive activation status = %q, want pending", status)
+	}
+	if err := st.ActivateSBOMAudited(ctx, accountID, auditedSBOM.ID,
+		account.Actor{Kind: account.ActorUser, UserID: userID}, randID(t)); !errors.Is(err, postgres.ErrAccountInactive) {
+		t.Fatalf("inactive audited activation error = %v, want ErrAccountInactive", err)
+	}
+	if err := st.DB().QueryRowContext(ctx,
+		`SELECT status FROM devradar_sbom WHERE id=$1`, auditedSBOM.ID).Scan(&status); err != nil {
+		t.Fatalf("read audited pending SBOM: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("inactive audited activation status = %q, want pending", status)
+	}
+}
+
+func TestActivateSBOMMissingReturnsNotFound(t *testing.T) {
+	st := isolatedAdminProductHealthStore(t)
+	accountID, _ := seedAuditAccount(t, st)
+	if err := st.ActivateSBOM(context.Background(), accountID, randID(t)+randID(t)); !errors.Is(err, postgres.ErrNotFound) {
+		t.Fatalf("missing SBOM activation = %v, want ErrNotFound", err)
 	}
 }
 

@@ -8,13 +8,330 @@ import (
 	"time"
 
 	"github.com/lib/pq"
+	"github.com/thingzio/devradar/pkg/account"
 )
 
+const (
+	adminAccountDeletionBatchSize = 100
+	adminPendingSBOMGrace         = 5 * time.Minute
+	accountDeletionStartAction    = "account.delete.start"
+)
+
+// ErrAccountDeletionIncomplete reports a suspended account whose durable SBOM
+// cleanup has not converged yet.
+var ErrAccountDeletionIncomplete = errors.New("account deletion is incomplete")
+
+// ErrAccountDeletionInProgress reports an irreversible account deletion that
+// has started and therefore forbids every later lifecycle status mutation.
+var ErrAccountDeletionInProgress = errors.New("account deletion is in progress")
+
 // This file holds the operator-console reads and writes. Unlike every other
-// method in this package they are DELIBERATELY NOT tenant-scoped: the admin
-// console spans all tenants. They are grouped here and Admin-prefixed so the one
-// place that legitimately reads across the tenant boundary is auditable in one
+// method in this package they are DELIBERATELY NOT account-scoped: the admin
+// console spans all accounts. They are grouped here and Admin-prefixed so the one
+// place that legitimately reads across the account boundary is auditable in one
 // spot. Callers must gate them behind middleware.RequireAdmin.
+
+// AdminAccountRow is the account identity and membership summary shown in the
+// operator account list.
+type AdminAccountRow struct {
+	Account           account.Account
+	InitialAdminEmail string
+	MemberCount       int
+}
+
+// AdminListAccounts returns one page of accounts ordered newest first. Search
+// matches account names and active member email addresses.
+func (s *Store) AdminListAccounts(
+	ctx context.Context,
+	query string,
+	limit, offset int,
+) ([]AdminAccountRow, int, error) {
+	where := ""
+	args := []any{}
+	if query != "" {
+		where = `WHERE t.name ILIKE $1 OR EXISTS (
+			SELECT 1
+			FROM devradar_account_member search_member
+			JOIN devradar_user search_user ON search_user.id=search_member.user_id
+			WHERE search_member.account_id=t.id
+			  AND search_member.revoked_at IS NULL
+			  AND search_user.email ILIKE $1
+		)`
+		args = append(args, "%"+query+"%")
+	}
+	var total int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM devradar_tenant t `+where, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count admin accounts: %w", err)
+	}
+
+	args = append(args, limit, offset)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT t.id,t.name,t.plan,t.status,t.min_severity,t.created_at,t.updated_at,
+		       COALESCE((
+			   SELECT u.email
+			   FROM devradar_account_member m
+			   JOIN devradar_user u ON u.id=m.user_id
+			   WHERE m.account_id=t.id
+			   ORDER BY m.created_at,u.id
+			   LIMIT 1
+		       ),''),
+		       (SELECT count(*) FROM devradar_account_member m
+		        WHERE m.account_id=t.id AND m.revoked_at IS NULL)
+		FROM devradar_tenant t `+where+
+		fmt.Sprintf(` ORDER BY t.created_at DESC,t.id DESC LIMIT $%d OFFSET $%d`, len(args)-1, len(args)),
+		args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list admin accounts: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	accounts := make([]AdminAccountRow, 0, limit)
+	for rows.Next() {
+		var row AdminAccountRow
+		if err := rows.Scan(
+			&row.Account.ID, &row.Account.Name, &row.Account.Plan, &row.Account.Status,
+			&row.Account.MinSeverity, &row.Account.CreatedAt, &row.Account.UpdatedAt,
+			&row.InitialAdminEmail, &row.MemberCount,
+		); err != nil {
+			return nil, 0, fmt.Errorf("scan admin account: %w", err)
+		}
+		accounts = append(accounts, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate admin accounts: %w", err)
+	}
+	return accounts, total, nil
+}
+
+// AdminSetAccountPlan changes the operator-managed account plan.
+func (s *Store) AdminSetAccountPlan(ctx context.Context, accountID, plan string) error {
+	return adminUpdateAccount(ctx, s.db, accountID,
+		`UPDATE devradar_tenant SET plan=$2,updated_at=now() WHERE id=$1`, plan)
+}
+
+// AdminSetAccountStatus changes the operator-managed account lifecycle status.
+func (s *Store) AdminSetAccountStatus(ctx context.Context, accountID, status string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin admin account status update: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var lockedID string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT id FROM devradar_tenant WHERE id=$1 FOR NO KEY UPDATE`, accountID).Scan(&lockedID); errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return fmt.Errorf("lock admin account status: %w", err)
+	}
+	marked, err := accountDeletionStarted(ctx, tx, accountID)
+	if err != nil {
+		return err
+	}
+	if marked {
+		return ErrAccountDeletionInProgress
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE devradar_tenant SET status=$2,updated_at=now() WHERE id=$1`, accountID, status); err != nil {
+		return fmt.Errorf("update admin account status: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit admin account status update: %w", err)
+	}
+	return nil
+}
+
+func adminUpdateAccount(ctx context.Context, db *sql.DB, accountID, query, value string) error {
+	result, err := db.ExecContext(ctx, query, accountID, value)
+	if err != nil {
+		return fmt.Errorf("update admin account: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read admin account update: %w", err)
+	}
+	if changed == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// AdminAccountDeletionObject identifies one exact durable cleanup unit.
+type AdminAccountDeletionObject struct {
+	SBOMID     string
+	ObjectPath string
+}
+
+// AdminPrepareAccountDeletion atomically locks and suspends one account, then
+// returns a bounded deterministic batch of exact account-owned SBOM objects.
+// Young pending rows remain untouched while an in-flight ingest compensates;
+// after the grace period they become ordinary retryable cleanup work.
+func (s *Store) AdminPrepareAccountDeletion(
+	ctx context.Context,
+	accountID string,
+	actor account.Actor,
+	requestID string,
+) ([]AdminAccountDeletionObject, error) {
+	if actor.Kind != account.ActorPlatform {
+		return nil, fmt.Errorf("account deletion requires platform actor")
+	}
+	event := AuditEvent{
+		Action: accountDeletionStartAction, TargetType: "account", TargetID: accountID,
+		Outcome: "success", RequestID: requestID,
+	}
+	metadata, err := validateAuditInput(accountID, actor, event)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin account deletion preparation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var status string
+	var suspendedAt time.Time
+	if err := tx.QueryRowContext(ctx,
+		`SELECT status,updated_at FROM devradar_tenant WHERE id=$1 FOR NO KEY UPDATE`, accountID).
+		Scan(&status, &suspendedAt); errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	} else if err != nil {
+		return nil, fmt.Errorf("lock account for deletion: %w", err)
+	}
+	marked, err := accountDeletionStarted(ctx, tx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	if !marked && status != "suspended" {
+		if err := tx.QueryRowContext(ctx, `
+			UPDATE devradar_tenant SET status='suspended',updated_at=clock_timestamp()
+			WHERE id=$1 RETURNING updated_at`, accountID).Scan(&suspendedAt); err != nil {
+			return nil, fmt.Errorf("suspend account for deletion: %w", err)
+		}
+	}
+	if !marked {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO devradar_audit_event
+				(account_id,actor_kind,actor_user_id,actor_api_token_id,
+				 action,target_type,target_id,outcome,request_id,metadata)
+			VALUES ($1,$2,$3,NULL,$4,$5,$6,$7,$8,$9::jsonb)`,
+			accountID, actor.Kind, nullStr(actor.UserID), event.Action, event.TargetType,
+			event.TargetID, event.Outcome, event.RequestID, metadata); err != nil {
+			return nil, fmt.Errorf("insert account deletion start marker: %w", err)
+		}
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id,object_path FROM devradar_sbom
+		WHERE tenant_id=$1
+		  AND (status <> 'pending'
+		       OR (submitted_at <= $2 AND submitted_at <= now()-$3::interval))
+		ORDER BY submitted_at,id
+		LIMIT $4`, accountID, suspendedAt,
+		fmt.Sprintf("%d seconds", int64(adminPendingSBOMGrace.Seconds())), adminAccountDeletionBatchSize)
+	if err != nil {
+		return nil, fmt.Errorf("list account deletion objects: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	objects := make([]AdminAccountDeletionObject, 0, adminAccountDeletionBatchSize)
+	for rows.Next() {
+		var object AdminAccountDeletionObject
+		if err := rows.Scan(&object.SBOMID, &object.ObjectPath); err != nil {
+			return nil, fmt.Errorf("scan account deletion object: %w", err)
+		}
+		objects = append(objects, object)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate account deletion objects: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close account deletion objects: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit account deletion preparation: %w", err)
+	}
+	return objects, nil
+}
+
+// AdminDeleteAccountSBOM durably records one successful external-object
+// cleanup by deleting only the matching account-owned SBOM row.
+func (s *Store) AdminDeleteAccountSBOM(ctx context.Context, accountID, sbomID string) error {
+	result, err := s.db.ExecContext(ctx, `
+		DELETE FROM devradar_sbom WHERE tenant_id=$1 AND id=$2`, accountID, sbomID)
+	if err != nil {
+		return fmt.Errorf("delete account SBOM cleanup row: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read account SBOM cleanup rows affected: %w", err)
+	}
+	if changed == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// AdminFinalizeAccountDeletion hard-deletes one prepared account after its
+// exact blob inventory has been removed. Users remain independent; memberships
+// in other accounts are unaffected.
+func (s *Store) AdminFinalizeAccountDeletion(ctx context.Context, accountID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin account deletion finalization: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var status string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT status FROM devradar_tenant WHERE id=$1 FOR NO KEY UPDATE`, accountID).Scan(&status); errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return fmt.Errorf("lock account for deletion finalization: %w", err)
+	}
+	if status != "suspended" {
+		return ErrAccountDeletionIncomplete
+	}
+	marked, err := accountDeletionStarted(ctx, tx, accountID)
+	if err != nil {
+		return err
+	}
+	if !marked {
+		return ErrAccountDeletionIncomplete
+	}
+	var remaining int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT count(*) FROM devradar_sbom WHERE tenant_id=$1`, accountID).Scan(&remaining); err != nil {
+		return fmt.Errorf("count remaining account SBOMs: %w", err)
+	}
+	if remaining != 0 {
+		return ErrAccountDeletionIncomplete
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM devradar_tenant WHERE id=$1`, accountID)
+	if err != nil {
+		return fmt.Errorf("delete admin account: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read admin account deletion: %w", err)
+	}
+	if changed == 0 {
+		return ErrNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit account deletion finalization: %w", err)
+	}
+	return nil
+}
+
+func accountDeletionStarted(ctx context.Context, exec dbtx, accountID string) (bool, error) {
+	var marked bool
+	if err := exec.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM devradar_audit_event
+			WHERE account_id=$1 AND action=$2 AND target_type='account' AND target_id=$1::text
+		)`, accountID, accountDeletionStartAction).Scan(&marked); err != nil {
+		return false, fmt.Errorf("read account deletion start marker: %w", err)
+	}
+	return marked, nil
+}
 
 // PlatformCounts is the live snapshot backing the admin dashboard. Every field
 // is computed on demand; the supporting indexes make this cheap. Point-in-time
@@ -244,11 +561,11 @@ func (s *Store) groupCount(ctx context.Context, query string, emit func(key stri
 	return rows.Err()
 }
 
-// AdminScanRun is one recent scan, joined to its SBOM for operator context.
+// AdminScanRun is one recent scan, joined to its SBOM and account for operator context.
 type AdminScanRun struct {
 	SBOMID        string
 	ImageRef      string
-	TenantEmail   string
+	AccountName   string
 	Scanner       string
 	DBVersion     string
 	ScannerVer    string
@@ -257,10 +574,10 @@ type AdminScanRun struct {
 	ScannedAt     time.Time
 }
 
-// AdminRecentScanRuns returns the most recent scan runs across all tenants.
+// AdminRecentScanRuns returns the most recent scan runs across all accounts.
 func (s *Store) AdminRecentScanRuns(ctx context.Context, limit int) ([]AdminScanRun, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT sr.sbom_id, sb.image_ref, t.email, sr.scanner, sr.db_version,
+		SELECT sr.sbom_id, sb.image_ref, t.name, sr.scanner, sr.db_version,
 		       sr.scanner_version, sr.canonicalizer_version, sr.finding_count, sr.scanned_at
 		FROM devradar_scan_run sr
 		JOIN devradar_sbom sb ON sb.id = sr.sbom_id
@@ -275,7 +592,7 @@ func (s *Store) AdminRecentScanRuns(ctx context.Context, limit int) ([]AdminScan
 	var out []AdminScanRun
 	for rows.Next() {
 		var r AdminScanRun
-		if err := rows.Scan(&r.SBOMID, &r.ImageRef, &r.TenantEmail, &r.Scanner,
+		if err := rows.Scan(&r.SBOMID, &r.ImageRef, &r.AccountName, &r.Scanner,
 			&r.DBVersion, &r.ScannerVer, &r.Canonicalizer, &r.FindingCount, &r.ScannedAt); err != nil {
 			return nil, fmt.Errorf("scan run row: %w", err)
 		}
@@ -349,12 +666,12 @@ func (s *Store) AdminScanBacklog(ctx context.Context, maxAge time.Duration, expe
 	return b, nil
 }
 
-// AdminFailure is a scan failure with its SBOM/tenant context.
+// AdminFailure is a scan failure with its SBOM/account context.
 type AdminFailure struct {
 	ID          int64
 	SBOMID      string
 	ImageRef    string
-	TenantEmail string
+	AccountName string
 	Scanner     string
 	Stage       string
 	Error       string
@@ -365,7 +682,7 @@ type AdminFailure struct {
 // rather than a genuine scan error (see WarningStage).
 func (f AdminFailure) IsWarning() bool { return f.Stage == WarningStage }
 
-// AdminRecentFailures returns recent scan failures across all tenants, newest
+// AdminRecentFailures returns recent scan failures across all accounts, newest
 // first. A non-empty scanner filters to that scanner.
 func (s *Store) AdminRecentFailures(ctx context.Context, scanner string, limit int) ([]AdminFailure, error) {
 	where := ""
@@ -375,7 +692,7 @@ func (s *Store) AdminRecentFailures(ctx context.Context, scanner string, limit i
 		args = append(args, scanner)
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT sf.id, sf.sbom_id, COALESCE(sb.image_ref,''), COALESCE(t.email,''),
+		SELECT sf.id, sf.sbom_id, COALESCE(sb.image_ref,''), COALESCE(t.name,''),
 		       COALESCE(sf.scanner,''), sf.stage, sf.error, sf.occurred_at
 		FROM devradar_scan_failure sf
 		LEFT JOIN devradar_sbom sb ON sb.id = sf.sbom_id
@@ -391,7 +708,7 @@ func (s *Store) AdminRecentFailures(ctx context.Context, scanner string, limit i
 	var out []AdminFailure
 	for rows.Next() {
 		var f AdminFailure
-		if err := rows.Scan(&f.ID, &f.SBOMID, &f.ImageRef, &f.TenantEmail,
+		if err := rows.Scan(&f.ID, &f.SBOMID, &f.ImageRef, &f.AccountName,
 			&f.Scanner, &f.Stage, &f.Error, &f.OccurredAt); err != nil {
 			return nil, fmt.Errorf("failure row: %w", err)
 		}
@@ -433,31 +750,31 @@ func (s *Store) AdminScanHistory(ctx context.Context, hours int) ([]ScanHistoryP
 	return out, rows.Err()
 }
 
-// TenantSBOMSummary is the per-tenant rollup shown on the tenant detail page.
-type TenantSBOMSummary struct {
+// AccountSBOMSummary is the per-account rollup shown on the operator detail page.
+type AccountSBOMSummary struct {
 	SBOMsActive   int
 	SBOMsArchived int
 	OpenFindings  int
 	LastScannedAt time.Time // zero if never scanned
 }
 
-// AdminTenantSBOMSummary rolls up one tenant's SBOM/finding/scan activity.
-func (s *Store) AdminTenantSBOMSummary(ctx context.Context, tenantID string) (*TenantSBOMSummary, error) {
-	sum := &TenantSBOMSummary{}
+// AdminAccountSBOMSummary rolls up one account's SBOM/finding/scan activity.
+func (s *Store) AdminAccountSBOMSummary(ctx context.Context, accountID string) (*AccountSBOMSummary, error) {
+	sum := &AccountSBOMSummary{}
 	if err := s.db.QueryRowContext(ctx, `
 		SELECT count(*) FILTER (WHERE status = 'active'),
 		       count(*) FILTER (WHERE status = 'archived')
-		FROM devradar_sbom WHERE tenant_id = $1`, tenantID).
+		FROM devradar_sbom WHERE tenant_id = $1`, accountID).
 		Scan(&sum.SBOMsActive, &sum.SBOMsArchived); err != nil {
-		return nil, fmt.Errorf("tenant sbom counts: %w", err)
+		return nil, fmt.Errorf("account sbom counts: %w", err)
 	}
 
 	if err := s.db.QueryRowContext(ctx, `
 		SELECT count(*)
 		FROM devradar_finding f
 		JOIN devradar_sbom sb ON sb.id = f.sbom_id
-		WHERE sb.tenant_id = $1`, tenantID).Scan(&sum.OpenFindings); err != nil {
-		return nil, fmt.Errorf("tenant finding count: %w", err)
+		WHERE sb.tenant_id = $1`, accountID).Scan(&sum.OpenFindings); err != nil {
+		return nil, fmt.Errorf("account finding count: %w", err)
 	}
 
 	var last sql.NullTime
@@ -465,8 +782,8 @@ func (s *Store) AdminTenantSBOMSummary(ctx context.Context, tenantID string) (*T
 		SELECT max(sr.scanned_at)
 		FROM devradar_scan_run sr
 		JOIN devradar_sbom sb ON sb.id = sr.sbom_id
-		WHERE sb.tenant_id = $1`, tenantID).Scan(&last); err != nil {
-		return nil, fmt.Errorf("tenant last scan: %w", err)
+		WHERE sb.tenant_id = $1`, accountID).Scan(&last); err != nil {
+		return nil, fmt.Errorf("account last scan: %w", err)
 	}
 	if last.Valid {
 		sum.LastScannedAt = last.Time

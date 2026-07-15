@@ -20,6 +20,8 @@ var (
 	ErrLastAdmin = errors.New("account must retain at least one active admin")
 	// ErrForbidden reports a known active member without the required account role.
 	ErrForbidden = errors.New("account operation forbidden")
+	// ErrAccountInactive reports an existing account that cannot accept mutations.
+	ErrAccountInactive = errors.New("account is not active")
 )
 
 type compatibilityOwner struct {

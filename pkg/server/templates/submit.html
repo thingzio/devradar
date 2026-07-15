@@ -42,7 +42,7 @@
 
   <section class="doc-section">
     <h2 id="reading" class="section-divider">Reading your results</h2>
-    <p>Findings are filtered by a <strong>severity threshold</strong> (your tenant default is <code>medium</code>; override per request with <code>?min_severity=</code>). Where to look:</p>
+    <p>Findings are filtered by a <strong>severity threshold</strong> (your account default is <code>medium</code>; override per request with <code>?min_severity=</code>). Where to look:</p>
     <ul class="opt-list">
       <li><a href="/dashboard">Images</a> — fleet rollup: one row per tracked image with a severity breakdown, totals, and how much is fixable now.</li>
       <li><a href="/work">Work</a> — a deterministic remediation queue ordered by known exploitation (KEV), fix availability, severity, EPSS, then blast radius. Every reason stays visible.</li>
@@ -55,7 +55,7 @@
 
   <section class="doc-section">
     <h2 id="licenses" class="section-divider">Licenses &amp; compliance</h2>
-    <p>Every SBOM already carries a per-package license, so DevRadar captures it <strong>at ingest</strong> — no extra scan — into a frozen per-digest inventory. Licenses are classified into an obligation taxonomy (permissive, weak copyleft, strong copyleft, proprietary, unknown) and evaluated against an opt-in per-tenant policy.</p>
+    <p>Every SBOM already carries a per-package license, so DevRadar captures it <strong>at ingest</strong> — no extra scan — into a frozen per-digest inventory. Licenses are classified into an obligation taxonomy (permissive, weak copyleft, strong copyleft, proprietary, unknown) and evaluated against an opt-in per-account policy.</p>
     <p class="muted">The <a href="/licenses">Licenses</a> page shows the fleet distribution by category and family, and a policy editor. Policy is <strong>descriptive by default</strong>: with nothing denied it just reports. Deny a category (with per-license allow/deny exceptions) and DevRadar flags violating packages instantly — evaluation is live, so a policy change re-flags without touching stored data. Classification runs in Go over the raw stored IDs, so multi-license sets and SPDX <code>OR</code>/<code>AND</code> expressions are preserved and evaluated faithfully.</p>
   </section>
 

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -17,14 +18,14 @@ import (
 	"github.com/thingzio/devradar/pkg/data/postgres"
 	"github.com/thingzio/devradar/pkg/middleware"
 	"github.com/thingzio/devradar/pkg/scanner"
-	"github.com/thingzio/devradar/pkg/tenant"
 )
 
 // This file implements the operator admin console (/admin/*). Access is gated by
 // middleware.RequirePlatformAdmin (email allowlist, 404-on-deny); mutating routes are
 // additionally wrapped in middleware.ValidateCSRF. Every action is audited to the
-// log (auditLog) — there is no audit table by design. Mutations follow
-// POST-redirect-GET with a ?msg= flash. The console is unlinked from the tenant
+// log (auditLog). Account-owned mutations that use audited store methods also
+// persist attribution. Mutations follow POST-redirect-GET with a ?msg= flash.
+// The console is unlinked from the account
 // nav and stays hidden.
 
 const (
@@ -32,6 +33,11 @@ const (
 	adminScanRunsMax = 50
 	adminFailuresMax = 50
 	adminHistoryMax  = 720 // 30 days of hourly buckets
+)
+
+var (
+	adminAccountPlans    = []string{"free", "paid"}
+	adminAccountStatuses = []string{"active", "suspended"}
 )
 
 type adminProductHealthReader interface {
@@ -138,7 +144,7 @@ func trendRows(deltas map[int]map[string]postgres.PlatformDelta) []trendRow {
 		return nil
 	}
 	metrics := []struct{ key, label string }{
-		{"tenants", "Tenants"},
+		{"tenants", "Accounts"},
 		{"sboms_active", "Active SBOMs"},
 		{"open_findings", "Open findings"},
 		{"critical_open", "Critical open"},
@@ -227,27 +233,27 @@ func (s *Server) handleAdminScanHistory(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, points)
 }
 
-// handleAdminTenants renders the searchable, paginated tenant list.
-func (s *Server) handleAdminTenants(w http.ResponseWriter, r *http.Request) {
+// handleAdminAccounts renders the searchable, paginated account list.
+func (s *Server) handleAdminAccounts(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromContext(r.Context())
-	auditLog("view_tenants", user, r.URL.Path, r.RemoteAddr, "")
+	auditLog("view_accounts", user, r.URL.Path, r.RemoteAddr, "")
 
 	query := r.URL.Query().Get("q")
 	page := clampInt(r.URL.Query().Get("page"), 1, 1<<20)
 	offset := (page - 1) * adminPageSize
 
-	tenants, total, err := tenant.AdminListTenantsWithStats(r.Context(), s.store.DB(), query, adminPageSize, offset)
+	accounts, total, err := s.store.AdminListAccounts(r.Context(), query, adminPageSize, offset)
 	if err != nil {
-		slog.Error("admin list tenants", "error", err)
-		http.Error(w, "failed to list tenants", http.StatusInternalServerError)
+		slog.Error("admin list accounts", "error", err)
+		http.Error(w, "failed to list accounts", http.StatusInternalServerError)
 		return
 	}
 	totalPages := (total + adminPageSize - 1) / adminPageSize
 
-	render(w, "admin_tenants.html", s.adminBase(user, "tenants", map[string]any{
-		"Title":      "Admin — Tenants",
+	render(w, "admin_tenants.html", s.adminBase(user, "accounts", map[string]any{
+		"Title":      "Admin — Accounts",
 		"CSRFToken":  issueCSRF(w),
-		"Tenants":    tenants,
+		"Accounts":   accounts,
 		"Query":      query,
 		"Page":       page,
 		"TotalPages": totalPages,
@@ -256,45 +262,52 @@ func (s *Server) handleAdminTenants(w http.ResponseWriter, r *http.Request) {
 		"HasNext":    page < totalPages,
 		"PrevPage":   page - 1,
 		"NextPage":   page + 1,
-		"Plans":      tenant.Plans,
+		"Plans":      adminAccountPlans,
 		"Msg":        r.URL.Query().Get("msg"),
 	}))
 }
 
-// handleAdminTenantDetail renders one tenant with its activity rollup, tokens,
+// handleAdminAccountDetail renders one account with its activity rollup, members, tokens,
 // and management forms.
-func (s *Server) handleAdminTenantDetail(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAdminAccountDetail(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromContext(r.Context())
 	id := r.PathValue("id")
-	auditLog("view_tenant", user, r.URL.Path, r.RemoteAddr, "account_id="+id)
+	auditLog("view_account", user, r.URL.Path, r.RemoteAddr, "account_id="+id)
 
-	target, err := tenant.GetTenant(r.Context(), s.store.DB(), id)
+	target, err := s.store.GetAccount(r.Context(), id)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	summary, err := s.store.AdminTenantSBOMSummary(r.Context(), id)
+	summary, err := s.store.AdminAccountSBOMSummary(r.Context(), id)
 	if err != nil {
-		slog.Error("admin tenant summary", "error", err)
-		http.Error(w, "failed to load tenant", http.StatusInternalServerError)
+		slog.Error("admin account summary", "error", err)
+		http.Error(w, "failed to load account", http.StatusInternalServerError)
+		return
+	}
+	members, err := s.store.ListMembers(r.Context(), id)
+	if err != nil {
+		slog.Error("admin account members", "account_id", id, "error", err)
+		http.Error(w, "failed to load account", http.StatusInternalServerError)
 		return
 	}
 	tokens, err := s.store.ListAPITokens(r.Context(), id, middleware.ActorFromContext(r.Context()))
 	if err != nil {
-		slog.Error("admin tenant tokens", "account_id", id,
+		slog.Error("admin account tokens", "account_id", id,
 			"request_id", middleware.RequestIDFromContext(r.Context()), "error", err)
-		http.Error(w, "failed to load tenant", http.StatusInternalServerError)
+		http.Error(w, "failed to load account", http.StatusInternalServerError)
 		return
 	}
 
-	render(w, "admin_tenant.html", s.adminBase(user, "tenants", map[string]any{
-		"Title":      "Admin — " + target.Email,
+	render(w, "admin_tenant.html", s.adminBase(user, "accounts", map[string]any{
+		"Title":      "Admin — " + target.Name,
 		"CSRFToken":  issueCSRF(w),
-		"T":          target,
+		"Account":    target,
 		"Summary":    summary,
+		"Members":    members,
 		"Tokens":     tokens,
-		"Plans":      tenant.Plans,
-		"Statuses":   []string{tenant.StatusActive, tenant.StatusSuspended},
+		"Plans":      adminAccountPlans,
+		"Statuses":   adminAccountStatuses,
 		"Severities": []string{"critical", "high", "medium", "low", "negligible"},
 		"Msg":        r.URL.Query().Get("msg"),
 	}))
@@ -306,12 +319,12 @@ func (s *Server) handleAdminSetPlan(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromContext(r.Context())
 	id := r.PathValue("id")
 	plan := r.FormValue("plan")
-	dest := "/admin/tenant/" + id
-	if !tenant.ValidPlan(plan) {
+	dest := "/admin/account/" + id
+	if !slices.Contains(adminAccountPlans, plan) {
 		http.Redirect(w, r, dest+"?msg=invalid_plan", http.StatusSeeOther)
 		return
 	}
-	if err := tenant.SetPlan(r.Context(), s.store.DB(), id, plan); err != nil {
+	if err := s.store.AdminSetAccountPlan(r.Context(), id, plan); err != nil {
 		slog.Error("admin set plan", "account_id", id, "error", err)
 		http.Redirect(w, r, dest+"?msg=error", http.StatusSeeOther)
 		return
@@ -324,12 +337,16 @@ func (s *Server) handleAdminSetStatus(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromContext(r.Context())
 	id := r.PathValue("id")
 	status := r.FormValue("status")
-	dest := "/admin/tenant/" + id
-	if status != tenant.StatusActive && status != tenant.StatusSuspended {
+	dest := "/admin/account/" + id
+	if !slices.Contains(adminAccountStatuses, status) {
 		http.Redirect(w, r, dest+"?msg=invalid_status", http.StatusSeeOther)
 		return
 	}
-	if err := tenant.SetStatus(r.Context(), s.store.DB(), id, status); err != nil {
+	if err := s.store.AdminSetAccountStatus(r.Context(), id, status); err != nil {
+		if errors.Is(err, postgres.ErrAccountDeletionInProgress) {
+			http.Redirect(w, r, dest+"?msg=deletion_in_progress", http.StatusSeeOther)
+			return
+		}
 		slog.Error("admin set status", "account_id", id, "error", err)
 		http.Redirect(w, r, dest+"?msg=error", http.StatusSeeOther)
 		return
@@ -342,7 +359,7 @@ func (s *Server) handleAdminSetMinSeverity(w http.ResponseWriter, r *http.Reques
 	user := middleware.UserFromContext(r.Context())
 	id := r.PathValue("id")
 	sev := r.FormValue("min_severity")
-	dest := "/admin/tenant/" + id
+	dest := "/admin/account/" + id
 	if !data.ValidMinSeverity(sev) {
 		logMutationDenied(r, "account.min_severity.update", "invalid severity")
 		http.Redirect(w, r, dest+"?msg=invalid_severity", http.StatusSeeOther)
@@ -359,23 +376,49 @@ func (s *Server) handleAdminSetMinSeverity(w http.ResponseWriter, r *http.Reques
 	http.Redirect(w, r, dest+"?msg=severity_updated", http.StatusSeeOther)
 }
 
-func (s *Server) handleAdminDeleteTenant(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAdminDeleteAccount(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromContext(r.Context())
 	id := r.PathValue("id")
-	if err := tenant.DeleteTenant(r.Context(), s.store.DB(), id); err != nil {
-		slog.Error("admin delete tenant", "account_id", id, "error", err)
-		http.Redirect(w, r, "/admin/tenant/"+id+"?msg=error", http.StatusSeeOther)
+	actor := account.Actor{Kind: account.ActorPlatform, UserID: user.ID}
+	objects, err := s.store.AdminPrepareAccountDeletion(r.Context(), id,
+		actor, middleware.RequestIDFromContext(r.Context()))
+	if err != nil {
+		slog.Error("admin prepare account deletion", "account_id", id, "error", err)
+		http.Redirect(w, r, "/admin/account/"+id+"?msg=cleanup_failed", http.StatusSeeOther)
 		return
 	}
-	auditLog("delete_tenant", user, r.URL.Path, r.RemoteAddr, "account_id="+id)
-	http.Redirect(w, r, "/admin/tenants?msg=tenant_deleted", http.StatusSeeOther)
+	for _, object := range objects {
+		if err := s.blobs.Delete(r.Context(), object.ObjectPath); err != nil {
+			slog.Error("admin delete account object", "account_id", id,
+				"sbom_id", object.SBOMID, "object_path", object.ObjectPath, "error", err)
+			http.Redirect(w, r, "/admin/account/"+id+"?msg=cleanup_failed", http.StatusSeeOther)
+			return
+		}
+		if err := s.store.AdminDeleteAccountSBOM(r.Context(), id, object.SBOMID); err != nil && !errors.Is(err, postgres.ErrNotFound) {
+			slog.Error("admin commit account object deletion", "account_id", id,
+				"sbom_id", object.SBOMID, "object_path", object.ObjectPath, "error", err)
+			http.Redirect(w, r, "/admin/account/"+id+"?msg=cleanup_failed", http.StatusSeeOther)
+			return
+		}
+	}
+	if err := s.store.AdminFinalizeAccountDeletion(r.Context(), id); err != nil {
+		if errors.Is(err, postgres.ErrAccountDeletionIncomplete) {
+			http.Redirect(w, r, "/admin/account/"+id+"?msg=cleanup_in_progress", http.StatusSeeOther)
+			return
+		}
+		slog.Error("admin finalize account deletion", "account_id", id, "error", err)
+		http.Redirect(w, r, "/admin/account/"+id+"?msg=cleanup_failed", http.StatusSeeOther)
+		return
+	}
+	auditLog("delete_account", user, r.URL.Path, r.RemoteAddr, "account_id="+id)
+	http.Redirect(w, r, "/admin/accounts?msg=account_deleted", http.StatusSeeOther)
 }
 
 func (s *Server) handleAdminRevokeToken(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromContext(r.Context())
 	id := r.PathValue("id")
 	tid := r.PathValue("tid")
-	dest := "/admin/tenant/" + id
+	dest := "/admin/account/" + id
 	if err := s.store.RevokeAPIToken(r.Context(), id, tid,
 		middleware.ActorFromContext(r.Context()), middleware.RequestIDFromContext(r.Context())); err != nil {
 		logMutationFailure(r, "api_token.revoke", id, tid, err)
@@ -391,16 +434,32 @@ func (s *Server) handleAdminInvite(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromContext(r.Context())
 	email := authn.NormalizeEmail(r.FormValue("email"))
 	if !looksLikeEmail(email) {
-		http.Redirect(w, r, "/admin/tenants?msg=invalid_email", http.StatusSeeOther)
+		http.Redirect(w, r, "/admin/accounts?msg=invalid_email", http.StatusSeeOther)
 		return
 	}
-	if _, err := tenant.UpsertTenantByEmail(r.Context(), s.store.DB(), email); err != nil {
+	if err := s.sendMagicLink(r.Context(), email); err != nil {
 		slog.Error("admin invite", "email", email, "error", err)
-		http.Redirect(w, r, "/admin/tenants?msg=error", http.StatusSeeOther)
+		http.Redirect(w, r, "/admin/accounts?msg=error", http.StatusSeeOther)
 		return
 	}
-	auditLog("invite_tenant", user, r.URL.Path, r.RemoteAddr, "email="+email)
-	http.Redirect(w, r, "/admin/tenants?msg=tenant_invited", http.StatusSeeOther)
+	auditLog("send_signup_link", user, r.URL.Path, r.RemoteAddr, "email="+email)
+	http.Redirect(w, r, "/admin/accounts?msg=signup_sent", http.StatusSeeOther)
+}
+
+func redirectAdminAccounts(w http.ResponseWriter, r *http.Request) {
+	destination := "/admin/accounts"
+	if r.URL.RawQuery != "" {
+		destination += "?" + r.URL.RawQuery
+	}
+	http.Redirect(w, r, destination, http.StatusMovedPermanently)
+}
+
+func redirectAdminAccount(w http.ResponseWriter, r *http.Request) {
+	destination := "/admin/account/" + r.PathValue("id")
+	if r.URL.RawQuery != "" {
+		destination += "?" + r.URL.RawQuery
+	}
+	http.Redirect(w, r, destination, http.StatusMovedPermanently)
 }
 
 func (s *Server) handleAdminResetFailure(w http.ResponseWriter, r *http.Request) {

@@ -29,7 +29,7 @@ func TestLanding_RendersMarketing(t *testing.T) {
 		"Is my fleet improving?",
 		"Opt-in browser alerts",
 		"Grype and Trivy",
-		"License policy", "OpenVEX", "tenant-scoped API",
+		"License policy", "OpenVEX", "account-scoped API",
 		"fleet posture trends", "repository change history",
 		"filter tracked images and scope browser alerts",
 		"identical SBOM inventory", "vulnerability database", "scanner version", "canonicalizer version",

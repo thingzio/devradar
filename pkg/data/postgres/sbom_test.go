@@ -8,6 +8,36 @@ import (
 	"github.com/thingzio/devradar/pkg/data/postgres"
 )
 
+func TestUpsertSBOMWithLimitRejectsInactiveAndMissingAccounts(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+
+	var accountID string
+	if err := st.DB().QueryRowContext(ctx,
+		`INSERT INTO devradar_tenant (email,status) VALUES ($1,'suspended') RETURNING id`,
+		"inactive-"+randID(t)[:8]+"@example.com").Scan(&accountID); err != nil {
+		t.Fatalf("seed suspended account: %v", err)
+	}
+	newSBOM := func(id string) *postgres.SBOM {
+		return &postgres.SBOM{
+			ID: id + randID(t), TenantID: accountID,
+			ImageRef: "registry.test/inactive", Repository: "registry.test/inactive",
+			Digest: "sha256:" + randID(t) + randID(t), Format: "cyclonedx",
+			ObjectPath: "gs://test/" + accountID + "/" + id, Status: "pending",
+		}
+	}
+
+	if _, _, _, err := st.UpsertSBOMWithLimit(ctx, newSBOM(randID(t)), 0, 0); !errors.Is(err, postgres.ErrAccountInactive) {
+		t.Fatalf("suspended-account upsert error = %v, want ErrAccountInactive", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `DELETE FROM devradar_tenant WHERE id=$1`, accountID); err != nil {
+		t.Fatalf("delete account: %v", err)
+	}
+	if _, _, _, err := st.UpsertSBOMWithLimit(ctx, newSBOM(randID(t)), 0, 0); !errors.Is(err, postgres.ErrNotFound) {
+		t.Fatalf("missing-account upsert error = %v, want ErrNotFound", err)
+	}
+}
+
 // TestUpsertSBOMWithLimit_ActiveCap verifies the per-tenant active-SBOM cap:
 // distinct digests are admitted up to the cap, a brand-new digest past it is
 // rejected with ErrSBOMLimit, and a re-submit of an existing digest is always

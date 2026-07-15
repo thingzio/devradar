@@ -164,7 +164,7 @@ func (s *Server) handleArchiveSBOM(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleFindings returns current findings for one of the tenant's SBOMs,
-// filtered to ?min_severity (or the tenant default); unknown always included.
+// filtered to ?min_severity (or the account default); unknown always included.
 func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
 	acct := middleware.AccountFromContext(r.Context())
 	if acct == nil {
@@ -189,7 +189,7 @@ func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleEvents returns the change history for one of the tenant's SBOMs,
-// filtered to ?min_severity (or the tenant default); unknown always included.
+// filtered to ?min_severity (or the account default); unknown always included.
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	acct := middleware.AccountFromContext(r.Context())
 	if acct == nil {

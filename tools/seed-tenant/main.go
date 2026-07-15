@@ -15,7 +15,6 @@ import (
 	"github.com/thingzio/devradar/pkg/account"
 	"github.com/thingzio/devradar/pkg/authn"
 	"github.com/thingzio/devradar/pkg/data/postgres"
-	"github.com/thingzio/devradar/pkg/tenant"
 )
 
 func main() {
@@ -33,16 +32,8 @@ func run() error {
 	}
 	defer func() { _ = store.Close() }()
 
-	db := store.DB()
-	tn, err := tenant.UpsertTenantByEmail(ctx, db, "dev@example.com")
-	if err != nil {
-		return fmt.Errorf("upsert tenant: %w", err)
-	}
-	if err := store.ReconcileLegacyAccount(ctx, tn.ID); err != nil {
-		return fmt.Errorf("reconcile local account: %w", err)
-	}
 	user, acct, err := store.ResolveDirectIdentity(ctx, account.VerifiedIdentity{
-		Provider: "magiclink", Subject: tn.Email, Email: tn.Email,
+		Provider: "magiclink", Subject: "dev@example.com", Email: "dev@example.com",
 	})
 	if err != nil {
 		return fmt.Errorf("resolve local identity: %w", err)
@@ -82,8 +73,8 @@ func run() error {
 		return errors.Join(fmt.Errorf("consume token flash: %w", err), revokeErr)
 	}
 
-	fmt.Printf("Tenant ID: %s\n", acct.ID)
-	fmt.Printf("Email:     %s\n", tn.Email)
+	fmt.Printf("Account ID: %s\n", acct.ID)
+	fmt.Printf("User email: %s\n", user.Email)
 	fmt.Printf("API Token: %s\n\n", token)
 	fmt.Println("Export it for the curl examples in the README:")
 	fmt.Printf("  export DR_TOKEN=%s\n", token)

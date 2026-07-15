@@ -13,7 +13,6 @@ import (
 	alertengine "github.com/thingzio/devradar/pkg/alert"
 	"github.com/thingzio/devradar/pkg/data"
 	"github.com/thingzio/devradar/pkg/data/postgres"
-	"github.com/thingzio/devradar/pkg/tenant"
 )
 
 func TestAlertEvaluatorStore_ReverseCommitDoesNotLoseEarlierEvent(t *testing.T) {
@@ -169,7 +168,17 @@ func TestAlertEventQueue_TenantDeletionCascadesPendingRows(t *testing.T) {
 		t.Fatalf("backlog before tenant deletion = %+v error=%v", before, err)
 	}
 
-	if err := tenant.DeleteTenant(ctx, st.DB(), tenantID); err != nil {
+	objects, err := st.AdminPrepareAccountDeletion(ctx, tenantID,
+		account.Actor{Kind: account.ActorPlatform}, randID(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, object := range objects {
+		if err := st.AdminDeleteAccountSBOM(ctx, tenantID, object.SBOMID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.AdminFinalizeAccountDeletion(ctx, tenantID); err != nil {
 		t.Fatal(err)
 	}
 	var pending int

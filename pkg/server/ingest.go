@@ -183,11 +183,11 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Content-address per tenant: the id is sha256(tenant_id + bytes), not
-	// sha256(bytes). A global content hash would collide across tenants — two
-	// tenants submitting the same public image's SBOM would share one row (PK is
+	// Content-address per account: the id is sha256(tenant_id + bytes), not
+	// sha256(bytes). A global content hash would collide across accounts — two
+	// accounts submitting the same public image's SBOM would share one row (PK is
 	// id), and the second submitter could never see "their" SBOM. Scoping by
-	// tenant preserves per-tenant idempotency and dedup while keeping isolation.
+	// account preserves per-account idempotency and dedup while keeping isolation.
 	h := sha256.New()
 	h.Write([]byte(acct.ID))
 	h.Write([]byte{0}) // domain separator
@@ -195,16 +195,8 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 	id := fmt.Sprintf("%x", h.Sum(nil))
 	objectPath := fmt.Sprintf("gs://%s/%s/%s", config.SBOMBucket(), acct.ID, id)
 
-	// Record the row first so we learn the canonical id and whether this is new.
-	// The store keys on (tenant_id, digest, format): one SBOM per digest+format
-	// per tenant, first submission canonical. A new row is created 'pending' — it
-	// is not scannable or readable until the bytes are stored and the row is
-	// promoted to 'active' below. Both quotas are enforced ATOMICALLY (serialized
-	// per tenant with an advisory lock) inside the upsert: the repository cap bounds
-	// distinct images, and the SBOM cap bounds distinct digests (a tenant could
-	// otherwise accrue unbounded digests under one repo — every rebuild is a new
-	// digest). A re-submit of an existing digest, or a new digest under a tracked
-	// repository, is always admitted; only brand-new growth past a cap is rejected.
+	// Insert the pending row while holding the account lifecycle fence. It remains
+	// invisible until the exact bytes are stored and activation succeeds below.
 	effID, inserted, status, err := s.store.UpsertSBOMWithLimit(ctx, &postgres.SBOM{
 		ID:           id,
 		TenantID:     acct.ID,
@@ -224,14 +216,14 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(err, postgres.ErrImageLimit) {
 		logMutationDenied(r, "sbom.submit", "image quota reached")
 		writeError(w, http.StatusTooManyRequests, fmt.Sprintf(
-			"image limit reached (%d images per tenant); archive an image or contact support to raise the limit",
+			"image limit reached (%d images per account); archive an image or contact support to raise the limit",
 			config.MaxImagesPerTenant()))
 		return
 	}
 	if errors.Is(err, postgres.ErrSBOMLimit) {
 		logMutationDenied(r, "sbom.submit", "SBOM quota reached")
 		writeError(w, http.StatusTooManyRequests, fmt.Sprintf(
-			"SBOM limit reached (%d active SBOMs per tenant); archive an SBOM or contact support to raise the limit",
+			"SBOM limit reached (%d active SBOMs per account); archive an SBOM or contact support to raise the limit",
 			config.MaxSBOMsPerTenant()))
 		return
 	}
@@ -262,7 +254,7 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 		if err := s.blobs.Put(ctx, objectPath, raw); err != nil {
 			logMutationFailure(r, "sbom.submit", acct.ID, effID, err)
 			slog.Error("store sbom bytes", "sbom_id", effID, "error", err)
-			if delErr := s.store.DeletePendingSBOM(ctx, effID); delErr != nil {
+			if delErr := s.store.DeletePendingSBOM(ctx, acct.ID, effID); delErr != nil {
 				slog.Error("cleanup pending sbom", "sbom_id", effID, "error", delErr)
 			}
 			writeError(w, http.StatusInternalServerError, "failed to store SBOM")
@@ -284,6 +276,17 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 			middleware.ActorFromContext(ctx), middleware.RequestIDFromContext(ctx)); err != nil {
 			logMutationFailure(r, "sbom.activate", acct.ID, effID, err)
 			slog.Error("activate sbom", "sbom_id", effID, "error", err)
+			if shouldCompensateSBOMActivation(err) {
+				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+				defer cancel()
+				if delErr := s.blobs.Delete(cleanupCtx, objectPath); delErr != nil {
+					slog.Error("cleanup terminal SBOM activation blob", "account_id", acct.ID,
+						"sbom_id", effID, "object_path", objectPath, "error", delErr)
+				} else if delErr := s.store.DeletePendingSBOM(cleanupCtx, acct.ID, effID); delErr != nil {
+					slog.Error("cleanup terminal pending SBOM", "account_id", acct.ID,
+						"sbom_id", effID, "error", delErr)
+				}
+			}
 			writeError(w, http.StatusInternalServerError, "failed to activate SBOM")
 			return
 		}
@@ -310,6 +313,10 @@ func (s *Server) handleSubmitSBOM(w http.ResponseWriter, r *http.Request) {
 		SBOMID: effID, ImageRef: imageRef, Digest: subj.Digest,
 		Format: string(subj.Format), Existing: !inserted, VerificationStatus: verificationStatus,
 	})
+}
+
+func shouldCompensateSBOMActivation(err error) bool {
+	return errors.Is(err, postgres.ErrAccountInactive) || errors.Is(err, postgres.ErrNotFound)
 }
 
 // verifyAttestation runs attestation verification for a just-ingested SBOM and

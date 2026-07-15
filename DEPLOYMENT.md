@@ -94,7 +94,7 @@ for table in $(psql "$PRE_URL" -Atqc \
 done
 ```
 
-Recreate only the migrated clone, then apply migrations 19 through 29 through
+Recreate only the migrated clone, then apply migrations 19 through 32 through
 the real advisory-locked Go migration runner. `TestMigrate_Idempotent` opens the
 store (which applies pending migrations) and calls `Migrate` again, proving the
 second pass is a no-op.
@@ -114,13 +114,13 @@ DATABASE_URL="$TEST_URL" go test ./pkg/data/postgres \
 ```
 
 Validate the migrated contract and compare every baseline table count. The
-version query must report `29 | 1 | 29 | true`; all count pairs must match.
+version query must report `32 | 1 | 32 | true`; all count pairs must match.
 
 ```bash
 psql "$TEST_URL" -v ON_ERROR_STOP=1 -c \
   "SELECT count(*), min(version), max(version),
           array_agg(version ORDER BY version) =
-            ARRAY(SELECT generate_series(1,29)) AS contiguous
+            ARRAY(SELECT generate_series(1,32)) AS contiguous
    FROM devradar_schema_version"
 
 psql "$TEST_URL" -v ON_ERROR_STOP=1 -c \
@@ -144,8 +144,8 @@ done
 
 Run `EXPLAIN (ANALYZE, BUFFERS)` on the migrated clone using the exact SQL from
 `NextAlertEvents`, `AdminProductHealth`, and the Overview `FleetStats` / top
-images paths. Use real tenant IDs from the clone and cover both the rollup fast
-path and a VEX-aware fallback tenant. Record execution time, buffer and temp
+images paths. Use real account IDs from the clone and cover both the rollup fast
+path and a VEX-aware fallback account. Record execution time, buffer and temp
 usage, row estimates, scan type, and the indexes selected. Add an index only
 when the measured plan demonstrates the need; any correction must be a new
 forward migration, never an edit to an applied migration.
@@ -167,8 +167,13 @@ verification:
 make serve DEV_DB="$TEST_URL"
 ```
 
+Migrations 030–032 must additionally preserve every legacy account/user mapping,
+create no duplicate memberships, retain multi-account users when one account is
+deleted, and keep every query explicitly account-filtered. Do not rename the
+physical `devradar_tenant` table or `tenant_id` columns during this rollout.
+
 **No-release gate:** do not tag, push, deploy, enable a production feature, or
-run production Terraform until all migrations are contiguous through 29, the
+run production Terraform until all migrations are contiguous through 32, the
 idempotent rerun is clean, baseline business-table counts match, query plans are
 reviewed, `make qualify` and `go build ./...` pass, and the owner validates the
 complete local workflow. A failed check returns to the preserved baseline via
@@ -330,6 +335,45 @@ and both jobs in `infra/saas/cloudrun.tf`, then `make tf-apply`.
 
 ## Routine updates
 
+### Account-sharing rollout gate — currently disabled
+
+Account sharing is not shipped. `DEVRADAR_ACCOUNT_SHARING_ENABLED` must remain
+false or unset in production until the owner completes the validation below and
+separately approves rollout. The flag gates invitation creation, management,
+and acceptance; normal single-user account access remains available while it is
+off.
+
+The rollout unit is one immutable bundle containing the delivery, scan, and
+serve images at exact SHA-256 digests. The deploy workflow validates all three
+references before mutation, pauses the delivery Scheduler, updates the delivery
+consumer before the serve producer, and resumes only after every update
+succeeds. Any failure leaves delivery paused. Inspect state and rerun the same
+three digest references byte-for-byte; never substitute tags, mix bundles,
+manually resume a partial rollout, or enable sharing on mixed revisions.
+
+The serve revision must have the same base64-encoded 32-byte
+`DEVRADAR_DELIVERY_KEY` as the `devradar-deliver` job. Enabling sharing without
+that key fails server startup. The delivery job also requires the durable key
+and production Resend credential and fails closed when either is absent or
+invalid. Delivery failure never grants membership.
+
+Before enabling the flag, restore and migrate an isolated production backup
+through migrations 030–032, run `make qualify` and `go build ./...`, and have
+the owner validate:
+
+1. ordinary signup creates no user or account before verified token consumption;
+2. invitations use an expiring, single-use fragment bearer and matching verified email;
+3. delivery retry/idempotency produces no duplicate recipient-visible message;
+4. `reader`, `editor`, and `admin` permissions match the documented role matrix;
+5. account switching never leaks another account's data or credentials;
+6. role change and revocation take effect on the next request;
+7. deleting one account preserves multi-account users and their other memberships;
+8. platform administration uses the actor's email and account-scoped API-token operations.
+
+Only an explicit owner decision after that evidence authorizes a later
+configuration change. Do not mark the ROADMAP outcome shipped merely because
+the code and migrations are present.
+
 ### Ship new application code
 
 Apply infrastructure changes before releasing an image that depends on them.
@@ -450,6 +494,14 @@ terraform -chdir=infra/saas apply -replace=random_id.delivery_key
 Local `make deliver` requires a controlling interactive terminal. In development
 without Resend, the complete invitation link is written only to `/dev/tty`;
 redirected or noninteractive execution fails closed without leasing outbox rows.
+Use the same durable key as the local serve process:
+
+```bash
+export DEVRADAR_DELIVERY_KEY="$(openssl rand -base64 32)"
+export DEVRADAR_ACCOUNT_SHARING_ENABLED=true
+make serve       # terminal 1
+make deliver     # terminal 2, attached to /dev/tty
+```
 
 ## Notes & caveats
 

@@ -1,29 +1,30 @@
 {{template "head" .}}
 {{template "admin-nav" .}}
 <main class="page-content">
-  <h1 class="page-title">Tenants</h1>
+  <h1 class="page-title">Accounts</h1>
   {{template "admin-flash" .}}
 
   <div class="card">
-    <form class="row" method="get" action="/admin/tenants">
-      <input type="text" name="q" value="{{.Query}}" placeholder="Search email…">
+    <form class="row" method="get" action="/admin/accounts">
+      <label class="sr-only" for="admin-account-search">Search accounts</label>
+      <input id="admin-account-search" type="search" name="q" value="{{.Query}}" placeholder="Search account or member email…">
       <button class="btn secondary" type="submit">Search</button>
     </form>
     <table>
-      <thead><tr><th>Email</th><th>Plan</th><th>Status</th><th>Min severity</th><th class="num">Images</th><th>Last login</th><th>Created</th></tr></thead>
+      <thead><tr><th>Account</th><th>Initial admin</th><th class="num">Members</th><th>Plan</th><th>Status</th><th>Min severity</th><th>Created</th></tr></thead>
       <tbody>
-        {{range .Tenants}}
+        {{range .Accounts}}
         <tr>
-          <td><a href="/admin/tenant/{{.ID}}">{{.Email}}</a></td>
-          <td>{{.Plan}}</td>
-          <td>{{if eq .Status "suspended"}}<span class="pill danger">suspended</span>{{else}}<span class="pill">active</span>{{end}}</td>
-          <td class="muted">{{if .MinSeverity}}{{.MinSeverity}}{{else}}(default){{end}}</td>
-          <td class="num">{{.ImageCount}}</td>
-          <td class="muted">{{if .LastLoginAt}}{{.LastLoginAt.Format "2006-01-02 15:04"}}{{else}}never{{end}}</td>
-          <td class="muted">{{.CreatedAt.Format "2006-01-02"}}</td>
+          <td><a href="/admin/account/{{.Account.ID}}">{{.Account.Name}}</a></td>
+          <td>{{if .InitialAdminEmail}}{{.InitialAdminEmail}}{{else}}<span class="muted">none</span>{{end}}</td>
+          <td class="num">{{.MemberCount}}</td>
+          <td>{{.Account.Plan}}</td>
+          <td>{{if eq .Account.Status "suspended"}}<span class="pill danger">suspended</span>{{else}}<span class="pill">active</span>{{end}}</td>
+          <td class="muted">{{if .Account.MinSeverity}}{{.Account.MinSeverity}}{{else}}(default){{end}}</td>
+          <td class="muted">{{.Account.CreatedAt.Format "2006-01-02"}}</td>
         </tr>
         {{else}}
-        <tr><td colspan="7" class="muted">No tenants match.</td></tr>
+        <tr><td colspan="7" class="muted">No accounts match.</td></tr>
         {{end}}
       </tbody>
     </table>
@@ -31,20 +32,21 @@
     <div class="row" style="justify-content:space-between">
       <span class="muted">Page {{.Page}} of {{.TotalPages}} · {{.Total}} total</span>
       <span>
-        {{if .HasPrev}}<a class="btn secondary" href="/admin/tenants?q={{.Query}}&page={{.PrevPage}}">← Prev</a>{{end}}
-        {{if .HasNext}}<a class="btn secondary" href="/admin/tenants?q={{.Query}}&page={{.NextPage}}">Next →</a>{{end}}
+        {{if .HasPrev}}<a class="btn secondary" href="/admin/accounts?q={{.Query}}&page={{.PrevPage}}">← Prev</a>{{end}}
+        {{if .HasNext}}<a class="btn secondary" href="/admin/accounts?q={{.Query}}&page={{.NextPage}}">Next →</a>{{end}}
       </span>
     </div>
     {{end}}
   </div>
 
   <div class="card">
-    <div class="card-head"><h2>Invite tenant</h2></div>
-    <p class="muted">Creates a verified tenant by email (sign-in remains passwordless).</p>
+    <div class="card-head"><h2>Send signup link</h2></div>
+    <p class="muted">Sends the ordinary passwordless signup link. No user or account is created until the recipient verifies the email by using it.</p>
     <form class="row" method="post" action="/admin/invite">
       <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-      <input type="email" name="email" placeholder="person@example.com" required>
-      <button class="btn" type="submit">Invite</button>
+      <label class="sr-only" for="admin-signup-email">User email</label>
+      <input id="admin-signup-email" type="email" name="email" placeholder="person@example.com" required>
+      <button class="btn" type="submit">Send signup link</button>
     </form>
   </div>
 </main>

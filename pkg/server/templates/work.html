@@ -24,7 +24,7 @@
       <a class="work-open" href="/cves/{{.CVE}}">Review →</a>
     </article>
     {{else}}
-    <div class="card"><p class="muted">No open vulnerabilities meet your tenant severity threshold.</p></div>
+    <div class="card"><p class="muted">No open vulnerabilities meet your account severity threshold.</p></div>
     {{end}}
   </div>
   {{if .NextCursor}}<p class="loadmore"><a href="/work?cursor={{.NextCursor}}">Load more →</a></p>{{end}}

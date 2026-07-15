@@ -73,7 +73,7 @@ func TestAdminDashboardProductHealth_CaughtUpWithoutDatabaseMutation(t *testing.
 	if err := templates.ExecuteTemplate(&body, "admin_dashboard.html", data); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Product health", "Caught up", "No active tenants", "current UTC date 2026-07-11"} {
+	for _, want := range []string{"Product health", "Caught up", "No active accounts", "current UTC date 2026-07-11"} {
 		if !strings.Contains(body.String(), want) {
 			t.Errorf("rendered dashboard missing %q", want)
 		}
@@ -86,5 +86,27 @@ func TestAdminDashboardProductHealth_CaughtUpWithoutDatabaseMutation(t *testing.
 		if !strings.Contains(body.String(), want) {
 			t.Errorf("product-health subgroup missing level-3 heading %q", heading)
 		}
+	}
+}
+
+func TestAdminFlashRendersDeletionStates(t *testing.T) {
+	tests := []struct {
+		message string
+		want    string
+	}{
+		{message: "deletion_in_progress", want: "Account deletion is irreversible and already in progress; status changes are disabled."},
+		{message: "cleanup_in_progress", want: "Account cleanup is still in progress. Retry deletion to continue."},
+		{message: "cleanup_failed", want: "Account cleanup failed. Retry deletion to continue."},
+	}
+	for _, tc := range tests {
+		t.Run(tc.message, func(t *testing.T) {
+			var body bytes.Buffer
+			if err := templates.ExecuteTemplate(&body, "admin-flash", map[string]any{"Msg": tc.message}); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(body.String(), `class="msg err"`) || !strings.Contains(body.String(), tc.want) {
+				t.Fatalf("admin flash for %q = %q, want error message %q", tc.message, body.String(), tc.want)
+			}
+		})
 	}
 }

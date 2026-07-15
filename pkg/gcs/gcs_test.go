@@ -2,10 +2,16 @@ package gcs
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
+	"cloud.google.com/go/storage"
 	"github.com/thingzio/devradar/pkg/config"
+	"google.golang.org/api/option"
 )
 
 // TestLocalStore_RoundTrip: Put then Fetch returns the same bytes.
@@ -24,6 +30,93 @@ func TestLocalStore_RoundTrip(t *testing.T) {
 	}
 	if string(got) != string(want) {
 		t.Errorf("fetch = %q, want %q", got, want)
+	}
+}
+
+func TestLocalStoreDeleteIsExactAndIdempotent(t *testing.T) {
+	ls := LocalStore{Dir: t.TempDir()}
+	ctx := context.Background()
+	target := "gs://bucket/account/target"
+	foreign := "gs://bucket/account/foreign"
+	for _, path := range []string{target, foreign} {
+		if err := ls.Put(ctx, path, []byte(path)); err != nil {
+			t.Fatalf("put %s: %v", path, err)
+		}
+	}
+	if err := ls.Delete(ctx, target); err != nil {
+		t.Fatalf("delete target: %v", err)
+	}
+	if err := ls.Delete(ctx, target); err != nil {
+		t.Fatalf("repeat delete target: %v", err)
+	}
+	if _, err := ls.Fetch(ctx, target); err == nil {
+		t.Fatal("deleted local object remains readable")
+	}
+	if got, err := ls.Fetch(ctx, foreign); err != nil || string(got) != foreign {
+		t.Fatalf("foreign local object = %q, %v", got, err)
+	}
+}
+
+func TestLocalStoreObjectURIsDoNotCollide(t *testing.T) {
+	ls := LocalStore{Dir: t.TempDir()}
+	ctx := context.Background()
+	nested := "gs://bucket/a/b"
+	flat := "gs://bucket/a_b"
+
+	if err := ls.Put(ctx, nested, []byte("nested")); err != nil {
+		t.Fatalf("put nested object: %v", err)
+	}
+	if err := ls.Put(ctx, flat, []byte("flat")); err != nil {
+		t.Fatalf("put flat object: %v", err)
+	}
+	if err := ls.Delete(ctx, nested); err != nil {
+		t.Fatalf("delete nested object: %v", err)
+	}
+	if _, err := ls.Fetch(ctx, nested); err == nil {
+		t.Fatal("deleted nested object remains readable")
+	}
+	got, err := ls.Fetch(ctx, flat)
+	if err != nil {
+		t.Fatalf("fetch flat object: %v", err)
+	}
+	if string(got) != "flat" {
+		t.Fatalf("flat object = %q, want flat", got)
+	}
+}
+
+func TestClientDeleteIsExactAndMissingIsSuccess(t *testing.T) {
+	ctx := context.Background()
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.EscapedPath())
+		if len(requests) == 2 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":{"code":404,"message":"not found"}}`))
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	sc, err := storage.NewClient(ctx, option.WithEndpoint(server.URL), option.WithoutAuthentication())
+	if err != nil {
+		t.Fatalf("new storage client: %v", err)
+	}
+	defer func() { _ = sc.Close() }()
+	client := &Client{sc: sc}
+	path := "gs://exact-bucket/account/object.json"
+	if err := client.Delete(ctx, path); err != nil {
+		t.Fatalf("delete GCS object: %v", err)
+	}
+	if err := client.Delete(ctx, path); err != nil {
+		t.Fatalf("delete missing GCS object: %v", err)
+	}
+	wantSuffix := "/b/" + url.PathEscape("exact-bucket") + "/o/" + url.PathEscape("account/object.json")
+	if len(requests) != 2 || !slices.Equal(requests, []string{
+		"DELETE " + wantSuffix,
+		"DELETE " + wantSuffix,
+	}) {
+		t.Fatalf("GCS delete requests = %q, want exact object twice", requests)
 	}
 }
 

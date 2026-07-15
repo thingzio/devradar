@@ -7,7 +7,7 @@
   <div class="tabs">
     <a href="/admin" class="tab {{if eq .AdminTab "dashboard"}}active{{end}}">Dashboard</a>
     <a href="/admin/scans" class="tab {{if eq .AdminTab "scans"}}active{{end}}">Scans</a>
-    <a href="/admin/tenants" class="tab {{if eq .AdminTab "tenants"}}active{{end}}">Tenants</a>
+    <a href="/admin/accounts" class="tab {{if eq .AdminTab "accounts"}}active{{end}}">Accounts</a>
     <a href="/admin/metrics" class="tab {{if eq .AdminTab "metrics"}}active{{end}}">Metrics</a>
   </div>
   <div class="user-menu-wrap">
@@ -16,4 +16,9 @@
 </nav>
 {{end}}
 
-{{define "admin-flash"}}{{if .Msg}}<div class="msg {{if eq .Msg "error"}}err{{else}}ok{{end}}">{{.Msg}}</div>{{end}}{{end}}
+{{define "admin-flash"}}{{if .Msg}}
+{{if eq .Msg "deletion_in_progress"}}<div class="msg err">Account deletion is irreversible and already in progress; status changes are disabled.</div>
+{{else if eq .Msg "cleanup_in_progress"}}<div class="msg err">Account cleanup is still in progress. Retry deletion to continue.</div>
+{{else if eq .Msg "cleanup_failed"}}<div class="msg err">Account cleanup failed. Retry deletion to continue.</div>
+{{else}}<div class="msg {{if eq .Msg "error"}}err{{else}}ok{{end}}">{{.Msg}}</div>{{end}}
+{{end}}{{end}}

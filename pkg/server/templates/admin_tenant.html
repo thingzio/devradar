@@ -1,8 +1,8 @@
 {{template "head" .}}
 {{template "admin-nav" .}}
 <main class="page-content narrow">
-  <p><a href="/admin/tenants" class="muted">← Tenants</a></p>
-  <h1 class="page-title">{{.T.Email}}</h1>
+  <p><a href="/admin/accounts" class="muted">← Accounts</a></p>
+  <h1 class="page-title">{{.Account.Name}}</h1>
   {{template "admin-flash" .}}
 
   {{with .Summary}}
@@ -15,29 +15,43 @@
 
   <div class="card">
     <div class="card-head"><h2>Account</h2></div>
-    <p class="muted">Created {{.T.CreatedAt.Format "2006-01-02"}} · status
-      {{if eq .T.Status "suspended"}}<span class="pill danger">suspended</span>{{else}}<span class="pill">active</span>{{end}}</p>
+    <p class="muted">Created {{.Account.CreatedAt.Format "2006-01-02"}} · status
+      {{if eq .Account.Status "suspended"}}<span class="pill danger">suspended</span>{{else}}<span class="pill">active</span>{{end}}</p>
 
-    <form class="row" method="post" action="/admin/tenant/{{.T.ID}}/plan">
+    <form class="row" method="post" action="/admin/account/{{.Account.ID}}/plan">
       <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-      <label>Plan</label>
-      <select name="plan">{{$cur := .T.Plan}}{{range .Plans}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}</select>
+      <label for="admin-account-plan">Plan</label>
+      <select id="admin-account-plan" name="plan">{{$cur := .Account.Plan}}{{range .Plans}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}</select>
       <button class="btn secondary" type="submit">Save</button>
     </form>
 
-    <form class="row" method="post" action="/admin/tenant/{{.T.ID}}/status">
+    <form class="row" method="post" action="/admin/account/{{.Account.ID}}/status">
       <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-      <label>Status</label>
-      <select name="status">{{$cur := .T.Status}}{{range .Statuses}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}</select>
+      <label for="admin-account-status">Status</label>
+      <select id="admin-account-status" name="status">{{$cur := .Account.Status}}{{range .Statuses}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}</select>
       <button class="btn secondary" type="submit">Save</button>
     </form>
 
-    <form class="row" method="post" action="/admin/tenant/{{.T.ID}}/min-severity">
+    <form class="row" method="post" action="/admin/account/{{.Account.ID}}/min-severity">
       <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-      <label>Min severity</label>
-      <select name="min_severity">{{$cur := .T.MinSeverity}}{{range .Severities}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}</select>
+      <label for="admin-account-min-severity">Min severity</label>
+      <select id="admin-account-min-severity" name="min_severity">{{$cur := .Account.MinSeverity}}{{range .Severities}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}</select>
       <button class="btn secondary" type="submit">Save</button>
     </form>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Members</h2></div>
+    <table>
+      <thead><tr><th>User</th><th>Role</th><th>Status</th></tr></thead>
+      <tbody>
+        {{range .Members}}
+        <tr><td>{{.Actor.Email}}</td><td>{{.Membership.Role}}</td><td>{{.Actor.Status}}</td></tr>
+        {{else}}
+        <tr><td colspan="3" class="muted">No active memberships.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
   </div>
 
   <div class="card">
@@ -51,7 +65,7 @@
           <td class="muted">{{.CreatedAt.Format "2006-01-02"}}</td>
           <td class="muted">{{if .LastUsed}}{{.LastUsed.Format "2006-01-02"}}{{else}}never{{end}}</td>
           <td>
-            <form class="inline" method="post" action="/admin/tenant/{{$.T.ID}}/token/{{.ID}}/revoke">
+            <form class="inline" method="post" action="/admin/account/{{$.Account.ID}}/token/{{.ID}}/revoke">
               <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
               <button class="btn danger" type="submit">Revoke</button>
             </form>
@@ -66,10 +80,10 @@
 
   <div class="card">
     <div class="card-head"><h2>Danger zone</h2></div>
-    <p class="muted">Deleting a tenant cascades to its sessions, tokens, SBOMs, findings, and events. This cannot be undone.</p>
-    <form class="inline" method="post" action="/admin/tenant/{{.T.ID}}/delete" data-confirm="Delete {{.T.Email}} and all its data?">
+    <p class="muted">Deleting an account removes its SBOM objects, memberships, credentials, findings, and events. Users remain available through their other account memberships. If object cleanup fails, the account and its database records remain suspended for a safe retry; DevRadar never reactivates it automatically. This cannot be undone.</p>
+    <form class="inline" method="post" action="/admin/account/{{.Account.ID}}/delete" data-confirm="Delete account {{.Account.Name}} and all account-owned data?">
       <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-      <button class="btn danger" type="submit">Delete tenant</button>
+      <button class="btn danger" type="submit">Delete account</button>
     </form>
   </div>
 </main>

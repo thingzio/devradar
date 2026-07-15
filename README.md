@@ -9,7 +9,7 @@
 | **Parent** | Thingz (https://thingz.io) |
 | **Category** | Container Security / Vulnerability Intelligence |
 | **Status** | v0.13.5 — continuous posture, alerts, comparison, licenses, VEX, and attestation verification implemented; first production apply remains manual |
-| **Updated** | 2026-07-12 |
+| **Updated** | 2026-07-14 |
 
 > Engineering decisions: [DEVELOPMENT.md](DEVELOPMENT.md) · Roadmap: [ROADMAP.md](ROADMAP.md)
 > Deployment: initial setup and updates in [DEPLOYMENT.md](DEPLOYMENT.md)
@@ -19,6 +19,9 @@ This is the product brief and local-use guide. DevRadar provides authenticated
 SBOM submission, recurring Grype + Trivy matching, causal event history,
 browser alerts, remediation work, comparison, trends, VEX, license policy, and
 optional attestation verification. Email/webhook delivery remains on the roadmap.
+Account sharing is implemented behind a disabled rollout flag but remains
+unshipped until the owner validates the complete workflow and explicitly
+approves production exposure.
 
 ---
 
@@ -28,10 +31,10 @@ optional attestation verification. Email/webhook delivery remains on the roadmap
 DevRadar tracks how the vulnerabilities in your container images change over time — you submit an SBOM, and DevRadar repeatedly matches it against current vulnerability data, so you can see exactly what changed, when, and whether it's getting better or worse.
 
 **3 sentences:**
-DevRadar is a container vulnerability *tracking* service built around a single input: the SBOM. A tenant submits a Software Bill of Materials for a specific image digest; DevRadar repeatedly matches that frozen package inventory with multiple scanners and records every change as an event. It answers not "what vulnerabilities exist right now" — any scanner does that — but "what changed, when, and is it getting better or worse."
+DevRadar is a container vulnerability *tracking* service built around a single input: the SBOM. An account submits a Software Bill of Materials for a specific image digest; DevRadar repeatedly matches that frozen package inventory with multiple scanners and records every change as an event. It answers not "what vulnerabilities exist right now" — any scanner does that — but "what changed, when, and is it getting better or worse."
 
 **Paragraph:**
-DevRadar is the vulnerability layer of the Thingz open source intelligence platform. Where DevPulse tracks whether a project is healthy and DevTrace evaluates whether a contributor is trustworthy, DevRadar answers the third question: are the container images you depend on accumulating unpatched vulnerabilities over time? Instead of pulling and scanning images itself, DevRadar consumes SBOMs that tenants submit through an authenticated API. Each SBOM is pinned to an image digest, content-addressed, and stored once. A scheduled job matches due SBOMs with Grype and Trivy, normalizes the results into a scanner-agnostic schema, and appends a change event whenever a finding is added, fixed, re-rated, or resolved. Because the SBOM is a frozen inventory, result changes can be attributed to image, database, or tooling inputs. The architecture needs no image pulls, registry access, or VM fleet, so DevRadar can track images from **private registries it could never access** — the SBOM crosses the trust boundary, not credentials.
+DevRadar is the vulnerability layer of the Thingz open source intelligence platform. Where DevPulse tracks whether a project is healthy and DevTrace evaluates whether a contributor is trustworthy, DevRadar answers the third question: are the container images you depend on accumulating unpatched vulnerabilities over time? Instead of pulling and scanning images itself, DevRadar consumes SBOMs that accounts submit through an authenticated API. Each SBOM is pinned to an image digest, content-addressed, and stored once. A scheduled job matches due SBOMs with Grype and Trivy, normalizes the results into a scanner-agnostic schema, and appends a change event whenever a finding is added, fixed, re-rated, or resolved. Because the SBOM is a frozen inventory, result changes can be attributed to image, database, or tooling inputs. The architecture needs no image pulls, registry access, or VM fleet, so DevRadar can track images from **private registries it could never access** — the SBOM crosses the trust boundary, not credentials.
 
 **Licenses, too.** The same SBOM already names a license for every package, so DevRadar also captures an **open-source license inventory** at submission — with no extra scan. It classifies each package into an obligation category (permissive / weak- & strong-copyleft / proprietary / unknown), visualizes the fleet's license landscape (a category donut + a license-family treemap), and lets you set an opt-in **compliance policy** that flags packages carrying a denied license. See `GET /v1/licenses`, `GET /v1/sboms/{id}/licenses`, and the `/licenses` UI page.
 
@@ -62,7 +65,7 @@ Vulnerability scanners tell you what's wrong right now. DevRadar tells you what 
 
 Most teams run a scanner in CI, get a report, and either fix things or don't. What they lack is the time dimension. Is this image accumulating vulnerabilities? Did today's scanner-DB update surface 12 new criticals, or did the image actually change? Is the maintainer patching, or are CVEs piling up?
 
-DevRadar provides that time dimension. By repeatedly matching the same SBOM and recording every change as an event, it produces a vulnerability trend line for every image digest a tenant tracks. Because the SBOM is a frozen package inventory, the cause of every change is explicit:
+DevRadar provides that time dimension. By repeatedly matching the same SBOM and recording every change as an event, it produces a vulnerability trend line for every image digest an account tracks. Because the SBOM is a frozen package inventory, the cause of every change is explicit:
 
 - **A new finding on an unchanged digest** → the vulnerability database learned something new (a CVE was disclosed, or an existing one was re-rated). The image didn't change; the world's knowledge of it did.
 - **A new finding on a new digest** → the image itself changed and introduced it.
@@ -76,7 +79,7 @@ For teams operating under NIST SSDF or EU Cyber Resilience Act requirements, con
 
 ## The Core Idea: Scan the SBOM, Not the Image
 
-DevRadar never pulls a container image. The tenant's CI already generates an SBOM; DevRadar consumes it. This single decision removes an entire category of problems and unlocks a capability competitors can't easily match.
+DevRadar never pulls a container image. The account's CI already generates an SBOM; DevRadar consumes it. This single decision removes an entire category of problems and unlocks a capability competitors can't easily match.
 
 **What it removes:**
 
@@ -87,7 +90,7 @@ DevRadar never pulls a container image. The tenant's CI already generates an SBO
 
 **What it unlocks:**
 
-- **Private-registry coverage.** DevRadar can track images it could never pull — internal images behind a corporate registry, air-gapped artifacts, anything the tenant can generate an SBOM for. The SBOM crosses the boundary; credentials never leave the tenant. This is the headline capability, not a footnote.
+- **Private-registry coverage.** DevRadar can track images it could never pull — internal images behind a corporate registry, air-gapped artifacts, anything an account can generate an SBOM for. The SBOM crosses the boundary; credentials never leave the account. This is the headline capability, not a footnote.
 - **Determinism.** The same SBOM + the same scanner DB version always produces the same findings. "Show me this image's vulnerabilities as of DB version X" is reproducible forever — a compliance and audit primitive.
 
 ### What DevRadar Guarantees (and What It Doesn't)
@@ -97,9 +100,9 @@ DevRadar operates on a **trust-on-submission** model. It guarantees:
 - **Determinism / reproducibility** — identical SBOM + identical scanner DB → identical findings, always.
 - **Clean change causality** — every delta on a fixed SBOM is DB-driven; a new SBOM for the same image is image-driven. The digest boundary is explicit in the data.
 
-By default DevRadar does **not** guarantee **authenticity** — that a submitted SBOM faithfully represents the image digest it claims. Without an attestation it cannot verify this (it never pulls the image), so a wrong digest or stale inventory yields results that reflect what the tenant attested to. Garbage in, garbage out — by design, and clearly bounded.
+By default DevRadar does **not** guarantee **authenticity** — that a submitted SBOM faithfully represents the image digest it claims. Without an attestation it cannot verify this (it never pulls the image), so a wrong digest or stale inventory yields results that reflect what the account submitted. Garbage in, garbage out — by design, and clearly bounded.
 
-**Authenticity is now available as an optional overlay.** A tenant may submit a sigstore/cosign attestation alongside the SBOM (an `attestation` field on `POST /v1/sboms`). When a trust policy is configured, DevRadar verifies the signature (keyless via Fulcio identity/issuer + Rekor, or a configured public key) and binds it to the SBOM's subject digest — either to the exact SBOM bytes (strongest) or to the resolved image digest. The outcome moves the SBOM's `verification_status` to `verified` or `failed`, and the full evidence (mode, identity/issuer or key, predicate type, transparency-log reference, verifier + policy versions) is retained in `devradar_sbom_attestation` for audit. Verification is strictly additive: it is never required, an unconfigured deployment leaves every SBOM `unverified`, and a verification failure never blocks ingest. DevRadar still guarantees determinism regardless.
+**Authenticity is now available as an optional overlay.** An account may submit a sigstore/cosign attestation alongside the SBOM (an `attestation` field on `POST /v1/sboms`). When a trust policy is configured, DevRadar verifies the signature (keyless via Fulcio identity/issuer + Rekor, or a configured public key) and binds it to the SBOM's subject digest — either to the exact SBOM bytes (strongest) or to the resolved image digest. The outcome moves the SBOM's `verification_status` to `verified` or `failed`, and the full evidence (mode, identity/issuer or key, predicate type, transparency-log reference, verifier + policy versions) is retained in `devradar_sbom_attestation` for audit. Verification is strictly additive: it is never required, an unconfigured deployment leaves every SBOM `unverified`, and a verification failure never blocks ingest. DevRadar still guarantees determinism regardless.
 
 ### Is Scanning an SBOM as Accurate as Scanning the Image?
 
@@ -130,13 +133,13 @@ The honest summary: for an all-layers SBOM, DevRadar's accuracy is a *generator-
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  Tenant CI pipeline                                          │
+│  Account CI pipeline                                         │
 │  syft / docker sbom / buildkit  →  SBOM (CycloneDX or SPDX)  │
 └─────────────────────────┬────────────────────────────────────┘
                           │ POST /v1/sboms  (authenticated)
 ┌─────────────────────────▼────────────────────────────────────┐
 │  Ingest API (Cloud Run service)                              │
-│  - authenticate tenant, enforce quota                        │
+│  - authenticate account credential, enforce quota            │
 │  - validate + size-cap the SBOM (untrusted input)            │
 │  - extract subject image ref + digest from SBOM              │
 │  - content-address by sha256(bytes); dedupe                  │
@@ -170,7 +173,9 @@ The store is Cloud SQL PostgreSQL. Migrations are authoritative; the conceptual 
 
 | Table | Role | Growth |
 |---|---|---|
-| `tenants` | One row per tenant; owns SBOMs and alert routing | Static |
+| `users` | One row per verified person, independent of account ownership | Static |
+| `accounts` | Owns SBOMs, policies, alert routing, and API credentials | Static |
+| `account_members` | Grants one user an `admin`, `editor`, or `reader` role in an account | Per accepted membership |
 | `sboms` | One row per unique submitted SBOM (content-addressed, digest-pinned, immutable) | Per submission |
 | `scan_runs` | One row per SBOM per scanner result; summary counts + version axes | Append-only |
 | `findings` | **Current** state: one row per unique finding per SBOM per scanner (UPSERT) | Bounded — latest state only |
@@ -179,6 +184,50 @@ The store is Cloud SQL PostgreSQL. Migrations are authoritative; the conceptual 
 **Why an event log instead of daily snapshots.** A fixed SBOM has a frozen package inventory, so day-over-day findings are ~99% identical. Storing a full snapshot every day would write hundreds of millions of duplicate rows per year. Instead DevRadar keeps *current state* (`findings`, UPSERT) plus an append-only change log (`finding_events`). The read API and alert evaluator consume the same committed event stream.
 
 **Retention.** `finding_events` is retained **indefinitely** in v1 — the audit trail is the product, and events are cheap. The table is partitioned monthly by `occurred_at` from day one, so future retention tiers (per access plan) or roll-ups (detailed CVE data for the last N days, aggregated trend before that) are additive — a policy or a derived read-model, never a migration.
+
+### Account identity and sharing contract — unshipped
+
+The implementation distinguishes three identities:
+
+- A **user** is one verified person and email identity.
+- An **account** owns evidence, policies, alerts, and API credentials.
+- A **membership** grants one user one role in an account. A user may belong to
+  multiple accounts and selects the active account for each browser session.
+
+Roles are account-wide and equal for every member holding that role:
+
+| Role | Read account | Personal state | Submit/archive evidence | Settings, credentials, members |
+|---|---:|---:|---:|---:|
+| `reader` | Yes | Yes | No | No |
+| `editor` | Yes | Yes | Yes | No |
+| `admin` | Yes | Yes | Yes | Yes |
+
+API tokens belong to an account, not a user or membership. They authenticate
+automation directly into that account and never inherit a human role.
+
+Platform account deletion first suspends the account and preserves its exact
+SBOM object-path inventory, then deletes those objects one by one before
+finalizing database deletion. Storage or database failure leaves the account
+suspended for an idempotent retry; it is never reactivated automatically, and
+users retain memberships in their other accounts.
+
+When account sharing is enabled, an admin chooses an email and exact role.
+DevRadar persists a pending invitation and an encrypted delivery-outbox row;
+delivery failure grants nothing. The bearer token travels only in the URL
+fragment (`#token=...`), is single-use and expiring, and is accepted only by a
+signed-in user whose verified email matches the recipient. Acceptance creates
+or reactivates the membership atomically. Revocation is immediate on the next
+request because account access is revalidated from PostgreSQL rather than
+cached; the user's identity and memberships in other accounts remain intact.
+
+`DEVRADAR_ACCOUNT_SHARING_ENABLED` gates invitation creation, management, and
+acceptance and defaults to false. Migrations 030–032 add user/account identity,
+audited account state, invitations, and the delivery outbox without renaming
+the compatibility `devradar_tenant` table or `tenant_id` columns. This is not a
+shipped feature: do not enable it, deploy it, or mark its ROADMAP outcome
+complete until the owner has validated signup, invite, delivery, acceptance,
+role changes, revocation, account switching, and API-token behavior and has
+made an explicit rollout decision.
 
 ---
 
@@ -221,6 +270,10 @@ The full pipeline runs on your machine with Docker (Postgres) and the scanner
 binaries — no GCP required. In local mode SBOM bytes are stored on disk (a shared
 folder the API and scan job both use) instead of GCS.
 
+Local object filenames are derived from the complete object URI. Existing
+`.sboms` directories created by older versions used an ambiguous flattened
+mapping and must be reset (`rm -rf .sboms`) before starting the updated server.
+
 ### Prerequisites
 
 - Go (version in [`.settings.yaml`](.settings.yaml)) and Docker
@@ -231,11 +284,11 @@ folder the API and scan job both use) instead of GCS.
 brew install syft grype trivy        # macOS; see each project for other platforms
 ```
 
-### 1. Start Postgres and seed a tenant
+### 1. Start Postgres and seed an account
 
 ```bash
 make db-up                           # starts Postgres in Docker, runs migrations on first serve
-make seed                            # creates a local tenant, prints an API token
+make seed                            # creates a local user/account, prints an API token
 export DR_TOKEN=dr_...               # copy the token from the seed output
 ```
 
@@ -427,8 +480,9 @@ SBOMs may also be submitted **gzip-compressed** (base64 the gzip bytes); the
 server detects and decompresses them, with a decompression-bomb guard.
 
 **Severity threshold.** Every read endpoint filters by a minimum severity —
-`medium` by default, set per tenant (in the UI, or `min_severity` on the tenant
-row). Override per request, independently on each endpoint, with `?min_severity=`:
+`medium` by default, set per account (in the UI, or `min_severity` on the
+compatibility account row). Override per request, independently on each
+endpoint, with `?min_severity=`:
 
 ```bash
 curl -s "http://localhost:8080/v1/sboms/<sbom_id>/findings?min_severity=critical" -H "Authorization: Bearer $DR_TOKEN"
@@ -471,6 +525,21 @@ export SEND_API_KEY=...                      # Resend API key (shared: SEND_API_
 export EMAIL_FROM="DevRadar <no-reply@thingz.io>"   # optional; has a default
 ```
 
+Local invitation delivery is a separate, interactive command. Use the same
+durable key for the serve and delivery processes:
+
+```bash
+export DEVRADAR_DELIVERY_KEY="$(openssl rand -base64 32)"
+export DEVRADAR_ACCOUNT_SHARING_ENABLED=true
+make serve       # creates invitation/outbox rows; keep running
+make deliver     # in another interactive terminal; delivers one batch
+```
+
+Without Resend in development, `make deliver` writes the complete invitation
+link only to its controlling `/dev/tty`. Redirection, a pipe, CI, or any other
+noninteractive invocation fails closed without leasing an outbox row. Never
+copy the fragment bearer into logs.
+
 ### Common tasks
 
 ```bash
@@ -508,7 +577,7 @@ DevRadar is the third service in the Thingz open source intelligence platform. E
 ### Shared Infrastructure
 
 All three services run on GCP in the `thingzio` project (`us-west1`) and follow one platform contract — DevRadar references shared resources and creates only its own (details in [DEVELOPMENT.md](DEVELOPMENT.md)):
-- **Cloud SQL PostgreSQL** — one shared instance (`thingzio-pg`) and database (`thingz`); each service connects as its own DB user and prefixes its tables (`devradar_*`). DevRadar isolates tenants at the application layer (`WHERE tenant_id = $1`), like DevTrace; DevPulse uses Row-Level Security.
+- **Cloud SQL PostgreSQL** — one shared instance (`thingzio-pg`) and database (`thingz`); each service connects as its own DB user and prefixes its tables (`devradar_*`). DevRadar isolates accounts at the application layer through the compatibility `tenant_id` column (`WHERE tenant_id = $1`), like DevTrace; DevPulse uses Row-Level Security.
 - **Cloud Run** — each service owns its service/job; DevRadar runs a serve service (`devradar-saas-serve`) and a scheduled scan job (`devradar-saas-scan`), built with `ko`/GoReleaser and deployed via Workload Identity Federation.
 - **Secret Manager** — centralized application credentials; DevRadar never stores registry credentials.
 - **Shared VPC, Artifact Registry, monitoring** — DevRadar attaches to the shared VPC, pushes to its own `devradar-saas-images` repo, and reuses the shared DB alert policies.

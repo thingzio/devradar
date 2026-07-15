@@ -11,7 +11,6 @@ import (
 	"github.com/thingzio/devradar/pkg/account"
 	"github.com/thingzio/devradar/pkg/authn"
 	"github.com/thingzio/devradar/pkg/middleware"
-	"github.com/thingzio/devradar/pkg/tenant"
 )
 
 // The tests below cover the auth REJECTION paths — the security boundary that
@@ -156,7 +155,7 @@ func TestAccessContextChromeUsesActorAndAccountFields(t *testing.T) {
 	actorEmail := "actor-" + accountID[:8] + "@example.com"
 	actorAvatar := "https://avatars.githubusercontent.com/u/12345"
 	accountName := "Shared account " + accountID[:8]
-	legacyEmail := tenantEmail(t, st, accountID)
+	legacyEmail := platformActorEmail(t, st, accountID)
 	legacyAvatar := "https://avatars.githubusercontent.com/u/67890"
 	if _, err := st.DB().ExecContext(ctx, `
 		UPDATE devradar_user SET email=$2,avatar_url=$3 WHERE id=$1`,
@@ -245,12 +244,12 @@ func TestSetMinSeverity_ValidAndInvalid(t *testing.T) {
 	if code := validResponse.Code; code != http.StatusSeeOther {
 		t.Errorf("valid min_severity: status = %d, want 303", code)
 	}
-	tn, err := tenant.GetTenant(ctx, st.DB(), tenantID)
+	acct, err := st.GetAccount(ctx, tenantID)
 	if err != nil {
-		t.Fatalf("get tenant: %v", err)
+		t.Fatalf("get account: %v", err)
 	}
-	if tn.MinSeverity != "high" {
-		t.Errorf("min_severity = %q, want high", tn.MinSeverity)
+	if acct.MinSeverity != "high" {
+		t.Errorf("min_severity = %q, want high", acct.MinSeverity)
 	}
 	var actorKind, actorUserID, requestID string
 	if err := st.DB().QueryRowContext(ctx, `
@@ -269,9 +268,9 @@ func TestSetMinSeverity_ValidAndInvalid(t *testing.T) {
 	if response := post("banana"); response.Code != http.StatusBadRequest {
 		t.Errorf("invalid min_severity: status = %d, want 400", response.Code)
 	}
-	tn, _ = tenant.GetTenant(ctx, st.DB(), tenantID)
-	if tn.MinSeverity != "high" {
-		t.Errorf("min_severity after invalid = %q, want unchanged high", tn.MinSeverity)
+	acct, _ = st.GetAccount(ctx, tenantID)
+	if acct.MinSeverity != "high" {
+		t.Errorf("min_severity after invalid = %q, want unchanged high", acct.MinSeverity)
 	}
 }
 

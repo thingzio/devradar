@@ -5,8 +5,11 @@ package gcs
 
 import (
 	"context"
+	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -21,6 +24,7 @@ import (
 type Store interface {
 	Put(ctx context.Context, objectPath string, data []byte) error
 	Fetch(ctx context.Context, objectPath string) ([]byte, error)
+	Delete(ctx context.Context, objectPath string) error
 	Close() error
 }
 
@@ -110,6 +114,22 @@ func (c *Client) Put(ctx context.Context, objectPath string, data []byte) error 
 	return nil
 }
 
+// Delete removes exactly one object. Missing objects are already in the desired
+// state and therefore succeed, making account-deletion retries idempotent.
+func (c *Client) Delete(ctx context.Context, objectPath string) error {
+	bucket, key, err := parseGSURI(objectPath)
+	if err != nil {
+		return err
+	}
+	if err := c.sc.Bucket(bucket).Object(key).Delete(ctx); err != nil {
+		if errors.Is(err, storage.ErrObjectNotExist) {
+			return nil
+		}
+		return fmt.Errorf("delete %s: %w", objectPath, err)
+	}
+	return nil
+}
+
 func parseGSURI(uri string) (bucket, key string, err error) {
 	rest, ok := strings.CutPrefix(uri, "gs://")
 	if !ok {
@@ -122,12 +142,12 @@ func parseGSURI(uri string) (bucket, key string, err error) {
 	return bucket, key, nil
 }
 
-// LocalStore reads and writes SBOM bytes under a base directory, keyed by the
-// tail of the gs:// path. For development and tests only — pairs with the scan
-// job's LocalFetcher so a full submit→scan loop runs without GCS.
+// LocalStore reads and writes SBOM bytes under a base directory, keyed by a
+// digest of the complete object URI. For development and tests only — pairs
+// with the scan job's LocalFetcher so a full submit→scan loop runs without GCS.
 type LocalStore struct{ Dir string }
 
-// Put writes data to Dir/<sanitized objectPath>.
+// Put writes data to Dir/<sha256(objectPath)>.
 func (l LocalStore) Put(_ context.Context, objectPath string, data []byte) error {
 	p := l.pathFor(objectPath)
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -148,11 +168,20 @@ func (l LocalStore) Fetch(_ context.Context, objectPath string) ([]byte, error) 
 	return readBounded(f)
 }
 
+// Delete removes exactly one local object. A missing file is an idempotent
+// success, matching the GCS implementation.
+func (l LocalStore) Delete(_ context.Context, objectPath string) error {
+	if err := os.Remove(l.pathFor(objectPath)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("delete %s: %w", objectPath, err)
+	}
+	return nil
+}
+
 // Close is a no-op; LocalStore holds no resources. Present so LocalStore
 // satisfies the Store interface.
 func (l LocalStore) Close() error { return nil }
 
 func (l LocalStore) pathFor(objectPath string) string {
-	safe := strings.NewReplacer("gs://", "", "/", "_", ":", "_").Replace(objectPath)
-	return filepath.Join(l.Dir, safe)
+	digest := sha256.Sum256([]byte(objectPath))
+	return filepath.Join(l.Dir, fmt.Sprintf("%x", digest))
 }

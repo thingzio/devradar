@@ -1,5 +1,5 @@
 // Package server is DevRadar's HTTP surface: the SBOM ingest API, the
-// tenant-scoped read API, a minimal passwordless (magic-link) UI for minting API
+// account-scoped read API, a minimal passwordless (magic-link) UI for minting API
 // tokens, and health. It uses the stdlib ServeMux with method patterns (no
 // third-party router), matching the sibling services.
 package server
@@ -43,6 +43,7 @@ type Server struct {
 // BlobStore persists and retrieves raw SBOM bytes (GCS in production).
 type BlobStore interface {
 	Put(ctx context.Context, objectPath string, data []byte) error
+	Delete(ctx context.Context, objectPath string) error
 }
 
 // OAuthProvider turns an OAuth authorization code into a proven identity. The

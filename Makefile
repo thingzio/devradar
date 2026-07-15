@@ -108,7 +108,7 @@ db-connect: ## Opens a psql shell to local Postgres
 	psql "$(DEV_DB)"
 
 .PHONY: seed
-seed: ## Seeds a test tenant and prints an API token
+seed: ## Seeds a test user/account and prints an API token
 	DATABASE_URL="$(DEV_DB)" go run ./tools/seed-tenant
 
 .PHONY: serve

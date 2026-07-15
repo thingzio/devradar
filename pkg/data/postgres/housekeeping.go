@@ -20,7 +20,7 @@ import (
 // Run periodically off the scan job's end-of-run housekeeping (there is no cron).
 // Returns the first error encountered but always attempts every delete, so one
 // failing table never blocks reclaiming the others. Kept as raw SQL here (rather
-// than calling pkg/tenant) so the store owns all DDL/DML and there is no
+// than calling a separate compatibility package) so the store owns all DDL/DML and there is no
 // postgres↔tenant import edge.
 func (s *Store) PurgeExpiredAuth(ctx context.Context) error {
 	var firstErr error

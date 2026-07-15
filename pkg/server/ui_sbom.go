@@ -241,7 +241,7 @@ func formatEPSS(p *float32) string {
 
 // handleArchiveSBOMUI archives one SBOM (one digest) from the UI — the "stop
 // tracking this version" action on the SBOM detail page. Soft archive (findings
-// retained), tenant-scoped, idempotent. Redirects back to the image page (or the
+// retained), account-scoped, idempotent. Redirects back to the image page (or the
 // dashboard if the repository can't be resolved) via POST-redirect-GET.
 func (s *Server) handleArchiveSBOMUI(w http.ResponseWriter, r *http.Request) {
 	access := middleware.AccessFromContext(r.Context())
@@ -270,7 +270,7 @@ func (s *Server) handleArchiveSBOMUI(w http.ResponseWriter, r *http.Request) {
 
 // handleArchiveRepoUI archives an entire image (every active digest of a
 // repository) from the UI — the "stop tracking this image" action on the image
-// page. Soft archive, tenant-scoped, idempotent. Redirects to the dashboard.
+// page. Soft archive, account-scoped, idempotent. Redirects to the dashboard.
 func (s *Server) handleArchiveRepoUI(w http.ResponseWriter, r *http.Request) {
 	access := middleware.AccessFromContext(r.Context())
 	repo := r.FormValue("repo")

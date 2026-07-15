@@ -14,12 +14,12 @@
   <div class="card">
     <div class="card-head"><h2>Recent scan runs</h2></div>
     <table>
-      <thead><tr><th>When</th><th>Tenant</th><th>Image</th><th>Scanner</th><th>DB</th><th>Findings</th><th></th></tr></thead>
+      <thead><tr><th>When</th><th>Account</th><th>Image</th><th>Scanner</th><th>DB</th><th>Findings</th><th></th></tr></thead>
       <tbody>
         {{range .Runs}}
         <tr>
           <td>{{.ScannedAt.Format "01-02 15:04"}}</td>
-          <td class="muted">{{.TenantEmail}}</td>
+          <td class="muted">{{.AccountName}}</td>
           <td><code>{{.ImageRef}}</code></td>
           <td>{{.Scanner}}</td>
           <td class="muted">{{.DBVersion}}</td>
@@ -41,12 +41,12 @@
   <div class="card">
     <div class="card-head"><h2>Scan failures</h2></div>
     <table>
-      <thead><tr><th>When</th><th>Tenant</th><th>Scanner</th><th>Stage</th><th>Error</th><th></th></tr></thead>
+      <thead><tr><th>When</th><th>Account</th><th>Scanner</th><th>Stage</th><th>Error</th><th></th></tr></thead>
       <tbody>
         {{range .Failures}}
         <tr>
           <td>{{.OccurredAt.Format "01-02 15:04"}}</td>
-          <td class="muted">{{.TenantEmail}}</td>
+          <td class="muted">{{.AccountName}}</td>
           <td>{{if .Scanner}}{{.Scanner}}{{else}}<span class="muted">—</span>{{end}}</td>
           <td>{{.Stage}}</td>
           <td><code>{{.Error}}</code></td>
@@ -69,12 +69,12 @@
     <p class="muted">Zero findings on a non-trivial SBOM — usually cross-tool cataloger divergence
       (one scanner matches nothing where the other finds CVEs), not a scan error. Informational.</p>
     <table>
-      <thead><tr><th>When</th><th>Tenant</th><th>Scanner</th><th>Detail</th><th></th></tr></thead>
+      <thead><tr><th>When</th><th>Account</th><th>Scanner</th><th>Detail</th><th></th></tr></thead>
       <tbody>
         {{range .Warnings}}
         <tr>
           <td>{{.OccurredAt.Format "01-02 15:04"}}</td>
-          <td class="muted">{{.TenantEmail}}</td>
+          <td class="muted">{{.AccountName}}</td>
           <td>{{if .Scanner}}{{.Scanner}}{{else}}<span class="muted">—</span>{{end}}</td>
           <td><code>{{.Error}}</code></td>
           <td>

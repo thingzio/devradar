@@ -48,17 +48,19 @@ func (s *Store) UpsertSBOM(ctx context.Context, sb *SBOM) (id string, inserted b
 // against maxRepos). A brand-new digest past maxSBOMs returns ErrSBOMLimit; a
 // brand-new repository past maxRepos returns ErrImageLimit.
 //
-// SOFT LIMITS — DELIBERATE (do not add locking to make them exact): the caps are
-// enforced in a single INSERT...SELECT...WHERE whose count subquery shares the
-// statement's snapshot. Under READ COMMITTED this does NOT serialize two truly
-// simultaneous brand-new submits from the SAME tenant — both can see count < cap
-// and both insert, overshooting by the in-flight count. That is accepted: these
-// are abuse/runaway guards, not billing-exact quotas; a single tenant issuing
-// genuinely concurrent submits is unlikely, and a bounded overshoot of a few past
-// (e.g.) 5000 is harmless. Making them exact would require a per-tenant advisory
-// lock + transaction on every ingest — real complexity and contention for a case
-// that virtually never happens. The folded repo-cap guard is likewise soft.
+// The account row is locked before checking status and applying the insert. This
+// fences suspension/deletion from ingest and makes the quota decision exact for
+// concurrent submissions to one account.
 func (s *Store) UpsertSBOMWithLimit(ctx context.Context, sb *SBOM, maxSBOMs, maxRepos int) (id string, inserted bool, status string, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", false, "", fmt.Errorf("begin SBOM upsert: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := lockAccountForSBOMMutation(ctx, tx, sb.TenantID); err != nil {
+		return "", false, "", err
+	}
+
 	var generatedAt any
 	if !sb.GeneratedAt.IsZero() {
 		generatedAt = sb.GeneratedAt.UTC()
@@ -83,8 +85,8 @@ func (s *Store) UpsertSBOMWithLimit(ctx context.Context, sb *SBOM, maxSBOMs, max
 	// admitted only if under the SBOM cap AND (its repo already exists OR under the
 	// repo cap). We distinguish which cap blocked a rejection with a cheap follow-up
 	// probe (only on the rare rejection path), so the caller can return the right
-	// error/message. See the SOFT LIMITS note above re: concurrency.
-	err = s.db.QueryRowContext(ctx, `
+	// error/message.
+	err = tx.QueryRowContext(ctx, `
 		INSERT INTO devradar_sbom
 			(id, tenant_id, image_ref, repository, version, digest, format, spec_version,
 			 tool, tool_version, package_count, object_path, verification_status, status,
@@ -119,7 +121,7 @@ func (s *Store) UpsertSBOMWithLimit(ctx context.Context, sb *SBOM, maxSBOMs, max
 		// SBOM cap. Cheap and only on the (rare) rejection path.
 		if maxRepos > 0 {
 			var repoExists bool
-			if perr := s.db.QueryRowContext(ctx,
+			if perr := tx.QueryRowContext(ctx,
 				`SELECT EXISTS (SELECT 1 FROM devradar_sbom
 				               WHERE tenant_id = $1 AND repository = $2 AND status = 'active')`,
 				sb.TenantID, sb.Repository).Scan(&repoExists); perr == nil && !repoExists {
@@ -131,6 +133,9 @@ func (s *Store) UpsertSBOMWithLimit(ctx context.Context, sb *SBOM, maxSBOMs, max
 	if err != nil {
 		return "", false, "", fmt.Errorf("upsert sbom: %w", err)
 	}
+	if err := tx.Commit(); err != nil {
+		return "", false, "", fmt.Errorf("commit SBOM upsert: %w", err)
+	}
 	return id, inserted, status, nil
 }
 
@@ -138,25 +143,81 @@ func (s *Store) UpsertSBOMWithLimit(ctx context.Context, sb *SBOM, maxSBOMs, max
 // its bytes have been durably stored, making it visible to the scan job and the
 // read API. Scoped to the pending→active transition so it never resurrects an
 // archived SBOM. Idempotent: a no-op (0 rows) when the row is already active.
-func (s *Store) ActivateSBOM(ctx context.Context, id string) error {
-	_, err := activateSBOM(ctx, s.db, "", id)
-	return err
+func (s *Store) ActivateSBOM(ctx context.Context, accountID, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin SBOM activation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := lockAccountForSBOMMutation(ctx, tx, accountID); err != nil {
+		return err
+	}
+	if _, err := activateSBOM(ctx, tx, accountID, id); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit SBOM activation: %w", err)
+	}
+	return nil
 }
 
 // ActivateSBOMAudited promotes only an account-owned pending SBOM and appends
 // API-token attribution in the same transaction. An already-active retry is a
 // no-op without a duplicate event.
 func (s *Store) ActivateSBOMAudited(ctx context.Context, tenantID, id string, actor account.Actor, requestID string) error {
-	return s.WithAudit(ctx, tenantID, actor, AuditEvent{
+	event := AuditEvent{
 		Action: "sbom.activate", TargetType: "sbom", TargetID: id,
 		Outcome: "success", RequestID: requestID,
-	}, func(tx *sql.Tx) error {
-		changed, err := activateSBOM(ctx, tx, tenantID, id)
-		if err == nil && !changed {
-			return errAuditNoMutation
-		}
+	}
+	metadata, err := validateAuditInput(tenantID, actor, event)
+	if err != nil {
 		return err
-	})
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin audited SBOM activation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := lockAccountForSBOMMutation(ctx, tx, tenantID); err != nil {
+		return err
+	}
+	if err := authorizeAuditActor(ctx, tx, tenantID, actor); err != nil {
+		return err
+	}
+	changed, err := activateSBOM(ctx, tx, tenantID, id)
+	if err != nil {
+		return err
+	}
+	if changed {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO devradar_audit_event
+				(account_id,actor_kind,actor_user_id,actor_api_token_id,
+				 action,target_type,target_id,outcome,request_id,metadata)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)`,
+			tenantID, actor.Kind, nullStr(actor.UserID), nullStr(actor.APITokenID),
+			event.Action, event.TargetType, event.TargetID, event.Outcome, event.RequestID, metadata); err != nil {
+			return fmt.Errorf("insert SBOM activation audit event: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit audited SBOM activation: %w", err)
+	}
+	return nil
+}
+
+func lockAccountForSBOMMutation(ctx context.Context, tx *sql.Tx, accountID string) error {
+	var status string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT status FROM devradar_tenant WHERE id=$1 FOR NO KEY UPDATE`, accountID).Scan(&status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("lock account for SBOM mutation: %w", err)
+	}
+	if status != "active" {
+		return ErrAccountInactive
+	}
+	return nil
 }
 
 func activateSBOM(ctx context.Context, exec dbtx, tenantID, id string) (bool, error) {
@@ -170,7 +231,19 @@ func activateSBOM(ctx context.Context, exec dbtx, tenantID, id string) (bool, er
 	if err != nil {
 		return false, fmt.Errorf("activate sbom rows affected: %w", err)
 	}
-	return n > 0, nil
+	if n > 0 {
+		return true, nil
+	}
+	var exists bool
+	if err := exec.QueryRowContext(ctx, `
+		SELECT EXISTS(SELECT 1 FROM devradar_sbom WHERE id=$1 AND tenant_id=$2::uuid)`, id, tenantID).
+		Scan(&exists); err != nil {
+		return false, fmt.Errorf("check SBOM activation target: %w", err)
+	}
+	if !exists {
+		return false, ErrNotFound
+	}
+	return false, nil
 }
 
 // DeletePendingSBOM removes a still-'pending' SBOM row — the cleanup path when
@@ -178,9 +251,9 @@ func activateSBOM(ctx context.Context, exec dbtx, tenantID, id string) (bool, er
 // only deletes rows still in the 'pending' state, so it can never race a
 // concurrent activation or delete a live SBOM. Best-effort; a leftover pending
 // row is harmless (invisible to scan/read) and a later retry re-drives it.
-func (s *Store) DeletePendingSBOM(ctx context.Context, id string) error {
+func (s *Store) DeletePendingSBOM(ctx context.Context, accountID, id string) error {
 	if _, err := s.db.ExecContext(ctx,
-		`DELETE FROM devradar_sbom WHERE id=$1 AND status='pending'`, id); err != nil {
+		`DELETE FROM devradar_sbom WHERE tenant_id=$1 AND id=$2 AND status='pending'`, accountID, id); err != nil {
 		return fmt.Errorf("delete pending sbom: %w", err)
 	}
 	return nil

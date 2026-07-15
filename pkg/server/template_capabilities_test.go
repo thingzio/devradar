@@ -112,8 +112,9 @@ func TestAccountTemplateAdminEntryPointInventory(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if bytes.Contains(body, []byte(`/tokens`)) || bytes.Contains(body, []byte(`/settings/`)) ||
-			bytes.Contains(body, []byte(`/account/`)) {
+		if !strings.HasPrefix(path, "templates/admin_") &&
+			(bytes.Contains(body, []byte(`/tokens`)) || bytes.Contains(body, []byte(`/settings/`)) ||
+				bytes.Contains(body, []byte(`/account/`))) {
 			got = append(got, path)
 		}
 		return nil

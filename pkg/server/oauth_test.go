@@ -7,13 +7,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/thingzio/devradar/pkg/account"
 	"github.com/thingzio/devradar/pkg/authn"
 	"github.com/thingzio/devradar/pkg/data/postgres"
 	"github.com/thingzio/devradar/pkg/gcs"
 	"github.com/thingzio/devradar/pkg/middleware"
 	"github.com/thingzio/devradar/pkg/oauth"
 	"github.com/thingzio/devradar/pkg/server"
-	"github.com/thingzio/devradar/pkg/tenant"
 )
 
 // fakeOAuth is an in-memory OAuthProvider. Exchange returns id/err verbatim so a
@@ -224,9 +224,14 @@ func TestGitHubOAuth_UnifiesWithMagicLink(t *testing.T) {
 	ctx := context.Background()
 
 	// Pre-existing tenant created via the magic-link flow.
-	existing, err := tenant.UpsertTenantByEmail(ctx, st.DB(), "same@example.com")
+	_, existing, err := st.ResolveDirectIdentity(ctx, account.VerifiedIdentity{
+		Provider: "magiclink", Subject: "same@example.com", Email: "same@example.com",
+	})
 	if err != nil {
-		t.Fatalf("seed magic-link tenant: %v", err)
+		t.Fatalf("seed magic-link account: %v", err)
+	}
+	if existing == nil {
+		t.Fatal("seed magic-link account: no account")
 	}
 
 	state := startFlow(t, h)

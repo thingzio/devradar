@@ -157,15 +157,17 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	mux.Handle("GET /admin", admin(http.HandlerFunc(s.handleAdminDashboard)))
 	mux.Handle("GET /admin/scans", admin(http.HandlerFunc(s.handleAdminScans)))
 	mux.Handle("GET /admin/scans/history", admin(http.HandlerFunc(s.handleAdminScanHistory)))
-	mux.Handle("GET /admin/tenants", admin(http.HandlerFunc(s.handleAdminTenants)))
-	mux.Handle("GET /admin/tenant/{id}", admin(http.HandlerFunc(s.handleAdminTenantDetail)))
+	mux.Handle("GET /admin/accounts", admin(http.HandlerFunc(s.handleAdminAccounts)))
+	mux.Handle("GET /admin/account/{id}", admin(http.HandlerFunc(s.handleAdminAccountDetail)))
+	mux.Handle("GET /admin/tenants", admin(http.HandlerFunc(redirectAdminAccounts)))
+	mux.Handle("GET /admin/tenant/{id}", admin(http.HandlerFunc(redirectAdminAccount)))
 	mux.Handle("GET /admin/metrics", admin(http.HandlerFunc(s.handleAdminMetrics)))
 
-	mux.Handle("POST /admin/tenant/{id}/plan", admin(csrf(http.HandlerFunc(s.handleAdminSetPlan))))
-	mux.Handle("POST /admin/tenant/{id}/status", admin(csrf(http.HandlerFunc(s.handleAdminSetStatus))))
-	mux.Handle("POST /admin/tenant/{id}/min-severity", admin(csrf(http.HandlerFunc(s.handleAdminSetMinSeverity))))
-	mux.Handle("POST /admin/tenant/{id}/delete", admin(csrf(http.HandlerFunc(s.handleAdminDeleteTenant))))
-	mux.Handle("POST /admin/tenant/{id}/token/{tid}/revoke", admin(csrf(http.HandlerFunc(s.handleAdminRevokeToken))))
+	mux.Handle("POST /admin/account/{id}/plan", admin(csrf(http.HandlerFunc(s.handleAdminSetPlan))))
+	mux.Handle("POST /admin/account/{id}/status", admin(csrf(http.HandlerFunc(s.handleAdminSetStatus))))
+	mux.Handle("POST /admin/account/{id}/min-severity", admin(csrf(http.HandlerFunc(s.handleAdminSetMinSeverity))))
+	mux.Handle("POST /admin/account/{id}/delete", admin(csrf(http.HandlerFunc(s.handleAdminDeleteAccount))))
+	mux.Handle("POST /admin/account/{id}/token/{tid}/revoke", admin(csrf(http.HandlerFunc(s.handleAdminRevokeToken))))
 	mux.Handle("POST /admin/invite", admin(csrf(http.HandlerFunc(s.handleAdminInvite))))
 	mux.Handle("POST /admin/scans/reset-failure/{id}", admin(csrf(http.HandlerFunc(s.handleAdminResetFailure))))
 	mux.Handle("POST /admin/scans/rescan/{sbomID}", admin(csrf(http.HandlerFunc(s.handleAdminRescan))))
@@ -224,11 +226,18 @@ func (s *Server) handleRequestLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, err := s.store.CreateLoginToken(ctx, email, loginTokenTTL)
-	if err != nil {
-		slog.Error("create login token", "error", err)
+	if err := s.sendMagicLink(ctx, email); err != nil {
+		slog.Error("send login link", "error", err)
 		http.Redirect(w, r, loginPath+"?error=server", http.StatusSeeOther)
 		return
+	}
+	http.Redirect(w, r, loginPath+"?sent=1", http.StatusSeeOther)
+}
+
+func (s *Server) sendMagicLink(ctx context.Context, email string) error {
+	raw, err := s.store.CreateLoginToken(ctx, email, loginTokenTTL)
+	if err != nil {
+		return fmt.Errorf("create login token: %w", err)
 	}
 	link := config.BaseURL() + "/auth/verify?token=" + raw
 
@@ -249,12 +258,10 @@ func (s *Server) handleRequestLink(w http.ResponseWriter, r *http.Request) {
 			IdempotencyKey: "magic-link/" + authn.HashToken(raw),
 		})
 		if err != nil {
-			slog.Error("send magic link", "error", err)
-			http.Redirect(w, r, loginPath+"?error=server", http.StatusSeeOther)
-			return
+			return fmt.Errorf("send magic link: %w", err)
 		}
 	}
-	http.Redirect(w, r, loginPath+"?sent=1", http.StatusSeeOther)
+	return nil
 }
 
 // handleVerifyConfirm renders the sign-in confirmation page for a magic link
@@ -539,7 +546,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		middleware.RequestIDFromContext(r.Context()), flashKey)
 	if errors.Is(err, postgres.ErrAPITokenLimit) {
 		logMutationDenied(r, "api_token.create", "token quota reached")
-		http.Error(w, fmt.Sprintf("token limit reached (%d per tenant); revoke an unused token first",
+		http.Error(w, fmt.Sprintf("token limit reached (%d per account); revoke an unused token first",
 			config.MaxTokensPerTenant()), http.StatusTooManyRequests)
 		return
 	}

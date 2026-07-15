@@ -4,24 +4,27 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/thingzio/devradar/pkg/data/postgres"
+	"github.com/thingzio/devradar/pkg/gcs"
 	"github.com/thingzio/devradar/pkg/middleware"
-	"github.com/thingzio/devradar/pkg/tenant"
+	"github.com/thingzio/devradar/pkg/server"
 )
 
-// tenantEmail reads a seeded tenant's email so a test can add it to the admin
-// allowlist.
-func tenantEmail(t *testing.T, st *postgres.Store, id string) string {
+// platformActorEmail reads the verified user email for a compatibility account so a
+// test can add the person, rather than the account, to the operator allowlist.
+func platformActorEmail(t *testing.T, st *postgres.Store, id string) string {
 	t.Helper()
-	tn, err := tenant.GetTenant(context.Background(), st.DB(), id)
+	userID := seedLegacyUser(t, st, id)
+	user, err := st.GetUser(context.Background(), userID)
 	if err != nil {
-		t.Fatalf("get tenant: %v", err)
+		t.Fatalf("get actor: %v", err)
 	}
-	return tn.Email
+	return user.Email
 }
 
 func seedAdminProductHealth(t *testing.T, st *postgres.Store, tenantID string) {
@@ -127,10 +130,10 @@ func TestAdmin_NonAdmin404(t *testing.T) {
 func TestAdmin_AdminSeesProductHealth(t *testing.T) {
 	srv, st := testServer(t)
 	tenantID, _ := seedTenantToken(t, st)
-	adminEmail := tenantEmail(t, st, tenantID)
+	adminEmail := platformActorEmail(t, st, tenantID)
 	t.Setenv("DEVRADAR_ADMIN_USERS", adminEmail)
 	observedTenantID, _ := seedTenantToken(t, st)
-	observedEmail := tenantEmail(t, st, observedTenantID)
+	observedEmail := platformActorEmail(t, st, observedTenantID)
 	seedAdminProductHealth(t, st, observedTenantID)
 	h := srv.Handler()
 	cookie := seedSession(t, st, tenantID)
@@ -182,7 +185,7 @@ func TestAdmin_AdminSeesProductHealth(t *testing.T) {
 func TestAdmin_CSRFRequired(t *testing.T) {
 	srv, st := testServer(t)
 	tenantID, _ := seedTenantToken(t, st)
-	t.Setenv("DEVRADAR_ADMIN_USERS", tenantEmail(t, st, tenantID))
+	t.Setenv("DEVRADAR_ADMIN_USERS", platformActorEmail(t, st, tenantID))
 	h := srv.Handler()
 	cookie := seedSession(t, st, tenantID)
 
@@ -190,7 +193,7 @@ func TestAdmin_CSRFRequired(t *testing.T) {
 
 	// No CSRF token → 403.
 	body := "plan=paid"
-	req := httptest.NewRequest(http.MethodPost, "/admin/tenant/"+target+"/plan", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/admin/account/"+target+"/plan", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
@@ -204,7 +207,7 @@ func TestAdmin_CSRFRequired(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req2 := httptest.NewRequest(http.MethodPost, "/admin/tenant/"+target+"/plan",
+	req2 := httptest.NewRequest(http.MethodPost, "/admin/account/"+target+"/plan",
 		strings.NewReader("plan=paid&csrf_token="+tok))
 	req2.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req2.AddCookie(cookie)
@@ -214,16 +217,16 @@ func TestAdmin_CSRFRequired(t *testing.T) {
 	if rec2.Code != http.StatusSeeOther {
 		t.Fatalf("POST with CSRF: status = %d, want 303", rec2.Code)
 	}
-	tn, _ := tenant.GetTenant(context.Background(), st.DB(), target)
-	if tn.Plan != "paid" {
-		t.Errorf("plan = %q, want paid (mutation should have applied)", tn.Plan)
+	acct, _ := st.GetAccount(context.Background(), target)
+	if acct.Plan != "paid" {
+		t.Errorf("plan = %q, want paid (mutation should have applied)", acct.Plan)
 	}
 }
 
 func TestAdminSharedMutationUsesPlatformActor(t *testing.T) {
 	srv, st := testServer(t)
 	adminAccountID, _ := seedTenantToken(t, st)
-	t.Setenv("DEVRADAR_ADMIN_USERS", tenantEmail(t, st, adminAccountID))
+	t.Setenv("DEVRADAR_ADMIN_USERS", platformActorEmail(t, st, adminAccountID))
 	h := srv.Handler()
 	cookie := seedSession(t, st, adminAccountID)
 	targetAccountID, _ := seedTenantToken(t, st)
@@ -232,7 +235,7 @@ func TestAdminSharedMutationUsesPlatformActor(t *testing.T) {
 		t.Fatal(err)
 	}
 	req := httptest.NewRequest(http.MethodPost,
-		"/admin/tenant/"+targetAccountID+"/min-severity",
+		"/admin/account/"+targetAccountID+"/min-severity",
 		strings.NewReader("min_severity=high&csrf_token="+token))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(cookie)
@@ -253,6 +256,184 @@ func TestAdminSharedMutationUsesPlatformActor(t *testing.T) {
 	if kind != "platform" || userID == "" || requestID != rec.Header().Get("X-Request-ID") {
 		t.Fatalf("platform attribution = %s/%s/%s, response %s", kind, userID, requestID,
 			rec.Header().Get("X-Request-ID"))
+	}
+}
+
+func TestAdminAccountCanonicalAndLegacyRoutes(t *testing.T) {
+	srv, st := testServer(t)
+	adminAccountID, _ := seedTenantToken(t, st)
+	adminEmail := platformActorEmail(t, st, adminAccountID)
+	t.Setenv("DEVRADAR_ADMIN_USERS", adminEmail)
+	session := seedSession(t, st, adminAccountID)
+	targetAccountID, _ := seedTenantToken(t, st)
+	seedLegacyUser(t, st, targetAccountID)
+	targetEmail := platformActorEmail(t, st, targetAccountID)
+	if _, err := st.DB().ExecContext(context.Background(), `
+		UPDATE devradar_tenant SET name='Canonical account' WHERE id=$1`, targetAccountID); err != nil {
+		t.Fatalf("name target account: %v", err)
+	}
+	h := srv.Handler()
+
+	list := httptest.NewRequest(http.MethodGet, "/admin/accounts?q="+url.QueryEscape(targetEmail), nil)
+	list.AddCookie(session)
+	listRec := httptest.NewRecorder()
+	h.ServeHTTP(listRec, list)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("canonical account list = %d: %s", listRec.Code, listRec.Body.String())
+	}
+	for _, want := range []string{
+		"Accounts", "Canonical account", targetEmail, ">1<", "/admin/account/" + targetAccountID,
+		`for="admin-account-search"`, `id="admin-account-search"`,
+		`for="admin-signup-email"`, `id="admin-signup-email"`,
+	} {
+		if !strings.Contains(listRec.Body.String(), want) {
+			t.Fatalf("canonical account list missing %q: %s", want, listRec.Body.String())
+		}
+	}
+
+	detail := httptest.NewRequest(http.MethodGet, "/admin/account/"+targetAccountID, nil)
+	detail.AddCookie(session)
+	detailRec := httptest.NewRecorder()
+	h.ServeHTTP(detailRec, detail)
+	if detailRec.Code != http.StatusOK || !strings.Contains(detailRec.Body.String(), "Canonical account") ||
+		!strings.Contains(detailRec.Body.String(), targetEmail) {
+		t.Fatalf("canonical account detail = %d: %s", detailRec.Code, detailRec.Body.String())
+	}
+	for _, association := range []string{
+		`<label for="admin-account-plan"`, `id="admin-account-plan"`,
+		`<label for="admin-account-status"`, `id="admin-account-status"`,
+		`<label for="admin-account-min-severity"`, `id="admin-account-min-severity"`,
+	} {
+		if !strings.Contains(detailRec.Body.String(), association) {
+			t.Fatalf("canonical account detail missing label association %q: %s", association, detailRec.Body.String())
+		}
+	}
+
+	for legacy, canonical := range map[string]string{
+		"/admin/tenants":                   "/admin/accounts",
+		"/admin/tenant/" + targetAccountID: "/admin/account/" + targetAccountID,
+	} {
+		req := httptest.NewRequest(http.MethodGet, legacy, nil)
+		req.AddCookie(session)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusMovedPermanently || rec.Header().Get("Location") != canonical {
+			t.Fatalf("legacy %s = %d %q, want 301 %q", legacy, rec.Code, rec.Header().Get("Location"), canonical)
+		}
+	}
+}
+
+func TestAdminAccountAPITokensRemainAccountScoped(t *testing.T) {
+	srv, st := testServer(t)
+	adminAccountID, _ := seedTenantToken(t, st)
+	t.Setenv("DEVRADAR_ADMIN_USERS", platformActorEmail(t, st, adminAccountID))
+	session := seedSession(t, st, adminAccountID)
+	targetAccountID, _ := seedTenantToken(t, st)
+	foreignAccountID, _ := seedTenantToken(t, st)
+	var targetTokenID, foreignTokenID string
+	if err := st.DB().QueryRowContext(context.Background(), `
+		INSERT INTO devradar_api_token (tenant_id,name,token_hash)
+		VALUES ($1,'canonical target credential',$2) RETURNING id`, targetAccountID, randomHex(t, 16)).Scan(&targetTokenID); err != nil {
+		t.Fatalf("seed target token: %v", err)
+	}
+	if err := st.DB().QueryRowContext(context.Background(), `
+		INSERT INTO devradar_api_token (tenant_id,name,token_hash)
+		VALUES ($1,'foreign credential',$2) RETURNING id`, foreignAccountID, randomHex(t, 16)).Scan(&foreignTokenID); err != nil {
+		t.Fatalf("seed foreign token: %v", err)
+	}
+	h := srv.Handler()
+	detail := httptest.NewRequest(http.MethodGet, "/admin/account/"+targetAccountID, nil)
+	detail.AddCookie(session)
+	detailRec := httptest.NewRecorder()
+	h.ServeHTTP(detailRec, detail)
+	if detailRec.Code != http.StatusOK || !strings.Contains(detailRec.Body.String(), "canonical target credential") ||
+		strings.Contains(detailRec.Body.String(), "foreign credential") {
+		t.Fatalf("account-scoped tokens detail = %d: %s", detailRec.Code, detailRec.Body.String())
+	}
+	csrfCookie, csrfToken := csrfFor(t, h, session, "/admin/account/"+targetAccountID)
+	revoke := httptest.NewRequest(http.MethodPost,
+		"/admin/account/"+targetAccountID+"/token/"+targetTokenID+"/revoke",
+		strings.NewReader("csrf_token="+csrfToken))
+	revoke.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	revoke.AddCookie(session)
+	revoke.AddCookie(csrfCookie)
+	revokeRec := httptest.NewRecorder()
+	h.ServeHTTP(revokeRec, revoke)
+	if revokeRec.Code != http.StatusSeeOther {
+		t.Fatalf("canonical token revoke = %d: %s", revokeRec.Code, revokeRec.Body.String())
+	}
+	assertAPITokenExists(t, st, targetAccountID, targetTokenID, false)
+	assertAPITokenExists(t, st, foreignAccountID, foreignTokenID, true)
+}
+
+func TestAdminInviteSendsOrdinarySignupWithoutPrecreatingIdentity(t *testing.T) {
+	_, st := testServer(t)
+	sender := &recordingSender{}
+	srv := server.New(st, gcs.LocalStore{Dir: t.TempDir()}, sender, nil, nil, server.Options{Version: "test"})
+	adminAccountID, _ := seedTenantToken(t, st)
+	t.Setenv("DEVRADAR_ADMIN_USERS", platformActorEmail(t, st, adminAccountID))
+	session := seedSession(t, st, adminAccountID)
+	h := srv.Handler()
+	csrfCookie, csrfToken := csrfFor(t, h, session, "/admin/accounts")
+	targetEmail := "admin-signup-" + randomHex(t, 6) + "@example.com"
+	req := httptest.NewRequest(http.MethodPost, "/admin/invite", strings.NewReader(url.Values{
+		"email": {targetEmail}, "csrf_token": {csrfToken},
+	}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(session)
+	req.AddCookie(csrfCookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/admin/accounts?msg=signup_sent" {
+		t.Fatalf("admin signup delivery = %d %q: %s", rec.Code, rec.Header().Get("Location"), rec.Body.String())
+	}
+	sender.mu.Lock()
+	message := sender.message
+	sender.mu.Unlock()
+	if message.To != targetEmail || message.Subject != "Your DevRadar sign-in link" ||
+		!strings.Contains(message.Text, "/auth/verify?token=") || !strings.HasPrefix(message.IdempotencyKey, "magic-link/") {
+		t.Fatalf("admin signup did not use ordinary magic-link delivery: %#v", message)
+	}
+	assertIdentityCounts(t, st, targetEmail, 0, 0, 1)
+
+	raw := strings.SplitN(strings.SplitN(message.Text, "token=", 2)[1], "\n", 2)[0]
+	identity, err := st.ConsumeLoginToken(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("consume delivered signup token: %v", err)
+	}
+	if _, account, err := st.ResolveDirectIdentity(context.Background(), identity); err != nil || account == nil {
+		t.Fatalf("resolve delivered signup = %#v, %v", account, err)
+	}
+	assertIdentityCounts(t, st, targetEmail, 1, 1, 0)
+}
+
+func assertAPITokenExists(t *testing.T, st *postgres.Store, accountID, tokenID string, want bool) {
+	t.Helper()
+	var got bool
+	if err := st.DB().QueryRowContext(context.Background(), `
+		SELECT EXISTS(SELECT 1 FROM devradar_api_token WHERE tenant_id=$1 AND id=$2)`,
+		accountID, tokenID).Scan(&got); err != nil {
+		t.Fatalf("read API token: %v", err)
+	}
+	if got != want {
+		t.Fatalf("API token %s in account %s exists=%v, want %v", tokenID, accountID, got, want)
+	}
+}
+
+func assertIdentityCounts(t *testing.T, st *postgres.Store, email string, users, accounts, tokens int) {
+	t.Helper()
+	var gotUsers, gotAccounts, gotTokens int
+	if err := st.DB().QueryRowContext(context.Background(), `
+		SELECT
+			(SELECT count(*) FROM devradar_user WHERE email=$1),
+			(SELECT count(*) FROM devradar_tenant WHERE email=$1),
+			(SELECT count(*) FROM devradar_login_token WHERE email=$1)`, email).
+		Scan(&gotUsers, &gotAccounts, &gotTokens); err != nil {
+		t.Fatalf("read signup state: %v", err)
+	}
+	if gotUsers != users || gotAccounts != accounts || gotTokens != tokens {
+		t.Fatalf("signup state users/accounts/tokens = %d/%d/%d, want %d/%d/%d",
+			gotUsers, gotAccounts, gotTokens, users, accounts, tokens)
 	}
 }
 
