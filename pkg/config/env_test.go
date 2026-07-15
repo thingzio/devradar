@@ -97,8 +97,14 @@ func TestDefaults(t *testing.T) {
 
 func TestDeliveryDefaults(t *testing.T) {
 	t.Setenv("DEVRADAR_ACCOUNT_SHARING_ENABLED", "")
+	t.Setenv("DEVRADAR_INVITATION_RATE_ACCOUNT", "")
+	t.Setenv("DEVRADAR_INVITATION_RATE_RECIPIENT", "")
 	if AccountSharingEnabled() {
 		t.Fatal("account sharing must default off")
+	}
+	if InvitationRatePerHourAccount() != 20 || InvitationRatePerHourRecipient() != 5 {
+		t.Fatalf("invitation rate defaults = %d/%d, want 20/5",
+			InvitationRatePerHourAccount(), InvitationRatePerHourRecipient())
 	}
 	if DeliveryBatchSize() != 50 || DeliveryConcurrency() != 5 ||
 		DeliveryRequestDeadline() != 10*time.Second || DeliveryMaxAttempts() != 8 ||

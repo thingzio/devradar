@@ -9,8 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"io"
 	"log/slog"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -35,6 +37,11 @@ type Options struct {
 	Version string
 	Commit  string
 	Date    string
+}
+
+type dependencies struct {
+	openTerminal func() (io.WriteCloser, error)
+	openStore    func(context.Context) (Store, io.Closer, error)
 }
 
 // Store is the delivery worker's durable global capacity and account-filtered
@@ -69,6 +76,21 @@ type runner struct {
 // Run validates environment configuration, wires production dependencies, and
 // executes one bounded delivery pass.
 func Run(ctx context.Context, opts Options) error {
+	return runWithDependencies(ctx, opts, dependencies{
+		openTerminal: func() (io.WriteCloser, error) {
+			return os.OpenFile("/dev/tty", os.O_WRONLY, 0)
+		},
+		openStore: func(ctx context.Context) (Store, io.Closer, error) {
+			store, err := postgres.New(ctx, config.DatabaseURL(), deliveryPoolConfig())
+			if err != nil {
+				return nil, nil, err
+			}
+			return store, store, nil
+		},
+	})
+}
+
+func runWithDependencies(ctx context.Context, opts Options, deps dependencies) error {
 	if err := config.ValidateDelivery(); err != nil {
 		return err
 	}
@@ -76,20 +98,31 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("delivery key: %w", err)
 	}
-	store, err := postgres.New(ctx, config.DatabaseURL(), deliveryPoolConfig())
-	if err != nil {
-		return fmt.Errorf("store: %w", err)
-	}
-	defer func() { _ = store.Close() }()
 
 	var sender drnet.Sender
+	var terminal io.WriteCloser
 	if apiKey := config.SendAPIKey(); apiKey != "" {
 		sender = drnet.ResendSender{APIKey: apiKey, From: config.EmailFrom()}
 	} else if config.DevMode() {
-		sender = drnet.LogSender{}
+		terminal, err = deps.openTerminal()
+		if err != nil || terminal == nil {
+			return fmt.Errorf("open interactive terminal: %w", drnet.ErrTerminalDelivery)
+		}
+		defer func() { _ = terminal.Close() }()
+		sender = drnet.TerminalSender{Writer: terminal}
 	} else {
 		return fmt.Errorf("SEND_API_KEY is required outside development mode")
 	}
+
+	store, storeCloser, err := deps.openStore(ctx)
+	if err != nil {
+		return fmt.Errorf("store: %w", err)
+	}
+	if store == nil || storeCloser == nil {
+		return fmt.Errorf("store: unavailable")
+	}
+	defer func() { _ = storeCloser.Close() }()
+
 	owner, err := newLeaseOwner()
 	if err != nil {
 		return err
@@ -208,6 +241,9 @@ func (r *runner) deliver(ctx context.Context, delivery postgres.Delivery) error 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if errors.Is(sendErr, drnet.ErrTerminalDelivery) {
+		return fmt.Errorf("deliver invitation to interactive terminal: %w", drnet.ErrTerminalDelivery)
+	}
 	if drnet.IsPermanentSenderError(sendErr) {
 		return r.permanentlyFail(ctx, delivery, providerFailureMessage(sendErr))
 	}
@@ -233,7 +269,8 @@ func (r *runner) deliver(ctx context.Context, delivery postgres.Delivery) error 
 }
 
 func (r *runner) sendInvitation(ctx context.Context, delivery postgres.Delivery, plaintext []byte) (drnet.Receipt, error) {
-	link := r.baseURL + "/invitations/" + url.PathEscape(string(plaintext))
+	link := r.baseURL + "/account-invitations/" + url.PathEscape(delivery.InvitationID) +
+		"#token=" + url.QueryEscape(string(plaintext))
 	message := drnet.Message{
 		To:             delivery.Recipient,
 		Subject:        invitationSubject,

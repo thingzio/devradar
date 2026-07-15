@@ -67,32 +67,49 @@ type Receipt struct {
 }
 
 // Sender sends transactional email. The interface lets handlers depend on a
-// seam (real Resend, a dev logger, or a test fake) rather than a concrete client.
+// seam (real Resend, a development terminal, or a test fake) rather than a
+// concrete client.
 type Sender interface {
 	Send(context.Context, Message) (Receipt, error)
 }
 
-// LogSender is the explicit development-only sender. It logs the recipient and
-// invitation link while preserving the production sender's validation and
-// deterministic idempotency semantics.
-type LogSender struct {
+// ErrTerminalDelivery is returned when an invitation cannot be written to the
+// explicitly supplied development terminal.
+var ErrTerminalDelivery = errors.New("interactive terminal delivery failed")
+
+// TerminalSender is the explicit development-only sender. Invitation bearers
+// are written only to Writer; structured logs contain safe delivery metadata.
+type TerminalSender struct {
+	Writer io.Writer
 	Logger *slog.Logger
 }
 
-// Send logs one local delivery and returns a stable receipt derived from the
+// Send writes one local delivery and returns a stable receipt derived from the
 // non-secret idempotency key.
-func (s LogSender) Send(ctx context.Context, message Message) (Receipt, error) {
+func (s TerminalSender) Send(ctx context.Context, message Message) (Receipt, error) {
 	if err := ctx.Err(); err != nil {
 		return Receipt{}, err
 	}
 	if err := validateMessage(message); err != nil {
 		return Receipt{}, err
 	}
+	if s.Writer == nil {
+		return Receipt{}, ErrTerminalDelivery
+	}
+	link := firstMessageURL(message)
+	if link == "" {
+		return Receipt{}, ErrTerminalDelivery
+	}
+	output := fmt.Sprintf("DevRadar invitation for %s:\n%s\n", message.To, link)
+	if written, err := io.WriteString(s.Writer, output); err != nil || written != len(output) {
+		return Receipt{}, ErrTerminalDelivery
+	}
 	logger := s.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
-	logger.Warn("dev mode: email not sent", "recipient", message.To, "link", firstMessageURL(message))
+	logger.Info("dev mode: invitation written to interactive terminal",
+		"recipient", message.To, "idempotency_key", message.IdempotencyKey)
 	digest := sha256.Sum256([]byte(message.IdempotencyKey))
 	return Receipt{ID: fmt.Sprintf("local-%x", digest[:12])}, nil
 }

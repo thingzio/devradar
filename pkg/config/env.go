@@ -117,6 +117,16 @@ func AccountSharingEnabled() bool {
 	return GetEnvBool("DEVRADAR_ACCOUNT_SHARING_ENABLED")
 }
 
+// InvitationRatePerHourAccount caps invitation sends and rotations per account.
+func InvitationRatePerHourAccount() int {
+	return GetEnvAsInt("DEVRADAR_INVITATION_RATE_ACCOUNT", 20)
+}
+
+// InvitationRatePerHourRecipient caps invitation sends to one normalized email.
+func InvitationRatePerHourRecipient() int {
+	return GetEnvAsInt("DEVRADAR_INVITATION_RATE_RECIPIENT", 5)
+}
+
 // DeliveryKey returns the dedicated AES-256 key used for pending invitation
 // delivery payloads. Unlike the short-lived development token-flash key, this
 // durable outbox key never has an ephemeral fallback.

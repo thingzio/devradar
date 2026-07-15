@@ -1,0 +1,48 @@
+{{template "head" .}}
+<nav class="top-nav invitation-nav" aria-label="DevRadar">
+  <a href="/" class="top-nav-brand">
+    <svg class="nav-logo" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><line x1="12" y1="12" x2="19" y2="5"/></svg>
+    Dev<span class="accent">Radar</span>
+  </a>
+</nav>
+<main class="page-content narrow invitation-page">
+  {{if .Error}}
+  <section class="invitation-error" aria-labelledby="invitation-error-title">
+    <p class="access-kicker">Access invitation</p>
+    <h1 class="page-title" id="invitation-error-title">Invitation unavailable</h1>
+    <div class="msg err">{{.Error}}</div>
+    <a class="btn secondary invitation-home" href="/">Go to sign in</a>
+  </section>
+  {{else}}
+  <header class="invitation-heading">
+    <p class="access-kicker">Access invitation</p>
+    <h1 class="page-title">Review before accepting</h1>
+    <p class="sub">Confirm the account and role. Accepting gives this email access immediately.</p>
+  </header>
+
+  <section class="access-grant" aria-label="Invitation details">
+    <div class="grant-heading"><span>Account access grant</span><span class="access-state">Pending</span></div>
+    <dl class="grant-grid">
+      <div><dt>Account</dt><dd>{{.Invitation.AccountName}}</dd></div>
+      <div><dt>Role</dt><dd>{{.RoleLabel}}</dd></div>
+      <div><dt>Invited email</dt><dd>{{.Invitation.Email}}</dd></div>
+      <div><dt>Invited by</dt><dd>{{if .Invitation.InvitedByEmail}}{{.Invitation.InvitedByEmail}}{{else}}Former member{{end}}</dd></div>
+      <div><dt>Expires</dt><dd>{{.Invitation.ExpiresAt.Format "2006-01-02 15:04 MST"}}</dd></div>
+    </dl>
+  </section>
+
+  {{if .SignedInEmail}}
+  <p class="signed-identity">Signed in as <strong>{{.SignedInEmail}}</strong></p>
+  {{else}}
+  <p class="signed-identity">This invitation verifies <strong>{{.Invitation.Email}}</strong>. Accepting signs you in.</p>
+  {{end}}
+  <form method="post" action="/account-invitations/{{.Invitation.ID}}" class="invitation-accept" data-invitation-accept>
+    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+    <input type="hidden" name="token" value="" data-invitation-token>
+    <p class="invitation-token-status muted" data-invitation-token-status aria-live="polite">Preparing secure invitation…</p>
+    <noscript><div class="msg err">JavaScript is required to accept this invitation without sending its secret to the server in the page address.</div></noscript>
+    <button class="btn" type="submit" disabled data-invitation-submit>Accept invitation</button>
+  </form>
+  {{end}}
+</main>
+{{template "foot" .}}

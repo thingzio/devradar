@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/thingzio/devradar/pkg/account"
+	"github.com/thingzio/devradar/pkg/config"
 	"github.com/thingzio/devradar/pkg/data/postgres"
 	"github.com/thingzio/devradar/pkg/middleware"
 )
@@ -29,9 +30,11 @@ type accountSettingsView struct {
 
 type accountMembersView struct {
 	chromeView
-	Members   []account.Access
-	CSRFToken string
-	Changed   bool
+	Members        []account.Access
+	Invitations    []postgres.Invitation
+	SharingEnabled bool
+	CSRFToken      string
+	Message        string
 }
 
 func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
@@ -122,9 +125,19 @@ func (s *Server) handleAccountMembers(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to list account members", http.StatusInternalServerError)
 		return
 	}
+	var invitations []postgres.Invitation
+	sharingEnabled := config.AccountSharingEnabled()
+	if sharingEnabled {
+		invitations, err = s.store.ListInvitations(r.Context(), access.Account.ID)
+		if err != nil {
+			logMutationFailure(r, "invitation.list", access.Account.ID, access.Account.ID, err)
+			http.Error(w, "failed to list account invitations", http.StatusInternalServerError)
+			return
+		}
+	}
 	render(w, "account_members.html", accountMembersView{
-		chromeView: s.chrome(access, "Account members", ""), Members: members,
-		CSRFToken: issueCSRF(w), Changed: r.URL.Query().Get("msg") == "changed",
+		chromeView: s.chrome(access, "Account members", ""), Members: members, Invitations: invitations,
+		SharingEnabled: sharingEnabled, CSRFToken: issueCSRF(w), Message: r.URL.Query().Get("msg"),
 	})
 }
 

@@ -35,6 +35,8 @@ func Validate() error {
 	check(validateInt("DEVRADAR_MAX_TOKENS_PER_TENANT", 0, -1))
 	check(validateInt("DEVRADAR_LOGIN_RATE_EMAIL", 0, -1))
 	check(validateInt("DEVRADAR_LOGIN_RATE_IP", 0, -1))
+	check(validateInt("DEVRADAR_INVITATION_RATE_ACCOUNT", 0, -1))
+	check(validateInt("DEVRADAR_INVITATION_RATE_RECIPIENT", 0, -1))
 	check(validateInt("DB_MAX_OPEN_CONNS", 1, -1))
 	check(validateInt("DB_MAX_IDLE_CONNS", 0, -1))
 	// Strictly positive: a zero/negative shutdown budget would abort in-flight

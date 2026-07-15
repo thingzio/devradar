@@ -2,8 +2,10 @@ package delivery
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -14,6 +16,93 @@ import (
 	"github.com/thingzio/devradar/pkg/data/postgres"
 	drnet "github.com/thingzio/devradar/pkg/net"
 )
+
+func TestDeliveryOpensTerminalBeforeStoreAndSanitizesFailure(t *testing.T) {
+	t.Setenv("DEVRADAR_DEV_MODE", "true")
+	t.Setenv("SEND_API_KEY", "")
+	t.Setenv("DEVRADAR_DELIVERY_KEY", base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	const reflectedSecret = "tty-provider-raw-token"
+	storeOpened := false
+	deps := dependencies{
+		openTerminal: func() (io.WriteCloser, error) {
+			return nil, errors.New(reflectedSecret)
+		},
+		openStore: func(context.Context) (Store, io.Closer, error) {
+			storeOpened = true
+			return nil, nil, errors.New("store must not be opened")
+		},
+	}
+
+	err := runWithDependencies(context.Background(), Options{}, deps)
+	if !errors.Is(err, drnet.ErrTerminalDelivery) {
+		t.Fatalf("run error = %v, want ErrTerminalDelivery", err)
+	}
+	if storeOpened {
+		t.Fatal("store opened before interactive terminal")
+	}
+	if strings.Contains(err.Error(), reflectedSecret) || strings.Contains(err.Error(), "raw-token") {
+		t.Fatalf("run error exposed terminal failure details: %v", err)
+	}
+}
+
+func TestDeliveryWithResendDoesNotOpenTerminal(t *testing.T) {
+	t.Setenv("DEVRADAR_DEV_MODE", "true")
+	t.Setenv("SEND_API_KEY", "re_real")
+	t.Setenv("DEVRADAR_DELIVERY_KEY", base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	store := newFakeStore(t, 0)
+	deps := dependencies{
+		openTerminal: func() (io.WriteCloser, error) {
+			t.Fatal("interactive terminal opened with Resend configured")
+			return nil, nil
+		},
+		openStore: func(context.Context) (Store, io.Closer, error) {
+			return store, io.NopCloser(strings.NewReader("")), nil
+		},
+	}
+
+	if err := runWithDependencies(context.Background(), Options{}, deps); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+}
+
+func TestRunnerTerminalWriteFailureDoesNotTransitionDelivery(t *testing.T) {
+	store := newFakeStore(t, 1)
+	sender := drnet.TerminalSender{Writer: deliveryErrorWriter{}}
+	runner := testRunner(store, sender)
+
+	err := runner.run(context.Background())
+	if !errors.Is(err, drnet.ErrTerminalDelivery) {
+		t.Fatalf("run error = %v, want ErrTerminalDelivery", err)
+	}
+	if strings.Contains(err.Error(), "raw-token") {
+		t.Fatalf("run error exposed terminal failure details: %v", err)
+	}
+	if got := store.transitionsCopy(); len(got) != 0 {
+		t.Fatalf("transitions = %+v, want none", got)
+	}
+}
+
+func TestRunnerTerminalDeliveryCompletesOutbox(t *testing.T) {
+	store := newFakeStore(t, 1)
+	var terminal strings.Builder
+	runner := testRunner(store, drnet.TerminalSender{Writer: &terminal})
+
+	if err := runner.run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := store.singleTransition(t); got.kind != transitionComplete || !got.scrubbed {
+		t.Fatalf("transition = %+v, want completion", got)
+	}
+	if !strings.Contains(terminal.String(), "#token=raw-invitation-token") {
+		t.Fatalf("terminal output = %q, want invitation link", terminal.String())
+	}
+}
+
+type deliveryErrorWriter struct{}
+
+func (deliveryErrorWriter) Write([]byte) (int, error) {
+	return 0, errors.New("terminal provider reflected raw-token")
+}
 
 func TestRunnerBoundsConcurrencyAtFive(t *testing.T) {
 	store := newFakeStore(t, 12)
@@ -223,9 +312,13 @@ func TestRunnerZeroesPlaintextAndRendersFixedInvitationTemplate(t *testing.T) {
 		if message.Subject != "You have been invited to DevRadar" {
 			t.Fatalf("subject = %q", message.Subject)
 		}
-		wantLink := "https://devradar.example/invitations/raw-invitation-token"
+		wantLink := "https://devradar.example/account-invitations/invitation-0#token=raw-invitation-token"
 		if !strings.Contains(message.HTML, wantLink) || !strings.Contains(message.Text, wantLink) {
 			t.Fatalf("message does not contain fixed invitation link: %+v", message)
+		}
+		requestTarget := strings.SplitN(wantLink, "#", 2)[0]
+		if strings.Contains(requestTarget, "raw-invitation-token") {
+			t.Fatalf("invitation bearer appeared in HTTP request target: %s", requestTarget)
 		}
 		return drnet.Receipt{ID: "receipt-template"}, nil
 	}))

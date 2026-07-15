@@ -122,7 +122,7 @@ scan: ## Runs the daily scan job once against local Postgres + blob store
 	$(LOCAL_ENV) go run -ldflags "$(LDFLAGS)" ./cmd/devradar-scan
 
 .PHONY: deliver
-deliver: ## Delivers one local email outbox batch (requires DEVRADAR_DELIVERY_KEY)
+deliver: ## Delivers one local email outbox batch to the interactive terminal (requires DEVRADAR_DELIVERY_KEY)
 	@test -n "$$DEVRADAR_DELIVERY_KEY" || { echo "set DEVRADAR_DELIVERY_KEY to the serve process key"; exit 1; }
 	$(LOCAL_ENV) go run -ldflags "$(LDFLAGS)" ./cmd/devradar-deliver
 

@@ -29,6 +29,27 @@
     });
   });
 
+  // Invitation links carry the bearer only in the URL fragment, which browsers
+  // never send in the HTTP request target. Move it into the explicit acceptance
+  // POST body, then remove it from browser history before enabling the control.
+  document.addEventListener("DOMContentLoaded", function () {
+    var form = document.querySelector("form[data-invitation-accept]");
+    if (!form) return;
+    var tokenField = form.querySelector("[data-invitation-token]");
+    var submit = form.querySelector("[data-invitation-submit]");
+    var status = form.querySelector("[data-invitation-token-status]");
+    var params = new URLSearchParams(window.location.hash.slice(1));
+    var token = params.get("token") || "";
+    history.replaceState(null, "", window.location.pathname + window.location.search);
+    if (!tokenField || !submit || !/^[a-f0-9]{64}$/.test(token)) {
+      if (status) status.textContent = "Open the original invitation link again to continue.";
+      return;
+    }
+    tokenField.value = token;
+    submit.disabled = false;
+    if (status) status.textContent = "Invitation ready to accept.";
+  });
+
   // Auto-submit controls. The CSP (script-src 'self', no 'unsafe-inline') blocks
   // inline onchange/onsubmit attributes, so filter dropdowns and toggle inputs are
   // wired here instead. Any control with [data-autosubmit] submits its form on

@@ -244,6 +244,11 @@ make tf-validate # Terraform validation without backend credentials
 go build ./...   # direct compilation check
 ```
 
+Local invitation delivery is intentionally interactive. `make deliver` writes
+the full invitation link only to its controlling `/dev/tty`; redirected or
+noninteractive execution fails closed. Structured logs never contain the
+invitation bearer.
+
 Before release, `make qualify`, `go build ./...`, migration rehearsal, and owner
 workflow validation must pass. Do not deploy, tag, push, run `terraform apply`,
 or expose a production feature without explicit owner approval.

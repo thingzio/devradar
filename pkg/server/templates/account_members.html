@@ -1,43 +1,126 @@
 {{template "head" .}}
 {{template "nav" .}}
-<main class="page-content">
-  <h1 class="page-title">Account members</h1>
-  <p class="sub">All admins are equal. An account must always retain at least one active admin.</p>
-  {{if .CanManageMembers}}
-  {{if .Changed}}<div class="msg ok">Membership updated.</div>{{end}}
-
-  <div class="card table-scroll">
-    <table>
-      <thead><tr><th>Member</th><th>Role</th><th>Joined</th><th></th></tr></thead>
-      <tbody>
-        {{range .Members}}
-        <tr>
-          <td>{{.Actor.Email}}</td>
-          <td>
-            <form class="row member-role-form" method="post" action="/account/members/{{.Actor.ID}}/role">
-              <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
-              <select name="role" aria-label="Role for {{.Actor.Email}}">
-                <option value="admin" {{if eq .Membership.Role "admin"}}selected{{end}}>Admin</option>
-                <option value="editor" {{if eq .Membership.Role "editor"}}selected{{end}}>Editor</option>
-                <option value="reader" {{if eq .Membership.Role "reader"}}selected{{end}}>Reader</option>
-              </select>
-              <button class="btn secondary" type="submit">Update</button>
-            </form>
-          </td>
-          <td>{{.Membership.AcceptedAt.Format "2006-01-02"}}</td>
-          <td>
-            <form method="post" action="/account/members/{{.Actor.ID}}/revoke" data-confirm="Remove {{.Actor.Email}} from this account?">
-              <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
-              <button class="btn danger" type="submit">Remove</button>
-            </form>
-          </td>
-        </tr>
-        {{else}}
-        <tr><td colspan="4" class="muted">No active members.</td></tr>
-        {{end}}
-      </tbody>
-    </table>
+<main class="page-content access-page">
+  <div class="page-head">
+    <div>
+      <p class="access-kicker">Account access</p>
+      <h1 class="page-title">Account members</h1>
+      <p class="sub">All admins are equal. An account must always retain at least one active admin.</p>
+    </div>
   </div>
+
+  {{if eq .Message "invited"}}<div class="msg ok">Invitation sent.</div>{{end}}
+  {{if eq .Message "resent"}}<div class="msg ok">Invitation sent again.</div>{{end}}
+  {{if eq .Message "changed"}}<div class="msg ok">Account access updated.</div>{{end}}
+
+  {{if .CanManageMembers}}
+  {{if .SharingEnabled}}
+  <section class="card invite-panel" aria-labelledby="invite-title">
+    <div>
+      <h2 id="invite-title">Invite collaborator</h2>
+      <p class="muted">Choose the least access they need. The invitation expires in seven days.</p>
+    </div>
+    <form class="invite-form" method="post" action="/account/invitations">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <label>Email
+        <input type="email" name="email" autocomplete="email" placeholder="collaborator@example.com" required>
+      </label>
+      <label>Role
+        <select name="role" required>
+          <option value="reader">Reader — view evidence</option>
+          <option value="editor">Editor — update evidence</option>
+          <option value="admin">Admin — manage account access</option>
+        </select>
+      </label>
+      <button class="btn" type="submit">Send invitation</button>
+    </form>
+  </section>
+  {{end}}
+
+  <section class="access-section" aria-labelledby="active-access-title">
+    <div class="access-section-head">
+      <div><p class="access-kicker">Active access</p><h2 id="active-access-title">Members</h2></div>
+      <span class="access-count">{{len .Members}}</span>
+    </div>
+    <div class="card table-scroll access-table">
+      <table>
+        <thead><tr><th>Member</th><th>Role</th><th>Joined</th><th><span class="sr-only">Actions</span></th></tr></thead>
+        <tbody>
+          {{range .Members}}
+          <tr>
+            <td><strong>{{.Actor.Email}}</strong></td>
+            <td>
+              <form class="access-action" method="post" action="/account/members/{{.Actor.ID}}/role">
+                <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+                <select name="role" aria-label="Role for {{.Actor.Email}}">
+                  <option value="admin" {{if eq .Membership.Role "admin"}}selected{{end}}>Admin</option>
+                  <option value="editor" {{if eq .Membership.Role "editor"}}selected{{end}}>Editor</option>
+                  <option value="reader" {{if eq .Membership.Role "reader"}}selected{{end}}>Reader</option>
+                </select>
+                <button class="btn secondary" type="submit">Update</button>
+              </form>
+            </td>
+            <td><span class="access-date">{{.Membership.AcceptedAt.Format "2006-01-02"}}</span></td>
+            <td>
+              <form method="post" action="/account/members/{{.Actor.ID}}/revoke" data-confirm="Remove {{.Actor.Email}} from this account?">
+                <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+                <button class="btn danger" type="submit">Remove</button>
+              </form>
+            </td>
+          </tr>
+          {{else}}
+          <tr><td colspan="4" class="muted">No active members. Send an invitation to grant access.</td></tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  {{if .SharingEnabled}}
+  <section class="access-section" aria-labelledby="pending-access-title">
+    <div class="access-section-head">
+      <div><p class="access-kicker">Awaiting acceptance</p><h2 id="pending-access-title">Pending invitations</h2></div>
+      <span class="access-count">{{len .Invitations}}</span>
+    </div>
+    <div class="card table-scroll access-table">
+      <table>
+        <thead><tr><th>Recipient</th><th>Role</th><th>Invited by</th><th>Expires</th><th><span class="sr-only">Actions</span></th></tr></thead>
+        <tbody>
+          {{range .Invitations}}
+          <tr>
+            <td><strong>{{.Email}}</strong><br><span class="access-state">Pending</span></td>
+            <td>
+              <form class="access-action" method="post" action="/account/invitations/{{.ID}}/role">
+                <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+                <select name="role" aria-label="Pending role for {{.Email}}">
+                  <option value="admin" {{if eq .Role "admin"}}selected{{end}}>Admin</option>
+                  <option value="editor" {{if eq .Role "editor"}}selected{{end}}>Editor</option>
+                  <option value="reader" {{if eq .Role "reader"}}selected{{end}}>Reader</option>
+                </select>
+                <button class="btn secondary" type="submit">Update</button>
+              </form>
+            </td>
+            <td>{{if .InvitedByEmail}}{{.InvitedByEmail}}{{else}}Former member{{end}}</td>
+            <td><span class="access-date">{{.ExpiresAt.Format "2006-01-02"}}</span></td>
+            <td><div class="access-actions">
+              <form method="post" action="/account/invitations/{{.ID}}/resend">
+                <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+                <button class="btn secondary" type="submit">Send again</button>
+              </form>
+              <form method="post" action="/account/invitations/{{.ID}}/revoke" data-confirm="Revoke the invitation for {{.Email}}?">
+                <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+                <button class="btn danger" type="submit">Revoke</button>
+              </form>
+            </div></td>
+          </tr>
+          {{else}}
+          <tr><td colspan="5" class="muted">No pending invitations.</td></tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {{end}}
   {{end}}
 </main>
 {{template "foot" .}}

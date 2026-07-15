@@ -447,6 +447,10 @@ terraform -chdir=infra/saas apply -replace=random_id.delivery_key
 - **DB access** to the shared instance is private-IP only; use the shared
   `thingzio/infra` `tools/db-connect` helper (temporary proxy) for ad-hoc queries.
 
+Local `make deliver` requires a controlling interactive terminal. In development
+without Resend, the complete invitation link is written only to `/dev/tty`;
+redirected or noninteractive execution fails closed without leasing outbox rows.
+
 ## Notes & caveats
 
 - **First apply is manual and privileged** — it touches the shared instance

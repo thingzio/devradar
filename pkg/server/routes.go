@@ -69,6 +69,20 @@ func (s *Server) registerAccountRoutes(mux *http.ServeMux) {
 	}
 }
 
+func (s *Server) registerInvitationManagementRoutes(mux *http.ServeMux) {
+	requireUser := middleware.RequireUser(s.store, loginPath)
+	requireAccount := middleware.RequireAccount(s.store, "/accounts")
+	csrf := middleware.ValidateCSRF
+	manage := middleware.RequireCapability(account.ManageMembers)
+	register := func(pattern string, handler http.HandlerFunc) {
+		mux.Handle(pattern, requireUser(requireAccount(manage(csrf(handler)))))
+	}
+	register("POST /account/invitations", s.handleCreateInvitation)
+	register("POST /account/invitations/{id}/role", s.handleChangeInvitationRole)
+	register("POST /account/invitations/{id}/resend", s.handleResendInvitation)
+	register("POST /account/invitations/{id}/revoke", s.handleRevokeInvitation)
+}
+
 func (s *Server) handleSubmitRedirect(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/docs", http.StatusMovedPermanently)
 }

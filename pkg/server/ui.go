@@ -121,8 +121,30 @@ func (s *Server) registerUI(mux *http.ServeMux) {
 	mux.Handle("POST /accounts/select", requireUser(csrf(http.HandlerFunc(s.handleSelectAccount))))
 	mux.Handle("POST /accounts/{id}/leave", requireUser(csrf(http.HandlerFunc(s.handleLeaveAccount))))
 	s.registerAccountRoutes(mux)
+	if config.AccountSharingEnabled() {
+		mux.Handle("GET /account-invitations/{id}", secureInvitationPath(http.HandlerFunc(s.handleInvitation)))
+		mux.Handle("POST /account-invitations/{id}", secureInvitationPath(csrf(http.HandlerFunc(s.handleAcceptInvitation))))
+		s.registerInvitationManagementRoutes(mux)
+	} else {
+		notFound := http.NotFoundHandler()
+		mux.Handle("GET /account-invitations/{id}", secureInvitationPath(notFound))
+		mux.Handle("POST /account-invitations/{id}", secureInvitationPath(notFound))
+		mux.Handle("POST /account/invitations", notFound)
+		mux.Handle("POST /account/invitations/{id}/role", notFound)
+		mux.Handle("POST /account/invitations/{id}/resend", notFound)
+		mux.Handle("POST /account/invitations/{id}/revoke", notFound)
+	}
 
 	s.registerAdmin(mux)
+}
+
+func secureInvitationPath(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		r.URL.Path = "/account-invitations/{id}"
+		next.ServeHTTP(w, r)
+	})
 }
 
 // registerAdmin wires the operator console. Every route is gated by RequirePlatformAdmin
@@ -150,6 +172,10 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 }
 
 func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
 	// Already signed in → the selected account or account chooser.
 	if c, err := r.Cookie(middleware.SessionCookieName()); err == nil {
 		if session, err := s.store.ValidateSession(r.Context(), c.Value); err == nil && session.User.Status == "active" {

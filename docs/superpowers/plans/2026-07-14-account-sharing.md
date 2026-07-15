@@ -866,7 +866,13 @@ Use `errgroup.WithContext` plus a semaphore of five. Fetch at most 50 leases, re
 
 Run `go mod tidy && go mod vendor` so the direct `golang.org/x/sync/errgroup` dependency and vendored metadata remain reproducible.
 
-Add a `net.LogSender` used only when `DEVRADAR_DEV_MODE=true` and no Resend key is present. It logs the recipient/link and returns a deterministic local receipt; production delivery still fails closed without a real sender.
+Add a `net.TerminalSender` used only when `DEVRADAR_DEV_MODE=true` and no
+Resend key is present. It writes the complete invitation link only to an
+explicitly opened controlling `/dev/tty`, logs safe metadata without the
+bearer, and returns a deterministic local receipt. Open the terminal before the
+delivery store; unavailable or failed terminal I/O is a fixed, sanitized
+infrastructure error with no stdout/stderr fallback or outbox transition.
+Production delivery still fails closed without a real sender.
 
 - [ ] **Step 4: Add thin command and local target**
 
@@ -1100,7 +1106,12 @@ Use real account/user IDs from the migrated clone and run `EXPLAIN (ANALYZE, BUF
 
 - [ ] **Step 6: Exercise the complete local workflow with sharing enabled only locally**
 
-Generate an ephemeral local key and start serve against the migrated clone. After each invitation is created, run the one-shot delivery command in a second terminal:
+Generate an ephemeral local key and start serve against the migrated clone.
+After each invitation is created, run the one-shot delivery command directly in
+a second controlling interactive terminal. Do not redirect or detach it:
+without Resend, the complete link is emitted only to `/dev/tty`, and
+noninteractive execution fails closed before opening or leasing the delivery
+store.
 
 ```bash
 export DEVRADAR_DELIVERY_KEY="$(openssl rand -base64 32)"

@@ -537,6 +537,36 @@ func (s *Store) ReconcileLegacyAccounts(ctx context.Context) error {
 	return nil
 }
 
+// VerifyAccountSharingReady fails closed when expand-only compatibility state
+// still lacks a user, membership, identity owner, or live session owner. Run it
+// after ReconcileLegacyAccounts and before exposing account-sharing routes.
+func (s *Store) VerifyAccountSharingReady(ctx context.Context) error {
+	var incomplete bool
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM devradar_tenant t
+			WHERE t.name=''
+			   OR NOT EXISTS (
+				SELECT 1 FROM devradar_account_member m
+				JOIN devradar_user u ON u.id=m.user_id
+				WHERE m.account_id=t.id
+			   )
+			UNION ALL
+			SELECT 1 FROM devradar_identity i
+			WHERE i.user_id IS NULL
+			UNION ALL
+			SELECT 1 FROM devradar_session s
+			WHERE s.expires_at>now() AND s.tenant_id IS NOT NULL
+			  AND (s.user_id IS NULL OR s.active_account_id IS NULL)
+		)`).Scan(&incomplete); err != nil {
+		return fmt.Errorf("verify account sharing compatibility state: %w", err)
+	}
+	if incomplete {
+		return errors.New("account sharing compatibility state is incomplete")
+	}
+	return nil
+}
+
 const accessSelect = `
 	SELECT
 		u.id,u.email,u.email_verified_at,u.status,u.avatar_url,u.tos_accepted_at,

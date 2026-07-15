@@ -73,6 +73,17 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("store: %w", err)
 	}
 	defer func() { _ = store.Close() }()
+	if config.AccountSharingEnabled() {
+		if err := store.ReconcileLegacyAccounts(ctx); err != nil {
+			return fmt.Errorf("reconcile accounts for sharing: %w", err)
+		}
+		if err := store.VerifyAccountSharingReady(ctx); err != nil {
+			return fmt.Errorf("verify accounts for sharing: %w", err)
+		}
+		if err := store.PurgeLegacyTokenFlashes(ctx); err != nil {
+			return fmt.Errorf("purge legacy token flashes for sharing: %w", err)
+		}
+	}
 
 	blobs, err := gcs.FromEnv(ctx)
 	if err != nil {

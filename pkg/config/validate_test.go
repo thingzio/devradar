@@ -29,6 +29,8 @@ func TestValidate_RejectsInvalid(t *testing.T) {
 	}{
 		{"negative image cap", "DEVRADAR_MAX_IMAGES_PER_TENANT", "-1", "DEVRADAR_MAX_IMAGES_PER_TENANT"},
 		{"non-numeric image cap", "DEVRADAR_MAX_IMAGES_PER_TENANT", "lots", "not an integer"},
+		{"negative invitation account rate", "DEVRADAR_INVITATION_RATE_ACCOUNT", "-1", "DEVRADAR_INVITATION_RATE_ACCOUNT"},
+		{"invalid invitation recipient rate", "DEVRADAR_INVITATION_RATE_RECIPIENT", "many", "not an integer"},
 		{"zero pool", "DB_MAX_OPEN_CONNS", "0", "DB_MAX_OPEN_CONNS"},
 		{"negative idle", "DB_MAX_IDLE_CONNS", "-3", "DB_MAX_IDLE_CONNS"},
 		{"zero shutdown", "SERVER_SHUTDOWN_TIMEOUT_SEC", "0", "SERVER_SHUTDOWN_TIMEOUT_SEC"},
@@ -217,7 +219,7 @@ func TestValidateDeliveryFailsClosed(t *testing.T) {
 	t.Setenv("SEND_API_KEY", "")
 	t.Setenv("DEVRADAR_DEV_MODE", "true")
 	if err := ValidateDelivery(); err != nil {
-		t.Fatalf("development LogSender config: %v", err)
+		t.Fatalf("development TerminalSender config: %v", err)
 	}
 }
 
