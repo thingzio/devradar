@@ -53,15 +53,18 @@ Only the disposable test clone may be dropped and recreated.
 
 ```bash
 export ADMIN_URL='postgres://devradar:devradar@localhost:5432/postgres?sslmode=disable'
-export PRE_DB='devradar_prod_20260711_pre'
-export TEST_DB='devradar_prod_20260711_test'
+export PRE_DB='devradar_prod_20260714_020645_pre'
+export TEST_DB='devradar_prod_20260714_020645_test'
 export PRE_URL="postgres://devradar:devradar@localhost:5432/${PRE_DB}?sslmode=disable"
 export TEST_URL="postgres://devradar:devradar@localhost:5432/${TEST_DB}?sslmode=disable"
-export PROD_BACKUP='/Users/mchmarny/dev/thingz/db/thingz-20260711-104921.sql.gz'
+export PROD_BACKUP='/Users/mchmarny/dev/thingz/db/thingz-20260714-020645.sql.gz'
 
-# Confirm all targets are local before any destructive command.
+# Confirm the client endpoint, port, and database are local before any
+# destructive command. inet_server_addr() reports the container's bridge
+# address under Docker, not the localhost endpoint used by the client.
+psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -c '\conninfo'
 psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -c \
-  "SELECT inet_server_addr(), inet_server_port(), current_database()"
+  "SELECT inet_server_port(), current_database()"
 
 # The plain-SQL backup references these production roles. They must exist
 # locally as NOLOGIN roles before restore; create them with a local PostgreSQL
@@ -72,12 +75,16 @@ psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -c \
 
 # Restore the gzip-compressed plain-SQL baseline once. Skip this block when
 # PRE_DB already exists; never overwrite or migrate the retained baseline.
+gzip -t "$PROD_BACKUP"
 createdb --maintenance-db="$ADMIN_URL" --template=template0 "$PRE_DB"
 gzip -dc "$PROD_BACKUP" | psql "$PRE_URL" -v ON_ERROR_STOP=1
 
-# The 2026-07-11 release baseline must remain exactly at versions 1..18.
+# The 2026-07-14 release baseline must remain exactly at versions 1..29.
 psql "$PRE_URL" -v ON_ERROR_STOP=1 -c \
-  "SELECT count(*), min(version), max(version) FROM devradar_schema_version"
+  "SELECT count(*), min(version), max(version),
+          array_agg(version ORDER BY version) =
+            ARRAY(SELECT generate_series(1,29)) AS contiguous
+   FROM devradar_schema_version"
 ```
 
 Record baseline counts for every existing DevRadar business table. Partition
@@ -94,7 +101,7 @@ for table in $(psql "$PRE_URL" -Atqc \
 done
 ```
 
-Recreate only the migrated clone, then apply migrations 19 through 32 through
+Recreate only the migrated clone, then apply migrations 30 through 32 through
 the real advisory-locked Go migration runner. `TestMigrate_Idempotent` opens the
 store (which applies pending migrations) and calls `Migrate` again, proving the
 second pass is a no-op.
