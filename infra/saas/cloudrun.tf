@@ -111,6 +111,11 @@ resource "google_cloud_run_v2_service" "serve" {
         value = var.admin_users
       }
 
+      env {
+        name  = "DEVRADAR_ACCOUNT_SHARING_ENABLED"
+        value = tostring(var.account_sharing_enabled)
+      }
+
       # Anthropic API key — optional. Powers the admin /metrics AI health summary
       # (and later narratives). Placeholder until set out-of-band; the claude
       # client treats the placeholder as unset and simply omits the summary.

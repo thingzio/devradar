@@ -77,6 +77,12 @@ variable "admin_users" {
   default     = ""
 }
 
+variable "account_sharing_enabled" {
+  description = "Enables account invitations and membership management. Keep false until production migrations and sharing workflows are validated."
+  type        = bool
+  default     = false
+}
+
 variable "anthropic_api_key" {
   description = "Anthropic API key for the admin /metrics AI health summary (and later narratives). Set in the gitignored terraform.tfvars (never committed); flows into Secret Manager. Leave empty to keep the placeholder (the summary stays off; raw metrics still render)."
   type        = string

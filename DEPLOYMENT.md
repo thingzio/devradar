@@ -344,11 +344,13 @@ and both jobs in `infra/saas/cloudrun.tf`, then `make tf-apply`.
 
 ### Account-sharing rollout gate — currently disabled
 
-Account sharing is not shipped. `DEVRADAR_ACCOUNT_SHARING_ENABLED` must remain
-false or unset in production until the owner completes the validation below and
-separately approves rollout. The flag gates invitation creation, management,
-and acceptance; normal single-user account access remains available while it is
-off.
+Account sharing is not shipped. Terraform owns
+`DEVRADAR_ACCOUNT_SHARING_ENABLED` through `account_sharing_enabled`, which
+defaults to `false`. Keep the Terraform variable false in production until the
+owner completes the validation below and separately approves rollout. Do not
+set the Cloud Run environment variable out of band because a later Terraform
+apply would revert it. The flag gates invitation creation, management, and
+acceptance; normal single-user account access remains available while it is off.
 
 The rollout unit is one immutable bundle containing the delivery, scan, and
 serve images at exact SHA-256 digests. The deploy workflow validates all three
@@ -377,9 +379,11 @@ the owner validate:
 7. deleting one account preserves multi-account users and their other memberships;
 8. platform administration uses the actor's email and account-scoped API-token operations.
 
-Only an explicit owner decision after that evidence authorizes a later
-configuration change. Do not mark the ROADMAP outcome shipped merely because
-the code and migrations are present.
+Only an explicit owner decision after that evidence authorizes setting
+`account_sharing_enabled = true` in the gitignored
+`infra/saas/terraform.tfvars`, reviewing `make tf-plan`, and running
+`make tf-apply`. Do not mark the ROADMAP outcome shipped merely because the code
+and migrations are present.
 
 ### Ship new application code
 

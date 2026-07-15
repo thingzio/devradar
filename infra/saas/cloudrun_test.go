@@ -1,0 +1,52 @@
+package saas
+
+import (
+	"os"
+	"regexp"
+	"testing"
+)
+
+func TestAccountSharingFeatureFlagIsTerraformManagedAndDisabledByDefault(t *testing.T) {
+	t.Parallel()
+
+	variables, err := os.ReadFile("variables.tf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	variable := terraformVariableBlock(t, string(variables), "account_sharing_enabled")
+	for _, want := range []string{
+		`type\s*=\s*bool`,
+		`default\s*=\s*false`,
+	} {
+		if !regexp.MustCompile(want).MatchString(variable) {
+			t.Fatalf("account sharing variable missing %q:\n%s", want, variable)
+		}
+	}
+
+	cloudRun, err := os.ReadFile("cloudrun.tf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serve := terraformResourceBlock(t, string(cloudRun),
+		"google_cloud_run_v2_service", "serve")
+	environment := regexp.MustCompile(`(?ms)^\s*env \{\n(.*?^\s*\})`).FindAllString(serve, -1)
+	for _, block := range environment {
+		if regexp.MustCompile(`name\s*=\s*"DEVRADAR_ACCOUNT_SHARING_ENABLED"`).MatchString(block) {
+			if !regexp.MustCompile(`value\s*=\s*tostring\(var\.account_sharing_enabled\)`).MatchString(block) {
+				t.Fatalf("account sharing environment variable is not sourced from Terraform:\n%s", block)
+			}
+			return
+		}
+	}
+	t.Fatal("serve service does not set DEVRADAR_ACCOUNT_SHARING_ENABLED")
+}
+
+func terraformVariableBlock(t *testing.T, source, name string) string {
+	t.Helper()
+	pattern := `(?ms)^variable "` + regexp.QuoteMeta(name) + `" \{\n(.*?^\})`
+	block := regexp.MustCompile(pattern).FindString(source)
+	if block == "" {
+		t.Fatalf("missing Terraform variable %s", name)
+	}
+	return block
+}
