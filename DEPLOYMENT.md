@@ -268,6 +268,10 @@ tools/setup-gh-env
 This sets `WIF_PROVIDER`, `DEPLOYER_SA`, `REGION`, `PROJECT_ID` — everything the
 `release`/`deploy` workflows need. No JSON key is stored; GitHub Actions
 authenticates to GCP via Workload Identity Federation, scoped to this repo.
+Cloud Scheduler does not expose job resource attributes to IAM Conditions, so
+the deployer's Scheduler custom role is project-scoped but contains only
+`cloudscheduler.jobs.get`, `cloudscheduler.jobs.pause`, and
+`cloudscheduler.jobs.enable`. It cannot create, delete, run, or change jobs.
 
 <details><summary>Setting them by hand instead</summary>
 
@@ -311,11 +315,11 @@ Scheduler in its prior state. Once pause succeeds, any later failure, timeout,
 or cancellation before the final resume leaves delivery paused. Rerun
 `.github/workflows/deploy.yaml` through `workflow_dispatch` with the same three
 full `@sha256:` image references. The immutable updates are idempotent, so the
-rerun safely converges from any mutation prefix and resumes only after every
-update succeeds. Never manually resume the Scheduler after a partial image
-mutation. If cancellation races the final resume request, all three image
-updates have already succeeded; inspect state and rerun the same immutable
-bundle before further operator action.
+rerun accepts an already-paused Scheduler, safely converges from any mutation
+prefix, and resumes only after every update succeeds. Never manually resume the
+Scheduler after a partial image mutation. If cancellation races the final
+resume request, all three image updates have already succeeded; inspect state
+and rerun the same immutable bundle before further operator action.
 
 ### 5. Verify the pipeline end-to-end
 

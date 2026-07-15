@@ -86,7 +86,23 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Pause delivery schedule
-        run: timeout 60s gcloud scheduler jobs pause devradar-saas-deliver-scheduled --location "${REGION}"
+        run: |
+          set -euo pipefail
+          scheduler_state=$(timeout 60s gcloud scheduler jobs describe devradar-saas-deliver-scheduled \
+            --location "${REGION}" \
+            --format='value(state)')
+          case "$scheduler_state" in
+            ENABLED)
+              timeout 60s gcloud scheduler jobs pause devradar-saas-deliver-scheduled --location "${REGION}"
+              ;;
+            PAUSED)
+              echo "Delivery schedule is already paused"
+              ;;
+            *)
+              echo "::error::delivery schedule is in unexpected state: ${scheduler_state}" >&2
+              exit 1
+              ;;
+          esac
 
       # Delivery consumes outbox rows produced by serve. Update the
       # backward-compatible consumer before the producer.

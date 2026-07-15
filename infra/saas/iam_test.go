@@ -66,6 +66,51 @@ func TestDeployerOperationPollingIAMIsLeastPrivilege(t *testing.T) {
 	}
 }
 
+func TestDeliverySchedulerDeployerIAMUsesSupportedMinimalGrant(t *testing.T) {
+	t.Parallel()
+	body, err := os.ReadFile("iam.tf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(body)
+	role := terraformResourceBlock(t, source,
+		"google_project_iam_custom_role", "delivery_scheduler_deployer")
+	permissionList := regexp.MustCompile(`(?s)permissions\s*=\s*\[(.*?)\]`).FindStringSubmatch(role)
+	if len(permissionList) != 2 {
+		t.Fatalf("delivery scheduler role has no permission list:\n%s", role)
+	}
+	permissions := regexp.MustCompile(`"([a-z.]+)"`).FindAllStringSubmatch(
+		permissionList[1], -1)
+	want := []string{
+		"cloudscheduler.jobs.enable",
+		"cloudscheduler.jobs.get",
+		"cloudscheduler.jobs.pause",
+	}
+	if len(permissions) != len(want) {
+		t.Fatalf("delivery scheduler permissions = %#v, want %v", permissions, want)
+	}
+	for i := range want {
+		if permissions[i][1] != want[i] {
+			t.Fatalf("delivery scheduler permission %d = %q, want %q",
+				i, permissions[i][1], want[i])
+		}
+	}
+	binding := terraformResourceBlock(t, source,
+		"google_project_iam_member", "deployer_delivery_scheduler")
+	for _, want := range []string{
+		`project\s*=\s*var\.project_id`,
+		`role\s*=\s*google_project_iam_custom_role\.delivery_scheduler_deployer\.id`,
+		`member\s*=\s*"serviceAccount:\$\{google_service_account\.deployer\.email\}"`,
+	} {
+		if !regexp.MustCompile(want).MatchString(binding) {
+			t.Fatalf("delivery scheduler binding missing %q:\n%s", want, binding)
+		}
+	}
+	if strings.Contains(binding, "condition {") {
+		t.Fatalf("Cloud Scheduler does not expose resource attributes to IAM conditions:\n%s", binding)
+	}
+}
+
 func terraformResourceBlock(t *testing.T, source, resourceType, name string) string {
 	t.Helper()
 	pattern := `(?ms)^resource "` + regexp.QuoteMeta(resourceType) + `" "` + regexp.QuoteMeta(name) + `" \{\n(.*?^\})`

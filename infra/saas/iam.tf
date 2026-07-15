@@ -139,8 +139,10 @@ resource "google_project_iam_member" "deployer_cloud_run_operations" {
   member  = "serviceAccount:${google_service_account.deployer.email}"
 }
 
-# Deploys may pause/resume only scheduler jobs; they cannot create, delete, or
-# change schedules/targets. Terraform remains the scheduler configuration owner.
+# Cloud Scheduler does not expose job resource attributes to IAM Conditions, so
+# this role must be project-scoped. It can only read and pause/resume jobs; it
+# cannot create, delete, run, or change schedules/targets. Terraform remains the
+# scheduler configuration owner.
 resource "google_project_iam_custom_role" "delivery_scheduler_deployer" {
   role_id     = "devradarDeliverySchedulerDeploy"
   title       = "DevRadar delivery scheduler deploy control"
@@ -157,12 +159,6 @@ resource "google_project_iam_member" "deployer_delivery_scheduler" {
   project = var.project_id
   role    = google_project_iam_custom_role.delivery_scheduler_deployer.id
   member  = "serviceAccount:${google_service_account.deployer.email}"
-
-  condition {
-    title       = "delivery_scheduler_only"
-    description = "Restrict deploy pause/resume to the DevRadar delivery schedule"
-    expression  = "resource.name == 'projects/${var.project_id}/locations/${var.region}/jobs/${var.prefix}-deliver-scheduled'"
-  }
 }
 
 # Deployer may act as the runtime SA (required to deploy Cloud Run revisions).

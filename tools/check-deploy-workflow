@@ -69,7 +69,7 @@ rg -q 'workflow_dispatch' "$runbook" || fail "runbook does not document idempote
 rg -q 'inspect both the Scheduler state' "$runbook" || fail "runbook does not require Scheduler inspection"
 rg -q 'exact image references' "$runbook" || fail "runbook does not require image inspection"
 rg -q 'pause failure performs no image mutation' "$runbook" || fail "runbook misstates pre-pause failure behavior"
-rg -q 'Never manually resume the Scheduler after a partial image' "$runbook" ||
+rg -U -q 'Never manually resume the[[:space:]]+Scheduler after a partial image' "$runbook" ||
   fail "runbook permits manual resume after partial mutation"
 if rg -qi 'to that tag|Manual redeploy of an existing tag|re-point to.*latest' "$runbook"; then
   fail "runbook still documents mutable-tag deployment"
@@ -82,7 +82,9 @@ deploy_section=$(awk '/^  deploy:/{emit=1} emit' "$workflow")
 
 count_fixed() {
   local text="$1" pattern="$2"
-  printf '%s\n' "$text" | rg -F -c "$pattern" || true
+  local count
+  count=$(printf '%s\n' "$text" | rg -F -c "$pattern" || true)
+  printf '%s\n' "${count:-0}"
 }
 
 step_section() {
@@ -95,14 +97,23 @@ step_section() {
 }
 
 for command in \
+  'scheduler jobs describe devradar-saas-deliver-scheduled' \
   'scheduler jobs pause devradar-saas-deliver-scheduled' \
   'run jobs update devradar-saas-deliver' \
   'run jobs update devradar-saas-scan' \
   'run services update devradar-saas-serve' \
   'scheduler jobs resume devradar-saas-deliver-scheduled'; do
-  test "$(rg -F -c "$command" "$workflow" || true)" -eq 1 ||
+  test "$(count_fixed "$(<"$workflow")" "$command")" -eq 1 ||
     fail "expected exactly one $command"
 done
+
+pause_section=$(step_section 'Pause delivery schedule')
+test "$(count_fixed "$pause_section" "case \"\$scheduler_state\" in")" -eq 1 ||
+  fail "Scheduler pause must branch on current state"
+test "$(count_fixed "$pause_section" 'ENABLED)')" -eq 1 ||
+  fail "Scheduler pause must handle ENABLED state"
+test "$(count_fixed "$pause_section" 'PAUSED)')" -eq 1 ||
+  fail "Scheduler pause must accept an already-paused schedule"
 
 for image in delivery scan serve; do
   case "$image" in
@@ -122,24 +133,28 @@ line_in() {
   printf '%s\n' "$section" | rg -n "$pattern" | head -1 | cut -d: -f1
 }
 
+state_line=$(line_in "$deploy_section" 'scheduler jobs describe')
 pause_line=$(line_in "$deploy_section" 'scheduler jobs pause')
 delivery_line=$(line_in "$deploy_section" 'run jobs update devradar-saas-deliver')
 scan_line=$(line_in "$deploy_section" 'run jobs update devradar-saas-scan')
 serve_line=$(line_in "$deploy_section" 'run services update devradar-saas-serve')
 resume_line=$(line_in "$deploy_section" 'scheduler jobs resume')
-(( pause_line < delivery_line && delivery_line < scan_line && scan_line < serve_line && serve_line < resume_line )) ||
-  fail "safe prefix order must be pause, delivery, scan, serve, resume"
+(( state_line < pause_line && pause_line < delivery_line && delivery_line < scan_line && scan_line < serve_line && serve_line < resume_line )) ||
+  fail "safe prefix order must be state, pause, delivery, scan, serve, resume"
 
 first_gcloud=$(printf '%s\n' "$deploy_section" | rg 'gcloud ' | head -1)
+second_gcloud=$(printf '%s\n' "$deploy_section" | rg 'gcloud ' | sed -n '2p')
 last_gcloud=$(printf '%s\n' "$deploy_section" | rg 'gcloud ' | tail -1)
-[[ "$first_gcloud" == *'scheduler jobs pause devradar-saas-deliver-scheduled'* ]] ||
-  fail "no gcloud command may run before Scheduler pause"
+[[ "$first_gcloud" == *'scheduler jobs describe devradar-saas-deliver-scheduled'* ]] ||
+  fail "Scheduler state read must be the first gcloud command"
+[[ "$second_gcloud" == *'scheduler jobs pause devradar-saas-deliver-scheduled'* ]] ||
+  fail "Scheduler pause must immediately follow its state read"
 [[ "$last_gcloud" == *'scheduler jobs resume devradar-saas-deliver-scheduled'* ]] ||
   fail "Scheduler resume must be the final gcloud command"
 [[ "$(rg '^      - name:' "$workflow" | tail -1)" == '      - name: Resume delivery schedule' ]] ||
   fail "Scheduler resume must be the final named step"
-test "$(count_fixed "$deploy_section" 'gcloud ')" -eq 5 ||
-  fail "deploy must contain only pause, three updates, and resume"
+test "$(count_fixed "$deploy_section" 'gcloud ')" -eq 6 ||
+  fail "deploy must contain only state read, pause, three updates, and resume"
 
 if rg 'gcloud ' "$workflow" | rg -v 'timeout [0-9]+s gcloud ' >/dev/null; then
   fail "every gcloud mutation/read must have a command timeout"
