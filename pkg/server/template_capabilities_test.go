@@ -89,6 +89,50 @@ func TestRoleMatrixTemplateControls(t *testing.T) {
 	}
 }
 
+func TestAccountMenuLabelsAccountAndUser(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		role  account.Role
+		label string
+	}{
+		{account.RoleAdmin, "Admin"},
+		{account.RoleEditor, "Editor"},
+		{account.RoleReader, "Reader"},
+	} {
+		t.Run(string(test.role), func(t *testing.T) {
+			t.Parallel()
+			var body bytes.Buffer
+			err := templates.ExecuteTemplate(&body, "nav", chromeView{
+				SignedIn: true, HasAccount: true,
+				Email: "member@example.com", AccountName: "member@example.com",
+				AccountRole: test.role,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "Account: member@example.com<br>User: member@example.com (" + test.label + ")"
+			if !strings.Contains(body.String(), want) {
+				t.Fatalf("account menu missing %q: %s", want, body.String())
+			}
+		})
+	}
+}
+
+func TestAccountMenuWithoutSelectionLabelsOnlyUser(t *testing.T) {
+	t.Parallel()
+	var body bytes.Buffer
+	if err := templates.ExecuteTemplate(&body, "nav", chromeView{
+		SignedIn: true, Email: "member@example.com",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body.String(), "User: member@example.com") ||
+		strings.Contains(body.String(), "Account:") ||
+		strings.Contains(body.String(), "(Admin)") {
+		t.Fatalf("chooser account menu identity is incorrect: %s", body.String())
+	}
+}
+
 func TestAccountTemplateAdminEntryPointInventory(t *testing.T) {
 	t.Parallel()
 

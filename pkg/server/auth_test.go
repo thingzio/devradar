@@ -180,7 +180,7 @@ func TestAccessContextChromeUsesActorAndAccountFields(t *testing.T) {
 		t.Fatalf("overview status = %d, want 200", rec.Code)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{actorEmail, actorAvatar, accountName, "admin"} {
+	for _, want := range []string{actorEmail, actorAvatar, accountName, "Admin"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("overview chrome missing %q", want)
 		}
