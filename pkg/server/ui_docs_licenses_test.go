@@ -23,16 +23,16 @@ func TestDocsPage(t *testing.T) {
 	}
 	body := rec.Body.String()
 	for _, want := range []string{
-		"On this page",            // TOC
-		"How DevRadar works",      // concept section
-		`id="accuracy"`,           // accuracy anchor
-		`id="reading"`,            // reading results anchor
-		`id="licenses"`,           // licenses anchor
-		`id="trust"`,              // trust anchor
-		`id="faq"`,                // faq anchor
-		"Submit with the CLI",     // submission guide preserved
-		"devradarctl",             // CLI still documented
-		`class="tab active">Docs`, // nav tab renamed + active
+		"On this page",        // TOC
+		"How DevRadar works",  // concept section
+		`id="accuracy"`,       // accuracy anchor
+		`id="reading"`,        // reading results anchor
+		`id="licenses"`,       // licenses anchor
+		`id="trust"`,          // trust anchor
+		`id="faq"`,            // faq anchor
+		"Submit with the CLI", // submission guide preserved
+		"devradarctl",         // CLI still documented
+		`class="tab active" aria-current="page">Docs`, // nav tab renamed + active
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("docs page missing %q", want)

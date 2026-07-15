@@ -76,7 +76,7 @@ jobs:
 
       - name: Formatting (gofmt)
         run: |
-          unformatted="$(gofmt -l $(git ls-files '*.go' | grep -v '^vendor/'))"
+          unformatted="$(git ls-files -z -- '*.go' ':(exclude)vendor/**' | xargs -0 gofmt -l)"
           if [ -n "$unformatted" ]; then
             echo "::error::These files are not gofmt-clean:"; echo "$unformatted"
             exit 1

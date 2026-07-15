@@ -140,6 +140,16 @@ func (s *Server) handleCreateInvitation(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	access := middleware.AccessFromContext(r.Context())
+	duplicate, err := s.store.PendingInvitationMatchesRole(r.Context(), access.Account.ID, email, role)
+	if err != nil {
+		logMutationFailure(r, "invitation.create", access.Account.ID, email, err)
+		http.Error(w, "Invitation update failed.", http.StatusInternalServerError)
+		return
+	}
+	if duplicate {
+		http.Redirect(w, r, "/account/members?msg=invited", http.StatusSeeOther)
+		return
+	}
 	if err := allowInvitationSend(r.Context(), s.store.DB(), access.Account.ID, email); err != nil {
 		logMutationDenied(r, "invitation.create", "rate limit denied")
 		http.Error(w, "Invitation sending is temporarily unavailable. Try again later.", http.StatusTooManyRequests)

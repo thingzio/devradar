@@ -5,10 +5,10 @@
     Dev<span class="accent">Radar</span> <span class="muted">admin</span>
   </a>
   <div class="tabs">
-    <a href="/admin" class="tab {{if eq .AdminTab "dashboard"}}active{{end}}">Dashboard</a>
-    <a href="/admin/scans" class="tab {{if eq .AdminTab "scans"}}active{{end}}">Scans</a>
-    <a href="/admin/accounts" class="tab {{if eq .AdminTab "accounts"}}active{{end}}">Accounts</a>
-    <a href="/admin/metrics" class="tab {{if eq .AdminTab "metrics"}}active{{end}}">Metrics</a>
+    <a href="/admin" class="tab {{if eq .AdminTab "dashboard"}}active{{end}}"{{if eq .AdminTab "dashboard"}} aria-current="page"{{end}}>Dashboard</a>
+    <a href="/admin/scans" class="tab {{if eq .AdminTab "scans"}}active{{end}}"{{if eq .AdminTab "scans"}} aria-current="page"{{end}}>Scans</a>
+    <a href="/admin/accounts" class="tab {{if eq .AdminTab "accounts"}}active{{end}}"{{if eq .AdminTab "accounts"}} aria-current="page"{{end}}>Accounts</a>
+    <a href="/admin/metrics" class="tab {{if eq .AdminTab "metrics"}}active{{end}}"{{if eq .AdminTab "metrics"}} aria-current="page"{{end}}>Metrics</a>
   </div>
   <div class="user-menu-wrap">
     <a href="/overview" class="tab">← Exit admin</a>

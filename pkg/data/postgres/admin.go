@@ -304,6 +304,16 @@ func (s *Store) AdminFinalizeAccountDeletion(ctx context.Context, accountID stri
 	if remaining != 0 {
 		return ErrAccountDeletionIncomplete
 	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE devradar_identity SET tenant_id=NULL
+		WHERE tenant_id=$1 AND user_id IS NOT NULL`, accountID); err != nil {
+		return fmt.Errorf("detach authoritative account identities: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE devradar_session SET tenant_id=NULL,active_account_id=NULL
+		WHERE user_id IS NOT NULL AND (tenant_id=$1 OR active_account_id=$1)`, accountID); err != nil {
+		return fmt.Errorf("detach authoritative account sessions: %w", err)
+	}
 	result, err := tx.ExecContext(ctx, `DELETE FROM devradar_tenant WHERE id=$1`, accountID)
 	if err != nil {
 		return fmt.Errorf("delete admin account: %w", err)

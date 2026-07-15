@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/thingzio/devradar/pkg/account"
 	"github.com/thingzio/devradar/pkg/data/postgres"
@@ -113,6 +114,56 @@ func TestAdminDeleteAccountPreservesMultiAccountUserAndForeignData(t *testing.T)
 	}
 	if err := st.AdminFinalizeAccountDeletion(ctx, deleteAccountID); !errors.Is(err, postgres.ErrNotFound) {
 		t.Fatalf("repeat finalize = %v, want ErrNotFound", err)
+	}
+}
+
+func TestAdminDeleteAccountPreservesAuthoritativeIdentityAndSession(t *testing.T) {
+	st := isolatedAdminProductHealthStore(t)
+	ctx := context.Background()
+	deleteAccountID, sharedUserID := seedAuditAccount(t, st)
+	keepAccountID, keepAdminID := seedAuditAccount(t, st)
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_account_member (account_id,user_id,role,created_by_user_id)
+		VALUES ($1,$2,'reader',$3)`, keepAccountID, sharedUserID, keepAdminID); err != nil {
+		t.Fatalf("seed second membership: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		INSERT INTO devradar_identity (tenant_id,user_id,provider,subject,email)
+		SELECT $1,$2,'github',$3,email FROM devradar_user WHERE id=$2`,
+		deleteAccountID, sharedUserID, "delete-account-identity-"+randID(t)); err != nil {
+		t.Fatalf("seed authoritative identity: %v", err)
+	}
+	rawSession, err := st.CreateSession(ctx, sharedUserID, &deleteAccountID, time.Hour)
+	if err != nil {
+		t.Fatalf("create selected session: %v", err)
+	}
+
+	if _, err := st.AdminPrepareAccountDeletion(ctx, deleteAccountID, deletionActor(sharedUserID), randID(t)); err != nil {
+		t.Fatalf("prepare account deletion: %v", err)
+	}
+	if err := st.AdminFinalizeAccountDeletion(ctx, deleteAccountID); err != nil {
+		t.Fatalf("finalize account deletion: %v", err)
+	}
+
+	assertRowCount(t, st, `
+		SELECT count(*) FROM devradar_identity
+		WHERE user_id=$1 AND tenant_id IS NULL`, 1, sharedUserID)
+	assertRowCount(t, st, `
+		SELECT count(*) FROM devradar_session
+		WHERE user_id=$1 AND tenant_id IS NULL AND active_account_id IS NULL`, 1, sharedUserID)
+	session, err := st.ValidateSession(ctx, rawSession)
+	if err != nil || session.User.ID != sharedUserID || session.ActiveAccountID != nil {
+		t.Fatalf("preserved session = %#v, %v", session, err)
+	}
+	if _, err := st.GetAccess(ctx, sharedUserID, keepAccountID); err != nil {
+		t.Fatalf("remaining account access: %v", err)
+	}
+	if err := st.SelectSessionAccount(ctx, rawSession, sharedUserID, keepAccountID); err != nil {
+		t.Fatalf("select remaining account: %v", err)
+	}
+	session, err = st.ValidateSession(ctx, rawSession)
+	if err != nil || session.ActiveAccountID == nil || *session.ActiveAccountID != keepAccountID {
+		t.Fatalf("reselected session = %#v, %v", session, err)
 	}
 }
 

@@ -11,21 +11,22 @@
       menu.hidden = false;
       toggle.setAttribute("aria-expanded", "true");
     }
-    function close() {
+    function close(restoreFocus) {
       menu.hidden = true;
       toggle.setAttribute("aria-expanded", "false");
+      if (restoreFocus) toggle.focus();
     }
 
     toggle.addEventListener("click", function (e) {
       e.stopPropagation();
       if (menu.hidden) open();
-      else close();
+      else close(false);
     });
     document.addEventListener("click", function (e) {
-      if (!menu.hidden && !menu.contains(e.target) && e.target !== toggle) close();
+      if (!menu.hidden && !menu.contains(e.target) && e.target !== toggle) close(false);
     });
     document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape") close();
+      if (e.key === "Escape" && !menu.hidden) close(true);
     });
   });
 

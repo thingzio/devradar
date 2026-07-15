@@ -18,15 +18,15 @@
   </a>
   {{if .SignedIn}}
   {{if .HasAccount}}<div class="tabs">
-    <a href="/overview" class="tab {{if eq .Tab "overview"}}active{{end}}">Overview</a>
-    <a href="/dashboard" class="tab {{if eq .Tab "images"}}active{{end}}">Images</a>
-    <a href="/work" class="tab {{if eq .Tab "work"}}active{{end}}">Work</a>
-    <a href="/trends" class="tab {{if eq .Tab "trends"}}active{{end}}" {{if eq .Tab "trends"}}aria-current="page"{{end}}>Trends</a>
-    <a href="/cves" class="tab {{if eq .Tab "cves"}}active{{end}}">CVEs</a>
-    <a href="/alerts" class="tab {{if eq .Tab "alerts"}}active{{end}}">Alerts</a>
-    <a href="/licenses" class="tab {{if eq .Tab "licenses"}}active{{end}}">Licenses</a>
-    <a href="/docs" class="tab {{if eq .Tab "docs"}}active{{end}}">Docs</a>
-    <a href="/api" class="tab {{if eq .Tab "api"}}active{{end}}">API</a>
+    <a href="/overview" class="tab {{if eq .Tab "overview"}}active{{end}}"{{if eq .Tab "overview"}} aria-current="page"{{end}}>Overview</a>
+    <a href="/dashboard" class="tab {{if eq .Tab "images"}}active{{end}}"{{if eq .Tab "images"}} aria-current="page"{{end}}>Images</a>
+    <a href="/work" class="tab {{if eq .Tab "work"}}active{{end}}"{{if eq .Tab "work"}} aria-current="page"{{end}}>Work</a>
+    <a href="/trends" class="tab {{if eq .Tab "trends"}}active{{end}}"{{if eq .Tab "trends"}} aria-current="page"{{end}}>Trends</a>
+    <a href="/cves" class="tab {{if eq .Tab "cves"}}active{{end}}"{{if eq .Tab "cves"}} aria-current="page"{{end}}>CVEs</a>
+    <a href="/alerts" class="tab {{if eq .Tab "alerts"}}active{{end}}"{{if eq .Tab "alerts"}} aria-current="page"{{end}}>Alerts</a>
+    <a href="/licenses" class="tab {{if eq .Tab "licenses"}}active{{end}}"{{if eq .Tab "licenses"}} aria-current="page"{{end}}>Licenses</a>
+    <a href="/docs" class="tab {{if eq .Tab "docs"}}active{{end}}"{{if eq .Tab "docs"}} aria-current="page"{{end}}>Docs</a>
+    <a href="/api" class="tab {{if eq .Tab "api"}}active{{end}}"{{if eq .Tab "api"}} aria-current="page"{{end}}>API</a>
   </div>{{end}}
   <div class="user-menu-wrap">
     <button class="user-avatar-btn" id="user-menu-toggle" aria-label="Account menu" aria-haspopup="true" aria-expanded="false">

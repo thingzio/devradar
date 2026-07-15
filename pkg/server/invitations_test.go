@@ -124,6 +124,44 @@ func TestAccountMembersInvitationCreateRefreshResendAndRevoke(t *testing.T) {
 	}
 }
 
+func TestInvitationCreateWithDifferentRoleUsesRoleChange(t *testing.T) {
+	enableInvitationUI(t)
+	srv, st := testServer(t)
+	session, _, accountID := seedAccountSwitchSession(t, st)
+	h := srv.Handler()
+	csrfCookie, csrfToken := csrfFor(t, h, session, "/account/members")
+	email := "http-role-change-" + randomHex(t, 6) + "@example.com"
+	create := func(role string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := accountFormRequest(http.MethodPost, "/account/invitations", session, csrfCookie,
+			url.Values{"email": {email}, "role": {role}, "csrf_token": {csrfToken}})
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := create("reader"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("initial create = %d: %s", rec.Code, rec.Body.String())
+	}
+	if rec := create("editor"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("different-role create = %d: %s", rec.Code, rec.Body.String())
+	}
+	var role, action string
+	var version int
+	if err := st.DB().QueryRow(`
+		SELECT i.role,i.token_version,(
+			SELECT action FROM devradar_audit_event a
+			WHERE a.account_id=i.account_id AND a.target_type='invitation' AND a.target_id=i.id::text
+			ORDER BY a.id DESC LIMIT 1)
+		FROM devradar_account_invitation i
+		WHERE i.account_id=$1 AND i.normalized_email=$2`, accountID, email).
+		Scan(&role, &version, &action); err != nil {
+		t.Fatal(err)
+	}
+	if role != "editor" || version != 2 || action != "invitation.role_change" {
+		t.Fatalf("different-role create role/version/action = %s/%d/%s", role, version, action)
+	}
+}
+
 func TestInvitationAcceptanceGETIsScannerSafeAndPOSTCreatesSelectedSession(t *testing.T) {
 	enableInvitationUI(t)
 	srv, st := testServer(t)
@@ -378,6 +416,50 @@ func TestInvitationAcceptanceRejectsDifferentSignedInEmail(t *testing.T) {
 	}
 }
 
+func TestAccountMembersShowsSafeInvitationDeliveryFailure(t *testing.T) {
+	enableInvitationUI(t)
+	srv, st := testServer(t)
+	session, adminID, accountID := seedAccountSwitchSession(t, st)
+	invite, err := st.CreateOrRefreshInvitation(context.Background(), accountID,
+		"failed-ui-"+randomHex(t, 6)+"@example.com", account.RoleReader,
+		account.Actor{Kind: account.ActorUser, UserID: adminID}, randomHex(t, 16), invitationKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := rawInvitationToken(t, st, invite)
+	var encrypted string
+	if err := st.DB().QueryRow(`
+		SELECT encrypted_payload FROM devradar_delivery_outbox
+		WHERE account_id=$1 AND invitation_id=$2 AND invitation_version=$3`,
+		accountID, invite.ID, invite.TokenVersion).Scan(&encrypted); err != nil {
+		t.Fatal(err)
+	}
+	providerError := "provider bearer private-error-" + randomHex(t, 6)
+	if _, err := st.DB().Exec(`
+		UPDATE devradar_delivery_outbox
+		SET status='permanently_failed',encrypted_payload='',last_error=$4,
+		    permanently_failed_at=clock_timestamp(),updated_at=clock_timestamp()
+		WHERE account_id=$1 AND invitation_id=$2 AND invitation_version=$3`,
+		accountID, invite.ID, invite.TokenVersion, providerError); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/account/members", nil)
+	req.AddCookie(session)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(body, "Delivery failed") ||
+		!strings.Contains(body, "Send again to retry.") {
+		t.Fatalf("failed invitation state = %d: %s", rec.Code, body)
+	}
+	for _, secret := range []string{providerError, raw, encrypted} {
+		if strings.Contains(body, secret) {
+			t.Fatalf("failed invitation page exposed delivery secret %q: %s", secret, body)
+		}
+	}
+}
+
 func TestInvitationManagementRequiresAdminAndRateLimitDoesNotMutate(t *testing.T) {
 	enableInvitationUI(t)
 	t.Setenv("DEVRADAR_INVITATION_RATE_ACCOUNT", "1")
@@ -407,6 +489,14 @@ func TestInvitationManagementRequiresAdminAndRateLimitDoesNotMutate(t *testing.T
 	h.ServeHTTP(firstRec, first)
 	if firstRec.Code != http.StatusSeeOther {
 		t.Fatalf("first limited invitation = %d: %s", firstRec.Code, firstRec.Body.String())
+	}
+	duplicate := accountFormRequest(http.MethodPost, "/account/invitations", adminSession, csrfCookie,
+		url.Values{"email": {strings.ToUpper(firstEmail)}, "role": {"reader"}, "csrf_token": {csrfToken}})
+	duplicateRec := httptest.NewRecorder()
+	h.ServeHTTP(duplicateRec, duplicate)
+	if duplicateRec.Code != http.StatusSeeOther || duplicateRec.Header().Get("Location") != "/account/members?msg=invited" {
+		t.Fatalf("duplicate limited invitation = %d location %q: %s",
+			duplicateRec.Code, duplicateRec.Header().Get("Location"), duplicateRec.Body.String())
 	}
 	secondEmail := "limit-second-" + randomHex(t, 5) + "@example.com"
 	second := accountFormRequest(http.MethodPost, "/account/invitations", adminSession, csrfCookie,

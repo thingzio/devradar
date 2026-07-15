@@ -172,6 +172,54 @@ func TestAccountSettingsNameUsesUnicodeCodePointLimit(t *testing.T) {
 	}
 }
 
+func TestTopNavigationMarksOnlyActiveTabCurrent(t *testing.T) {
+	t.Parallel()
+	accountTabs := map[string]string{
+		"overview": "/overview",
+		"images":   "/dashboard",
+		"work":     "/work",
+		"trends":   "/trends",
+		"cves":     "/cves",
+		"alerts":   "/alerts",
+		"licenses": "/licenses",
+		"docs":     "/docs",
+		"api":      "/api",
+	}
+	for tab, href := range accountTabs {
+		t.Run("account_"+tab, func(t *testing.T) {
+			var body bytes.Buffer
+			if err := templates.ExecuteTemplate(&body, "nav", chromeView{
+				SignedIn: true, HasAccount: true, Tab: tab,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Count(body.String(), `aria-current="page"`) != 1 ||
+				!strings.Contains(body.String(), `href="`+href+`" class="tab active" aria-current="page"`) {
+				t.Fatalf("active %s tab not uniquely current: %s", tab, body.String())
+			}
+		})
+	}
+
+	adminTabs := map[string]string{
+		"dashboard": "/admin",
+		"scans":     "/admin/scans",
+		"accounts":  "/admin/accounts",
+		"metrics":   "/admin/metrics",
+	}
+	for tab, href := range adminTabs {
+		t.Run("admin_"+tab, func(t *testing.T) {
+			var body bytes.Buffer
+			if err := templates.ExecuteTemplate(&body, "admin-nav", map[string]any{"AdminTab": tab}); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Count(body.String(), `aria-current="page"`) != 1 ||
+				!strings.Contains(body.String(), `href="`+href+`" class="tab active" aria-current="page"`) {
+				t.Fatalf("active admin %s tab not uniquely current: %s", tab, body.String())
+			}
+		})
+	}
+}
+
 func chromeForRole(role account.Role) chromeView {
 	access := &account.Access{
 		Actor:      account.User{Email: "member@example.com"},

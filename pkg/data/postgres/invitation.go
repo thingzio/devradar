@@ -24,6 +24,21 @@ var (
 	ErrRateLimited             = errors.New("invitation was sent too recently")
 )
 
+// InvitationDeliveryState is the bounded non-secret delivery state exposed to
+// account administrators.
+type InvitationDeliveryState string
+
+const (
+	// InvitationDeliveryQueued has not completed a provider attempt.
+	InvitationDeliveryQueued InvitationDeliveryState = "queued"
+	// InvitationDeliverySent was accepted by the provider.
+	InvitationDeliverySent InvitationDeliveryState = "sent"
+	// InvitationDeliveryRetrying has an attempted delivery pending retry.
+	InvitationDeliveryRetrying InvitationDeliveryState = "retrying"
+	// InvitationDeliveryFailed requires an administrator-initiated resend.
+	InvitationDeliveryFailed InvitationDeliveryState = "failed"
+)
+
 // Invitation is the non-secret account access grant shown to administrators
 // and recipients. It never exposes the raw token or its stored hash.
 type Invitation struct {
@@ -33,6 +48,7 @@ type Invitation struct {
 	Email          string
 	Role           account.Role
 	InvitedByEmail string
+	DeliveryState  InvitationDeliveryState
 	TokenVersion   int
 	ExpiresAt      time.Time
 	AcceptedAt     *time.Time
@@ -43,9 +59,10 @@ type Invitation struct {
 	sentRecently   bool
 }
 
-// CreateOrRefreshInvitation creates the one pending grant for an account/email,
-// or rotates that grant while applying a role change. Invitation, encrypted
-// outbox delivery, and audit attribution commit together.
+// CreateOrRefreshInvitation creates the one pending grant for an account/email.
+// An exact duplicate is unchanged; a different role rotates the grant using the
+// same semantics as an explicit role change. Invitation, encrypted outbox
+// delivery, and audit attribution commit together.
 func (s *Store) CreateOrRefreshInvitation(
 	ctx context.Context,
 	accountID, email string,
@@ -147,7 +164,13 @@ func (s *Store) rotateInvitation(
 			  AND i.accepted_at IS NULL AND i.revoked_at IS NULL FOR UPDATE OF i`, accountID, email), &invitation)
 		switch {
 		case err == nil:
-			action = "invitation.refresh"
+			if invitation.Role == role {
+				if err := tx.Commit(); err != nil {
+					return nil, fmt.Errorf("commit duplicate invitation: %w", err)
+				}
+				return &invitation, nil
+			}
+			action = "invitation.role_change"
 		case errors.Is(err, sql.ErrNoRows):
 			invitation.ID, err = newAuditUUID()
 			if err != nil {
@@ -226,9 +249,33 @@ func (s *Store) RevokeInvitation(ctx context.Context, accountID, invitationID st
 	})
 }
 
+// PendingInvitationMatchesRole reports whether an exact account-owned pending
+// grant already exists, allowing duplicate HTTP creates to avoid delivery rate
+// charging. The mutating store path independently locks and verifies the grant.
+func (s *Store) PendingInvitationMatchesRole(
+	ctx context.Context,
+	accountID, email string,
+	role account.Role,
+) (bool, error) {
+	email = authn.NormalizeEmail(email)
+	if !validInvitationEmail(email) || !role.Valid() {
+		return false, fmt.Errorf("invalid invitation recipient or role")
+	}
+	var matches bool
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM devradar_account_invitation
+			WHERE account_id=$1 AND normalized_email=$2 AND role=$3
+			  AND accepted_at IS NULL AND revoked_at IS NULL
+		)`, accountID, email, role).Scan(&matches); err != nil {
+		return false, fmt.Errorf("check duplicate invitation: %w", err)
+	}
+	return matches, nil
+}
+
 // ListInvitations returns the pending account-owned grants in stable order.
 func (s *Store) ListInvitations(ctx context.Context, accountID string) ([]Invitation, error) {
-	rows, err := s.db.QueryContext(ctx, invitationSelect+`
+	rows, err := s.db.QueryContext(ctx, invitationListSelect+`
 		WHERE i.account_id=$1 AND i.accepted_at IS NULL AND i.revoked_at IS NULL
 		ORDER BY i.created_at,i.id`, accountID)
 	if err != nil {
@@ -238,7 +285,7 @@ func (s *Store) ListInvitations(ctx context.Context, accountID string) ([]Invita
 	var invitations []Invitation
 	for rows.Next() {
 		var invitation Invitation
-		if err := scanInvitation(rows, &invitation); err != nil {
+		if err := scanListedInvitation(rows, &invitation); err != nil {
 			return nil, fmt.Errorf("scan invitation: %w", err)
 		}
 		invitations = append(invitations, invitation)
@@ -486,6 +533,29 @@ const invitationSelect = `
 	JOIN devradar_tenant t ON t.id=i.account_id
 	LEFT JOIN devradar_user u ON u.id=i.invited_by_user_id `
 
+const invitationListSelect = `
+	SELECT i.id,i.account_id,t.name,i.normalized_email,i.role,
+	       COALESCE(u.email,''),i.token_version,i.expires_at,i.accepted_at,
+	       i.revoked_at,i.created_at,i.updated_at,i.expires_at<=clock_timestamp(),
+	       i.updated_at>clock_timestamp()-interval '60 seconds',
+	       CASE
+	         WHEN d.status='delivered' THEN 'sent'
+	         WHEN d.status IN ('permanently_failed','canceled') THEN 'failed'
+	         WHEN d.status IN ('pending','leased') AND (d.attempt_count>0 OR d.had_error) THEN 'retrying'
+	         ELSE 'queued'
+	       END
+	FROM devradar_account_invitation i
+	JOIN devradar_tenant t ON t.id=i.account_id
+	LEFT JOIN devradar_user u ON u.id=i.invited_by_user_id
+	LEFT JOIN LATERAL (
+		SELECT status,attempt_count,last_error IS NOT NULL AS had_error
+		FROM devradar_delivery_outbox
+		WHERE account_id=i.account_id AND invitation_id=i.id
+		  AND invitation_version=i.token_version
+		ORDER BY created_at DESC,id DESC
+		LIMIT 1
+	) d ON true `
+
 const invitationSelectAcceptedBy = `
 	SELECT i.id,i.account_id,t.name,i.normalized_email,i.role,
 	       COALESCE(u.email,''),i.token_version,i.expires_at,i.accepted_at,
@@ -524,6 +594,25 @@ func scanInvitation(scanner invitationScanner, invitation *Invitation) error {
 		&invitation.expired, &invitation.sentRecently); err != nil {
 		return err
 	}
+	if acceptedAt.Valid {
+		invitation.AcceptedAt = &acceptedAt.Time
+	}
+	if revokedAt.Valid {
+		invitation.RevokedAt = &revokedAt.Time
+	}
+	return nil
+}
+
+func scanListedInvitation(scanner invitationScanner, invitation *Invitation) error {
+	var acceptedAt, revokedAt sql.NullTime
+	var deliveryState string
+	if err := scanner.Scan(&invitation.ID, &invitation.AccountID, &invitation.AccountName,
+		&invitation.Email, &invitation.Role, &invitation.InvitedByEmail, &invitation.TokenVersion,
+		&invitation.ExpiresAt, &acceptedAt, &revokedAt, &invitation.CreatedAt, &invitation.UpdatedAt,
+		&invitation.expired, &invitation.sentRecently, &deliveryState); err != nil {
+		return err
+	}
+	invitation.DeliveryState = InvitationDeliveryState(deliveryState)
 	if acceptedAt.Valid {
 		invitation.AcceptedAt = &acceptedAt.Time
 	}

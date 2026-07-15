@@ -88,7 +88,12 @@
         <tbody>
           {{range .Invitations}}
           <tr>
-            <td><strong>{{.Email}}</strong><br><span class="access-state">Pending</span></td>
+            <td><strong>{{.Email}}</strong><br>
+              {{if eq .DeliveryState "sent"}}<span class="access-state">Sent</span>
+              {{else if eq .DeliveryState "retrying"}}<span class="access-state">Retrying</span>
+              {{else if eq .DeliveryState "failed"}}<span class="access-state">Delivery failed</span><br><span class="muted">Send again to retry.</span>
+              {{else}}<span class="access-state">Queued</span>{{end}}
+            </td>
             <td>
               <form class="access-action" method="post" action="/account/invitations/{{.ID}}/role">
                 <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">

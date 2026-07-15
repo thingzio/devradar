@@ -72,7 +72,7 @@ resource "google_iam_workload_identity_pool_provider" "github" {
     "attribute.actor"      = "assertion.actor"
     "attribute.repository" = "assertion.repository"
   }
-  attribute_condition = "assertion.repository == '${var.git_repo}'"
+  attribute_condition = "assertion.sub == 'repo:${var.git_repo}:environment:saas'"
 
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"
@@ -88,20 +88,38 @@ resource "google_service_account" "deployer" {
 resource "google_service_account_iam_member" "deployer_wif" {
   service_account_id = google_service_account.deployer.name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/${var.git_repo}"
+  member             = "principal://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/subject/repo:${var.git_repo}:environment:saas"
 }
 
-locals {
-  deployer_roles = [
-    "roles/artifactregistry.writer",
-    "roles/run.admin",
-  ]
+resource "google_artifact_registry_repository_iam_member" "deployer_images" {
+  project    = var.project_id
+  location   = google_artifact_registry_repository.images.location
+  repository = google_artifact_registry_repository.images.repository_id
+  role       = "roles/artifactregistry.writer"
+  member     = "serviceAccount:${google_service_account.deployer.email}"
 }
 
-resource "google_project_iam_member" "deployer" {
-  for_each = toset(local.deployer_roles)
+resource "google_cloud_run_v2_service_iam_member" "deployer_serve" {
   project  = var.project_id
-  role     = each.value
+  location = google_cloud_run_v2_service.serve.location
+  name     = google_cloud_run_v2_service.serve.name
+  role     = "roles/run.admin"
+  member   = "serviceAccount:${google_service_account.deployer.email}"
+}
+
+resource "google_cloud_run_v2_job_iam_member" "deployer_scan" {
+  project  = var.project_id
+  location = google_cloud_run_v2_job.scan.location
+  name     = google_cloud_run_v2_job.scan.name
+  role     = "roles/run.admin"
+  member   = "serviceAccount:${google_service_account.deployer.email}"
+}
+
+resource "google_cloud_run_v2_job_iam_member" "deployer_delivery" {
+  project  = var.project_id
+  location = google_cloud_run_v2_job.delivery.location
+  name     = google_cloud_run_v2_job.delivery.name
+  role     = "roles/run.admin"
   member   = "serviceAccount:${google_service_account.deployer.email}"
 }
 

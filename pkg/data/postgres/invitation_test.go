@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -114,6 +115,167 @@ func TestInvitationCreateRefreshResendRevokeAndAtomicity(t *testing.T) {
 	}
 	if invitationRows != 0 || outboxRows != 0 {
 		t.Fatalf("atomic rollback invitation/outbox = %d/%d", invitationRows, outboxRows)
+	}
+}
+
+func TestInvitationDuplicateCreateIsNoOpAndDifferentRoleUsesRoleChange(t *testing.T) {
+	st := isolatedStoreAtVersion(t, 32)
+	ctx := context.Background()
+	accountID, adminID := seedAuditAccount(t, st)
+	actor := account.Actor{Kind: account.ActorUser, UserID: adminID}
+	email := "duplicate-" + randID(t)[:8] + "@example.com"
+	first, err := st.CreateOrRefreshInvitation(ctx, accountID, email, account.RoleReader,
+		actor, randID(t), invitationKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type snapshot struct {
+		version          int
+		hash             string
+		expires, updated time.Time
+		outboxes, audits int
+	}
+	readSnapshot := func() snapshot {
+		t.Helper()
+		var got snapshot
+		if err := st.DB().QueryRowContext(ctx, `
+			SELECT i.token_version,i.token_hash,i.expires_at,i.updated_at,
+			       (SELECT count(*) FROM devradar_delivery_outbox d
+			        WHERE d.account_id=i.account_id AND d.invitation_id=i.id),
+			       (SELECT count(*) FROM devradar_audit_event a
+			        WHERE a.account_id=i.account_id AND a.target_type='invitation' AND a.target_id=i.id::text)
+			FROM devradar_account_invitation i
+			WHERE i.account_id=$1 AND i.id=$2`, accountID, first.ID).Scan(
+			&got.version, &got.hash, &got.expires, &got.updated, &got.outboxes, &got.audits); err != nil {
+			t.Fatalf("read invitation snapshot: %v", err)
+		}
+		return got
+	}
+
+	before := readSnapshot()
+	duplicate, err := st.CreateOrRefreshInvitation(ctx, accountID,
+		"  "+strings.ToUpper(email)+"  ", account.RoleReader, actor, randID(t), invitationKey)
+	if err != nil {
+		t.Fatalf("duplicate create: %v", err)
+	}
+	after := readSnapshot()
+	if duplicate.ID != first.ID || duplicate.TokenVersion != first.TokenVersion ||
+		!duplicate.ExpiresAt.Equal(first.ExpiresAt) || !duplicate.UpdatedAt.Equal(first.UpdatedAt) {
+		t.Fatalf("duplicate invitation changed: first=%#v duplicate=%#v", first, duplicate)
+	}
+	if after.version != before.version || after.hash != before.hash ||
+		!after.expires.Equal(before.expires) || !after.updated.Equal(before.updated) ||
+		after.outboxes != before.outboxes || after.audits != before.audits {
+		t.Fatalf("duplicate snapshot changed: before=%#v after=%#v", before, after)
+	}
+
+	changed, err := st.CreateOrRefreshInvitation(ctx, accountID, email, account.RoleEditor,
+		actor, randID(t), invitationKey)
+	if err != nil {
+		t.Fatalf("different-role create: %v", err)
+	}
+	if changed.ID != first.ID || changed.Role != account.RoleEditor || changed.TokenVersion != first.TokenVersion+1 {
+		t.Fatalf("different-role invitation = %#v, first=%#v", changed, first)
+	}
+	var action string
+	if err := st.DB().QueryRowContext(ctx, `
+		SELECT action FROM devradar_audit_event
+		WHERE account_id=$1 AND target_type='invitation' AND target_id=$2
+		ORDER BY id DESC LIMIT 1`, accountID, first.ID).Scan(&action); err != nil {
+		t.Fatalf("read different-role audit: %v", err)
+	}
+	if action != "invitation.role_change" {
+		t.Fatalf("different-role audit action = %q, want invitation.role_change", action)
+	}
+}
+
+func TestListInvitationsReportsSafeCurrentDeliveryState(t *testing.T) {
+	st := isolatedStoreAtVersion(t, 32)
+	ctx := context.Background()
+	accountID, adminID := seedAuditAccount(t, st)
+	foreignAccountID, foreignAdminID := seedAuditAccount(t, st)
+	actor := account.Actor{Kind: account.ActorUser, UserID: adminID}
+	foreignActor := account.Actor{Kind: account.ActorUser, UserID: foreignAdminID}
+
+	create := func(email string, invitationActor account.Actor, targetAccountID string) *postgres.Invitation {
+		t.Helper()
+		invite, err := st.CreateOrRefreshInvitation(ctx, targetAccountID, email, account.RoleReader,
+			invitationActor, randID(t), invitationKey)
+		if err != nil {
+			t.Fatalf("create %s: %v", email, err)
+		}
+		return invite
+	}
+	setDelivered := func(invite *postgres.Invitation) {
+		t.Helper()
+		if _, err := st.DB().ExecContext(ctx, `
+			UPDATE devradar_delivery_outbox
+			SET status='delivered',encrypted_payload='',provider_id='provider-safe',
+			    delivered_at=clock_timestamp(),updated_at=clock_timestamp()
+			WHERE account_id=$1 AND invitation_id=$2 AND invitation_version=$3`,
+			invite.AccountID, invite.ID, invite.TokenVersion); err != nil {
+			t.Fatalf("deliver %s: %v", invite.Email, err)
+		}
+	}
+
+	current := create("current-"+randID(t)[:8]+"@example.com", actor, accountID)
+	setDelivered(current)
+	current, err := st.CreateOrRefreshInvitation(ctx, accountID, current.Email, account.RoleEditor,
+		actor, randID(t), invitationKey)
+	if err != nil {
+		t.Fatalf("rotate current invitation: %v", err)
+	}
+	retrying := create("retrying-"+randID(t)[:8]+"@example.com", actor, accountID)
+	if _, err := st.DB().ExecContext(ctx, `
+		UPDATE devradar_delivery_outbox
+		SET attempt_count=1,first_attempt_at=clock_timestamp(),last_error='provider bearer secret',
+		    updated_at=clock_timestamp()
+		WHERE account_id=$1 AND invitation_id=$2 AND invitation_version=$3`,
+		accountID, retrying.ID, retrying.TokenVersion); err != nil {
+		t.Fatalf("mark retrying: %v", err)
+	}
+	failed := create("failed-"+randID(t)[:8]+"@example.com", actor, accountID)
+	if _, err := st.DB().ExecContext(ctx, `
+		UPDATE devradar_delivery_outbox
+		SET status='permanently_failed',encrypted_payload='',last_error='provider bearer secret',
+		    permanently_failed_at=clock_timestamp(),updated_at=clock_timestamp()
+		WHERE account_id=$1 AND invitation_id=$2 AND invitation_version=$3`,
+		accountID, failed.ID, failed.TokenVersion); err != nil {
+		t.Fatalf("mark failed: %v", err)
+	}
+	sent := create("sent-"+randID(t)[:8]+"@example.com", actor, accountID)
+	setDelivered(sent)
+	foreign := create("foreign-"+randID(t)[:8]+"@example.com", foreignActor, foreignAccountID)
+	setDelivered(foreign)
+
+	invitations, err := st.ListInvitations(ctx, accountID)
+	if err != nil {
+		t.Fatalf("list invitations: %v", err)
+	}
+	if len(invitations) != 4 {
+		t.Fatalf("listed invitations = %d, want 4: %#v", len(invitations), invitations)
+	}
+	states := make(map[string]postgres.InvitationDeliveryState, len(invitations))
+	for _, invitation := range invitations {
+		states[invitation.Email] = invitation.DeliveryState
+	}
+	for email, want := range map[string]postgres.InvitationDeliveryState{
+		current.Email:  postgres.InvitationDeliveryQueued,
+		retrying.Email: postgres.InvitationDeliveryRetrying,
+		failed.Email:   postgres.InvitationDeliveryFailed,
+		sent.Email:     postgres.InvitationDeliverySent,
+	} {
+		if got := states[email]; got != want {
+			t.Errorf("delivery state for %s = %q, want %q", email, got, want)
+		}
+	}
+	if _, exists := states[foreign.Email]; exists {
+		t.Fatalf("foreign invitation exposed: %#v", invitations)
+	}
+	foreignInvitations, err := st.ListInvitations(ctx, foreignAccountID)
+	if err != nil || len(foreignInvitations) != 1 ||
+		foreignInvitations[0].DeliveryState != postgres.InvitationDeliverySent {
+		t.Fatalf("foreign invitation state = %#v, %v", foreignInvitations, err)
 	}
 }
 
