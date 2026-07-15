@@ -17,6 +17,10 @@ import (
 	"time"
 )
 
+type queryRower interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
 // Allow records one hit against key and reports whether it is within limit for
 // the current window of length window. It buckets now() to the window start in
 // SQL (so all instances agree on boundaries without a shared clock), UPSERTs the
@@ -27,7 +31,7 @@ import (
 // failure.
 //
 // Returns allowed=true when the new count is <= limit.
-func Allow(ctx context.Context, db *sql.DB, key string, limit int, window time.Duration) (bool, error) {
+func Allow(ctx context.Context, db queryRower, key string, limit int, window time.Duration) (bool, error) {
 	if limit <= 0 {
 		return true, nil // no limit configured
 	}

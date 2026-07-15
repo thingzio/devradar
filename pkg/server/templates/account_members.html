@@ -10,6 +10,7 @@
   </div>
 
   {{if eq .Message "invited"}}<div class="msg ok">Invitation sent.</div>{{end}}
+  {{if eq .Message "pending"}}<div class="msg ok">Invitation is already pending.</div>{{end}}
   {{if eq .Message "resent"}}<div class="msg ok">Invitation sent again.</div>{{end}}
   {{if eq .Message "changed"}}<div class="msg ok">Account access updated.</div>{{end}}
 

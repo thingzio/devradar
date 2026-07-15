@@ -123,6 +123,22 @@ resource "google_cloud_run_v2_job_iam_member" "deployer_delivery" {
   member   = "serviceAccount:${google_service_account.deployer.email}"
 }
 
+# Synchronous gcloud Run updates poll location-scoped long-running operations.
+# Resource-level Run admin grants do not cover the operation resource.
+resource "google_project_iam_custom_role" "cloud_run_operation_viewer" {
+  role_id     = "devradarCloudRunOperationViewer"
+  title       = "DevRadar Cloud Run operation viewer"
+  description = "Poll Cloud Run deployment operations"
+  project     = var.project_id
+  permissions = ["run.operations.get"]
+}
+
+resource "google_project_iam_member" "deployer_cloud_run_operations" {
+  project = var.project_id
+  role    = google_project_iam_custom_role.cloud_run_operation_viewer.id
+  member  = "serviceAccount:${google_service_account.deployer.email}"
+}
+
 # Deploys may pause/resume only scheduler jobs; they cannot create, delete, or
 # change schedules/targets. Terraform remains the scheduler configuration owner.
 resource "google_project_iam_custom_role" "delivery_scheduler_deployer" {

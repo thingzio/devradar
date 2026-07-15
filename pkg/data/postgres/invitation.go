@@ -11,6 +11,7 @@ import (
 
 	"github.com/thingzio/devradar/pkg/account"
 	"github.com/thingzio/devradar/pkg/authn"
+	"github.com/thingzio/devradar/pkg/ratelimit"
 	"github.com/thingzio/devradar/pkg/secretbox"
 )
 
@@ -38,6 +39,26 @@ const (
 	// InvitationDeliveryFailed requires an administrator-initiated resend.
 	InvitationDeliveryFailed InvitationDeliveryState = "failed"
 )
+
+// InvitationCreateOutcome describes the committed effect of an invitation
+// create request without exposing token or delivery state.
+type InvitationCreateOutcome string
+
+const (
+	// InvitationCreateUnchanged means an identical pending invitation existed.
+	InvitationCreateUnchanged InvitationCreateOutcome = "unchanged"
+	// InvitationCreateCreated means a new invitation and delivery were committed.
+	InvitationCreateCreated InvitationCreateOutcome = "created"
+	// InvitationCreateRoleChanged means the pending role and token were rotated.
+	InvitationCreateRoleChanged InvitationCreateOutcome = "role_changed"
+)
+
+// InvitationRateLimits bounds committed create and role-change deliveries.
+// Non-positive values disable the corresponding limit.
+type InvitationRateLimits struct {
+	AccountPerHour   int
+	RecipientPerHour int
+}
 
 // Invitation is the non-secret account access grant shown to administrators
 // and recipients. It never exposes the raw token or its stored hash.
@@ -75,7 +96,33 @@ func (s *Store) CreateOrRefreshInvitation(
 	if !validInvitationEmail(email) || !role.Valid() {
 		return nil, fmt.Errorf("invalid invitation recipient or role")
 	}
-	return s.rotateInvitation(ctx, accountID, "", email, role, actor, requestID, deliveryKey, false, false)
+	return s.rotateInvitation(ctx, accountID, "", email, role, actor, requestID, deliveryKey,
+		nil, nil, false, false)
+}
+
+// CreateInvitation atomically detects duplicates, reserves durable delivery
+// quota, and commits invitation, outbox, and audit state. Exact duplicates do
+// not consume quota.
+func (s *Store) CreateInvitation(
+	ctx context.Context,
+	accountID, email string,
+	role account.Role,
+	actor account.Actor,
+	requestID string,
+	deliveryKey []byte,
+	limits InvitationRateLimits,
+) (*Invitation, InvitationCreateOutcome, error) {
+	email = authn.NormalizeEmail(email)
+	if !validInvitationEmail(email) || !role.Valid() {
+		return nil, "", fmt.Errorf("invalid invitation recipient or role")
+	}
+	var outcome InvitationCreateOutcome
+	invitation, err := s.rotateInvitation(ctx, accountID, "", email, role, actor, requestID,
+		deliveryKey, &limits, &outcome, false, false)
+	if err != nil {
+		return nil, "", err
+	}
+	return invitation, outcome, nil
 }
 
 // ResendInvitation rotates one pending invitation without changing its role.
@@ -87,7 +134,8 @@ func (s *Store) ResendInvitation(
 	requestID string,
 	deliveryKey []byte,
 ) (*Invitation, error) {
-	return s.rotateInvitation(ctx, accountID, invitationID, "", "", actor, requestID, deliveryKey, true, false)
+	return s.rotateInvitation(ctx, accountID, invitationID, "", "", actor, requestID, deliveryKey,
+		nil, nil, true, false)
 }
 
 // ChangeInvitationRole rotates one pending invitation while applying a new
@@ -103,7 +151,8 @@ func (s *Store) ChangeInvitationRole(
 	if !role.Valid() {
 		return nil, fmt.Errorf("invalid invitation role")
 	}
-	return s.rotateInvitation(ctx, accountID, invitationID, "", role, actor, requestID, deliveryKey, false, true)
+	return s.rotateInvitation(ctx, accountID, invitationID, "", role, actor, requestID, deliveryKey,
+		nil, nil, false, true)
 }
 
 func (s *Store) rotateInvitation(
@@ -113,6 +162,8 @@ func (s *Store) rotateInvitation(
 	actor account.Actor,
 	requestID string,
 	deliveryKey []byte,
+	limits *InvitationRateLimits,
+	createOutcome *InvitationCreateOutcome,
 	resend bool,
 	roleChange bool,
 ) (*Invitation, error) {
@@ -165,12 +216,18 @@ func (s *Store) rotateInvitation(
 		switch {
 		case err == nil:
 			if invitation.Role == role {
+				if createOutcome != nil {
+					*createOutcome = InvitationCreateUnchanged
+				}
 				if err := tx.Commit(); err != nil {
 					return nil, fmt.Errorf("commit duplicate invitation: %w", err)
 				}
 				return &invitation, nil
 			}
 			action = "invitation.role_change"
+			if createOutcome != nil {
+				*createOutcome = InvitationCreateRoleChanged
+			}
 		case errors.Is(err, sql.ErrNoRows):
 			invitation.ID, err = newAuditUUID()
 			if err != nil {
@@ -180,8 +237,16 @@ func (s *Store) rotateInvitation(
 			invitation.Email = email
 			invitation.TokenVersion = 0
 			action = "invitation.create"
+			if createOutcome != nil {
+				*createOutcome = InvitationCreateCreated
+			}
 		default:
 			return nil, fmt.Errorf("find pending invitation: %w", err)
+		}
+	}
+	if limits != nil {
+		if err := reserveInvitationQuota(ctx, tx, accountID, email, *limits); err != nil {
+			return nil, err
 		}
 	}
 
@@ -229,6 +294,31 @@ func (s *Store) rotateInvitation(
 	return &invitation, nil
 }
 
+func reserveInvitationQuota(
+	ctx context.Context,
+	tx *sql.Tx,
+	accountID, email string,
+	limits InvitationRateLimits,
+) error {
+	allowed, err := ratelimit.Allow(ctx, tx, "invitation-account:"+accountID,
+		limits.AccountPerHour, time.Hour)
+	if err != nil {
+		return fmt.Errorf("reserve account invitation quota: %w", err)
+	}
+	if !allowed {
+		return ErrRateLimited
+	}
+	allowed, err = ratelimit.Allow(ctx, tx, "invitation-recipient:"+email,
+		limits.RecipientPerHour, time.Hour)
+	if err != nil {
+		return fmt.Errorf("reserve recipient invitation quota: %w", err)
+	}
+	if !allowed {
+		return ErrRateLimited
+	}
+	return nil
+}
+
 // RevokeInvitation terminates one account-owned pending grant.
 func (s *Store) RevokeInvitation(ctx context.Context, accountID, invitationID string, actor account.Actor, requestID string) error {
 	event := AuditEvent{Action: "invitation.revoke", TargetType: "invitation", TargetID: invitationID,
@@ -247,30 +337,6 @@ func (s *Store) RevokeInvitation(ctx context.Context, accountID, invitationID st
 		}
 		return exactlyOneRowChanged(res, "revoke invitation")
 	})
-}
-
-// PendingInvitationMatchesRole reports whether an exact account-owned pending
-// grant already exists, allowing duplicate HTTP creates to avoid delivery rate
-// charging. The mutating store path independently locks and verifies the grant.
-func (s *Store) PendingInvitationMatchesRole(
-	ctx context.Context,
-	accountID, email string,
-	role account.Role,
-) (bool, error) {
-	email = authn.NormalizeEmail(email)
-	if !validInvitationEmail(email) || !role.Valid() {
-		return false, fmt.Errorf("invalid invitation recipient or role")
-	}
-	var matches bool
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT EXISTS(
-			SELECT 1 FROM devradar_account_invitation
-			WHERE account_id=$1 AND normalized_email=$2 AND role=$3
-			  AND accepted_at IS NULL AND revoked_at IS NULL
-		)`, accountID, email, role).Scan(&matches); err != nil {
-		return false, fmt.Errorf("check duplicate invitation: %w", err)
-	}
-	return matches, nil
 }
 
 // ListInvitations returns the pending account-owned grants in stable order.

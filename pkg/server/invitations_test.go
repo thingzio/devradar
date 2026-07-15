@@ -14,6 +14,7 @@ import (
 	"github.com/thingzio/devradar/pkg/account"
 	"github.com/thingzio/devradar/pkg/data/postgres"
 	"github.com/thingzio/devradar/pkg/middleware"
+	"github.com/thingzio/devradar/pkg/ratelimit"
 	"github.com/thingzio/devradar/pkg/secretbox"
 )
 
@@ -159,6 +160,145 @@ func TestInvitationCreateWithDifferentRoleUsesRoleChange(t *testing.T) {
 	}
 	if role != "editor" || version != 2 || action != "invitation.role_change" {
 		t.Fatalf("different-role create role/version/action = %s/%d/%s", role, version, action)
+	}
+}
+
+func TestConcurrentIdenticalInvitationCreatesShareMutationAndQuota(t *testing.T) {
+	enableInvitationUI(t)
+	t.Setenv("DEVRADAR_INVITATION_RATE_ACCOUNT", "1")
+	t.Setenv("DEVRADAR_INVITATION_RATE_RECIPIENT", "1")
+	srv, st := testServer(t)
+	session, _, accountID := seedAccountSwitchSession(t, st)
+	h := srv.Handler()
+	csrfCookie, csrfToken := csrfFor(t, h, session, "/account/members")
+	email := "concurrent-create-" + randomHex(t, 6) + "@example.com"
+
+	blocker, err := st.DB().Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = blocker.Close() })
+	blockerTx, err := blocker.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = blockerTx.Rollback() })
+	if _, err := blockerTx.Exec(`SELECT id FROM devradar_tenant WHERE id=$1 FOR UPDATE`, accountID); err != nil {
+		t.Fatal(err)
+	}
+	var blockerPID int
+	if err := blockerTx.QueryRow(`SELECT pg_backend_pid()`).Scan(&blockerPID); err != nil {
+		t.Fatal(err)
+	}
+
+	responses := make(chan *httptest.ResponseRecorder, 2)
+	for range 2 {
+		go func() {
+			req := accountFormRequest(http.MethodPost, "/account/invitations", session, csrfCookie,
+				url.Values{"email": {email}, "role": {"reader"}, "csrf_token": {csrfToken}})
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			responses <- rec
+		}()
+	}
+	blocked := false
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var count int
+		if err := st.DB().QueryRow(`
+			SELECT count(*) FROM pg_stat_activity
+			WHERE pid<>$1 AND cardinality(pg_blocking_pids(pid))>0
+			  AND query LIKE '%devradar_tenant%'`, blockerPID).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count == 2 {
+			blocked = true
+			break
+		}
+		if len(responses) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := blockerTx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	recorders := []*httptest.ResponseRecorder{<-responses, <-responses}
+	if !blocked {
+		t.Fatalf("both creates did not reach the account-lock barrier: statuses=%d/%d",
+			recorders[0].Code, recorders[1].Code)
+	}
+	locations := map[string]int{}
+	for _, rec := range recorders {
+		if rec.Code != http.StatusSeeOther {
+			t.Fatalf("concurrent create = %d: %s", rec.Code, rec.Body.String())
+		}
+		locations[rec.Header().Get("Location")]++
+	}
+	if locations["/account/members?msg=invited"] != 1 || locations["/account/members?msg=pending"] != 1 {
+		t.Fatalf("concurrent create locations = %#v", locations)
+	}
+	var invitations, outbox, audits int
+	if err := st.DB().QueryRow(`
+		SELECT (SELECT count(*) FROM devradar_account_invitation WHERE account_id=$1 AND normalized_email=$2),
+		       (SELECT count(*) FROM devradar_delivery_outbox WHERE account_id=$1 AND recipient=$2),
+		       (SELECT count(*) FROM devradar_audit_event
+		        WHERE account_id=$1 AND action='invitation.create' AND metadata->>'recipient'=$2)`,
+		accountID, email).Scan(&invitations, &outbox, &audits); err != nil {
+		t.Fatal(err)
+	}
+	accountQuota := invitationRateCount(t, st, "invitation-account:"+accountID)
+	recipientQuota := invitationRateCount(t, st, "invitation-recipient:"+email)
+	if invitations != 1 || outbox != 1 || audits != 1 || accountQuota != 1 || recipientQuota != 1 {
+		t.Fatalf("invitations/outbox/audits/account quota/recipient quota = %d/%d/%d/%d/%d",
+			invitations, outbox, audits, accountQuota, recipientQuota)
+	}
+	pending := httptest.NewRequest(http.MethodGet, "/account/members?msg=pending", nil)
+	pending.AddCookie(session)
+	pendingRec := httptest.NewRecorder()
+	h.ServeHTTP(pendingRec, pending)
+	if pendingRec.Code != http.StatusOK || !strings.Contains(pendingRec.Body.String(), "Invitation is already pending.") {
+		t.Fatalf("pending message = %d: %s", pendingRec.Code, pendingRec.Body.String())
+	}
+}
+
+func TestInvitationRecipientQuotaDenialRollsBackAccountQuota(t *testing.T) {
+	enableInvitationUI(t)
+	t.Setenv("DEVRADAR_INVITATION_RATE_ACCOUNT", "1")
+	t.Setenv("DEVRADAR_INVITATION_RATE_RECIPIENT", "1")
+	srv, st := testServer(t)
+	session, _, accountID := seedAccountSwitchSession(t, st)
+	h := srv.Handler()
+	csrfCookie, csrfToken := csrfFor(t, h, session, "/account/members")
+	email := "recipient-limit-" + randomHex(t, 6) + "@example.com"
+	recipientKey := "invitation-recipient:" + email
+	if allowed, err := ratelimit.Allow(context.Background(), st.DB(), recipientKey, 1, time.Hour); err != nil || !allowed {
+		t.Fatalf("seed recipient quota = %t, %v", allowed, err)
+	}
+
+	req := accountFormRequest(http.MethodPost, "/account/invitations", session, csrfCookie,
+		url.Values{"email": {email}, "role": {"reader"}, "csrf_token": {csrfToken}})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("recipient-limited create = %d: %s", rec.Code, rec.Body.String())
+	}
+	accountQuota := invitationRateCount(t, st, "invitation-account:"+accountID)
+	recipientQuota := invitationRateCount(t, st, recipientKey)
+	if accountQuota != 0 || recipientQuota != 1 {
+		t.Fatalf("account/recipient quota after denial = %d/%d, want 0/1", accountQuota, recipientQuota)
+	}
+	var invitations, outbox, audits int
+	if err := st.DB().QueryRow(`
+		SELECT (SELECT count(*) FROM devradar_account_invitation WHERE account_id=$1 AND normalized_email=$2),
+		       (SELECT count(*) FROM devradar_delivery_outbox WHERE account_id=$1 AND recipient=$2),
+		       (SELECT count(*) FROM devradar_audit_event
+		        WHERE account_id=$1 AND metadata->>'recipient'=$2)`, accountID, email).
+		Scan(&invitations, &outbox, &audits); err != nil {
+		t.Fatal(err)
+	}
+	if invitations != 0 || outbox != 0 || audits != 0 {
+		t.Fatalf("denied invitation/outbox/audit = %d/%d/%d", invitations, outbox, audits)
 	}
 }
 
@@ -494,7 +634,7 @@ func TestInvitationManagementRequiresAdminAndRateLimitDoesNotMutate(t *testing.T
 		url.Values{"email": {strings.ToUpper(firstEmail)}, "role": {"reader"}, "csrf_token": {csrfToken}})
 	duplicateRec := httptest.NewRecorder()
 	h.ServeHTTP(duplicateRec, duplicate)
-	if duplicateRec.Code != http.StatusSeeOther || duplicateRec.Header().Get("Location") != "/account/members?msg=invited" {
+	if duplicateRec.Code != http.StatusSeeOther || duplicateRec.Header().Get("Location") != "/account/members?msg=pending" {
 		t.Fatalf("duplicate limited invitation = %d location %q: %s",
 			duplicateRec.Code, duplicateRec.Header().Get("Location"), duplicateRec.Body.String())
 	}
@@ -596,6 +736,16 @@ func assertInvitationDurableCounts(t *testing.T, st *postgres.Store, accountID, 
 		t.Fatalf("sessions/memberships/audits = %d/%d/%d, want %d/1/1",
 			gotSessions, memberships, audits, sessions)
 	}
+}
+
+func invitationRateCount(t *testing.T, st *postgres.Store, key string) int {
+	t.Helper()
+	var count int
+	if err := st.DB().QueryRow(`
+		SELECT COALESCE(sum(count),0) FROM devradar_rate_event WHERE bucket_key=$1`, key).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
 }
 
 const sessionTTLForTest = time.Hour

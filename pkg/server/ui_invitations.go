@@ -140,34 +140,39 @@ func (s *Server) handleCreateInvitation(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	access := middleware.AccessFromContext(r.Context())
-	duplicate, err := s.store.PendingInvitationMatchesRole(r.Context(), access.Account.ID, email, role)
-	if err != nil {
-		logMutationFailure(r, "invitation.create", access.Account.ID, email, err)
-		http.Error(w, "Invitation update failed.", http.StatusInternalServerError)
-		return
-	}
-	if duplicate {
-		http.Redirect(w, r, "/account/members?msg=invited", http.StatusSeeOther)
-		return
-	}
-	if err := allowInvitationSend(r.Context(), s.store.DB(), access.Account.ID, email); err != nil {
-		logMutationDenied(r, "invitation.create", "rate limit denied")
-		http.Error(w, "Invitation sending is temporarily unavailable. Try again later.", http.StatusTooManyRequests)
-		return
-	}
 	key, err := config.DeliveryKey()
 	if err != nil {
 		logMutationFailure(r, "invitation.create", access.Account.ID, email, err)
 		http.Error(w, "Invitation sending is unavailable.", http.StatusInternalServerError)
 		return
 	}
-	_, err = s.store.CreateOrRefreshInvitation(r.Context(), access.Account.ID, email, role,
-		middleware.ActorFromContext(r.Context()), middleware.RequestIDFromContext(r.Context()), key)
+	_, outcome, err := s.store.CreateInvitation(r.Context(), access.Account.ID, email, role,
+		middleware.ActorFromContext(r.Context()), middleware.RequestIDFromContext(r.Context()), key,
+		postgres.InvitationRateLimits{
+			AccountPerHour:   config.InvitationRatePerHourAccount(),
+			RecipientPerHour: config.InvitationRatePerHourRecipient(),
+		})
 	if err != nil {
+		if errors.Is(err, postgres.ErrRateLimited) {
+			logMutationDenied(r, "invitation.create", "rate limit denied")
+			http.Error(w, "Invitation sending is temporarily unavailable. Try again later.", http.StatusTooManyRequests)
+			return
+		}
 		writeInvitationMutationError(w, r, "invitation.create", access.Account.ID, email, err)
 		return
 	}
-	http.Redirect(w, r, "/account/members?msg=invited", http.StatusSeeOther)
+	switch outcome {
+	case postgres.InvitationCreateUnchanged:
+		http.Redirect(w, r, "/account/members?msg=pending", http.StatusSeeOther)
+	case postgres.InvitationCreateCreated:
+		http.Redirect(w, r, "/account/members?msg=invited", http.StatusSeeOther)
+	case postgres.InvitationCreateRoleChanged:
+		http.Redirect(w, r, "/account/members?msg=changed", http.StatusSeeOther)
+	default:
+		logMutationFailure(r, "invitation.create", access.Account.ID, email,
+			errors.New("unknown invitation create outcome"))
+		http.Error(w, "Invitation update failed.", http.StatusInternalServerError)
+	}
 }
 
 func (s *Server) handleChangeInvitationRole(w http.ResponseWriter, r *http.Request) {

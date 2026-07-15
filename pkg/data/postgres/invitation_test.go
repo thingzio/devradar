@@ -38,10 +38,13 @@ func TestInvitationCreateRefreshResendRevokeAndAtomicity(t *testing.T) {
 	}
 
 	email := "refresh-" + randID(t)[:8] + "@example.com"
-	first, err := st.CreateOrRefreshInvitation(ctx, accountID, email, account.RoleReader,
-		actor, randID(t), invitationKey)
+	first, outcome, err := st.CreateInvitation(ctx, accountID, email, account.RoleReader,
+		actor, randID(t), invitationKey, postgres.InvitationRateLimits{})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if outcome != postgres.InvitationCreateCreated {
+		t.Fatalf("create outcome = %q, want created", outcome)
 	}
 	firstRaw := invitationRawToken(t, st, first)
 	refreshed, err := st.CreateOrRefreshInvitation(ctx, accountID, email, account.RoleEditor,
@@ -153,10 +156,14 @@ func TestInvitationDuplicateCreateIsNoOpAndDifferentRoleUsesRoleChange(t *testin
 	}
 
 	before := readSnapshot()
-	duplicate, err := st.CreateOrRefreshInvitation(ctx, accountID,
-		"  "+strings.ToUpper(email)+"  ", account.RoleReader, actor, randID(t), invitationKey)
+	duplicate, outcome, err := st.CreateInvitation(ctx, accountID,
+		"  "+strings.ToUpper(email)+"  ", account.RoleReader, actor, randID(t), invitationKey,
+		postgres.InvitationRateLimits{})
 	if err != nil {
 		t.Fatalf("duplicate create: %v", err)
+	}
+	if outcome != postgres.InvitationCreateUnchanged {
+		t.Fatalf("duplicate outcome = %q, want unchanged", outcome)
 	}
 	after := readSnapshot()
 	if duplicate.ID != first.ID || duplicate.TokenVersion != first.TokenVersion ||
@@ -169,10 +176,13 @@ func TestInvitationDuplicateCreateIsNoOpAndDifferentRoleUsesRoleChange(t *testin
 		t.Fatalf("duplicate snapshot changed: before=%#v after=%#v", before, after)
 	}
 
-	changed, err := st.CreateOrRefreshInvitation(ctx, accountID, email, account.RoleEditor,
-		actor, randID(t), invitationKey)
+	changed, outcome, err := st.CreateInvitation(ctx, accountID, email, account.RoleEditor,
+		actor, randID(t), invitationKey, postgres.InvitationRateLimits{})
 	if err != nil {
 		t.Fatalf("different-role create: %v", err)
+	}
+	if outcome != postgres.InvitationCreateRoleChanged {
+		t.Fatalf("different-role outcome = %q, want role_changed", outcome)
 	}
 	if changed.ID != first.ID || changed.Role != account.RoleEditor || changed.TokenVersion != first.TokenVersion+1 {
 		t.Fatalf("different-role invitation = %#v, first=%#v", changed, first)

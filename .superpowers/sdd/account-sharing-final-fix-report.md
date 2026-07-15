@@ -326,3 +326,182 @@ exit 0
 ## Concerns
 
 None outstanding. Terraform plan/apply and all production actions remain explicit owner steps. Account sharing remains disabled.
+
+---
+
+## Final Re-review Correction — 2026-07-14
+
+Base: `c979252930bd0333e5e2e773682e634ed71a1ef0`
+
+### Root causes and design
+
+- The HTTP create path performed duplicate detection, account quota charging, recipient quota charging, and store mutation as separate transactions. The preflight could race, and recipient denial left both durable counters incremented.
+- The corrected create path acquires the account row lock, revalidates active-admin authorization, resolves the pending invitation and outcome, reserves both quotas, and persists invitation/outbox/audit state in one transaction. Exact duplicates commit unchanged before quota reservation. Any denial or later mutation error rolls back all quota and invitation state.
+- `ratelimit.Allow` now accepts the shared `QueryRowContext` contract implemented by both `*sql.DB` and `*sql.Tx`; its SQL is unchanged.
+- The store returns only `unchanged`, `created`, or `role_changed`. HTTP redirects render “Invitation is already pending.” for an exact duplicate. The unlocked `PendingInvitationMatchesRole` API was deleted.
+- Resource-scoped Cloud Run administration cannot authorize reads of the location-scoped long-running operation. A one-permission project custom role now grants only `run.operations.get` to the deployer.
+
+### RED/GREEN evidence
+
+Transactional limiter RED:
+
+```text
+$ go test -race ./pkg/ratelimit -run '^TestAllow_TransactionRollbackDoesNotConsumeQuota$' -count=1
+pkg/ratelimit/ratelimit_test.go:100:39: cannot use tx (variable of type *sql.Tx) as *sql.DB value in argument to ratelimit.Allow
+FAIL github.com/thingzio/devradar/pkg/ratelimit [build failed]
+exit 1
+```
+
+Transactional limiter GREEN:
+
+```text
+$ go test -race ./pkg/ratelimit -run '^TestAllow_TransactionRollbackDoesNotConsumeQuota$' -count=1
+ok github.com/thingzio/devradar/pkg/ratelimit 1.692s
+exit 0
+```
+
+Bounded outcome RED:
+
+```text
+$ go test -race ./pkg/data/postgres -run '^TestInvitationDuplicateCreateIsNoOpAndDifferentRoleUsesRoleChange$' -count=1
+pkg/data/postgres/invitation_test.go:41:28: st.CreateInvitation undefined
+pkg/data/postgres/invitation_test.go:42:45: undefined: postgres.InvitationRateLimits
+pkg/data/postgres/invitation_test.go:46:25: undefined: postgres.InvitationCreateCreated
+pkg/data/postgres/invitation_test.go:165:25: undefined: postgres.InvitationCreateUnchanged
+pkg/data/postgres/invitation_test.go:184:25: undefined: postgres.InvitationCreateRoleChanged
+FAIL github.com/thingzio/devradar/pkg/data/postgres [build failed]
+exit 1
+```
+
+Bounded outcome GREEN:
+
+```text
+$ go test -race ./pkg/data/postgres -run '^TestInvitationDuplicateCreateIsNoOpAndDifferentRoleUsesRoleChange$' -count=1
+ok github.com/thingzio/devradar/pkg/data/postgres 1.999s
+exit 0
+```
+
+Concurrent HTTP and rollback RED:
+
+```text
+$ go test -race ./pkg/server -run '^(TestConcurrentIdenticalInvitationCreatesShareMutationAndQuota|TestInvitationRecipientQuotaDenialRollsBackAccountQuota)$' -count=1
+--- FAIL: TestConcurrentIdenticalInvitationCreatesShareMutationAndQuota (0.13s)
+    invitations_test.go:227: both creates did not reach the account-lock barrier: statuses=429/303
+--- FAIL: TestInvitationRecipientQuotaDenialRollsBackAccountQuota (0.07s)
+    invitations_test.go:288: account/recipient quota after denial = 1/2, want 0/1
+FAIL
+FAIL github.com/thingzio/devradar/pkg/server 0.946s
+exit 1
+```
+
+Concurrent HTTP and rollback GREEN:
+
+```text
+$ go test -race ./pkg/server -run '^(TestConcurrentIdenticalInvitationCreatesShareMutationAndQuota|TestInvitationRecipientQuotaDenialRollsBackAccountQuota)$' -count=1
+ok github.com/thingzio/devradar/pkg/server 1.871s
+exit 0
+```
+
+The first GREEN attempt returned two correct 303 responses but the barrier probe counted only direct blockers of the holder. PostgreSQL queue-blocked the second waiter behind the first. The probe was corrected to count both blocked account-lock queries; production behavior was unchanged.
+
+IAM RED:
+
+```text
+$ go test ./infra/saas -run '^TestDeployerOperationPollingIAMIsLeastPrivilege$' -count=1
+--- FAIL: TestDeployerOperationPollingIAMIsLeastPrivilege (0.00s)
+    iam_test.go:17: missing Terraform resource google_project_iam_custom_role.cloud_run_operation_viewer
+FAIL
+FAIL github.com/thingzio/devradar/infra/saas 0.304s
+exit 1
+```
+
+IAM GREEN and Terraform validation:
+
+```text
+$ go test ./infra/saas -run '^TestDeployerOperationPollingIAMIsLeastPrivilege$' -count=1
+ok github.com/thingzio/devradar/infra/saas 0.244s
+
+$ make tf-validate
+Success! The configuration is valid.
+exit 0
+```
+
+### Official Cloud Run permission evidence
+
+Google Cloud’s official [Cloud Run IAM roles documentation](https://docs.cloud.google.com/run/docs/reference/iam/roles#click-to-view-the-required-roles-for-deploying-a-container) states that deploying services requires `run.services.get` and `run.operations.get` “to read the status of the service.” The official REST reference identifies the polled resource as [`projects.locations.operations.get`](https://docs.cloud.google.com/run/docs/reference/rest/v2/projects.locations.operations/get), separate from service/job resources. This supports the one-permission project custom role while preserving resource-scoped Run administration.
+
+### Final verification
+
+Focused suites:
+
+```text
+$ go test -race ./pkg/ratelimit -count=1
+ok github.com/thingzio/devradar/pkg/ratelimit 2.994s
+
+$ go test -race ./pkg/data/postgres -run 'Invitation' -count=1
+ok github.com/thingzio/devradar/pkg/data/postgres 6.170s
+
+$ go test -race ./pkg/server -run 'Invitation' -count=1
+ok github.com/thingzio/devradar/pkg/server 2.594s
+
+$ go test ./infra/saas -count=1
+ok github.com/thingzio/devradar/infra/saas 0.312s
+```
+
+Full changed-package races:
+
+```text
+$ go test -race ./pkg/ratelimit ./pkg/data/postgres ./pkg/server ./infra/saas -count=1
+ok github.com/thingzio/devradar/pkg/ratelimit 2.864s
+ok github.com/thingzio/devradar/pkg/data/postgres 77.362s
+ok github.com/thingzio/devradar/pkg/server 34.911s
+ok github.com/thingzio/devradar/infra/saas 1.542s
+exit 0
+```
+
+Repository gates:
+
+```text
+$ make qualify
+ok github.com/thingzio/devradar/infra/saas 1.314s
+ok github.com/thingzio/devradar/pkg/data/postgres 79.545s coverage: 69.5% of statements
+ok github.com/thingzio/devradar/pkg/ratelimit 4.346s coverage: 47.1% of statements
+ok github.com/thingzio/devradar/pkg/server 33.595s coverage: 61.5% of statements
+Coverage: 67.1% (threshold: 45%)
+Coverage check passed
+go vet ./...
+golangci-lint run --timeout=5m
+0 issues.
+deploy workflow check: PASS (safe-prefix forward=660s/30m)
+Qualification complete
+exit 0
+
+$ go build ./...
+exit 0
+
+$ make tf-validate
+Success! The configuration is valid.
+exit 0
+
+$ actionlint
+exit 0
+
+$ yamllint .
+exit 0
+
+$ git diff --check
+exit 0
+```
+
+### Self-review
+
+- Transaction isolation: the account lock serializes create outcomes before either quota key is touched. Cross-account requests for one recipient serialize on the recipient quota row. No network I/O occurs in the transaction.
+- Rollback: recipient denial and every later error roll back the account counter, recipient counter, invitation, token rotation, outbox, and audit event. Exact duplicates reserve neither counter.
+- Authorization and isolation: active account and admin membership are revalidated under the same transaction; all invitation reads remain explicitly account-filtered.
+- Secrets: outcomes and redirect messages expose no bearer, token hash, ciphertext, provider error, or delivery identifier.
+- IAM: the new role contains exactly `run.operations.get`, has exactly one project binding to the deployer, and broad project `roles/run.admin`/`roles/artifactregistry.writer` remain absent. Existing exact WIF, repository writer, three resource Run grants, scheduler grant, and service-account-user grants remain.
+- Scope: no workflow change, migration 033, production feature enablement, push, tag, deploy, plan/apply, or external mutation. `infra/saas/terraform.tfvars` was not accessed.
+
+### Re-review concerns
+
+None outstanding.

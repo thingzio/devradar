@@ -89,6 +89,28 @@ func TestAllow_ZeroLimitDisabled(t *testing.T) {
 	}
 }
 
+func TestAllow_TransactionRollbackDoesNotConsumeQuota(t *testing.T) {
+	st := testDB(t)
+	ctx := context.Background()
+	key := randKey(t)
+	tx, err := st.DB().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed, err := ratelimit.Allow(ctx, tx, key, 1, time.Hour)
+	if err != nil || !allowed {
+		_ = tx.Rollback()
+		t.Fatalf("transactional allowance = %t, %v", allowed, err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	allowed, err = ratelimit.Allow(ctx, st.DB(), key, 1, time.Hour)
+	if err != nil || !allowed {
+		t.Fatalf("allowance after rollback = %t, %v, want available", allowed, err)
+	}
+}
+
 // TestAllow_WindowResets: with a sub-second window, a new window restores the
 // budget.
 func TestAllow_WindowResets(t *testing.T) {
