@@ -19,13 +19,16 @@ resource "google_cloud_scheduler_job" "scan" {
   depends_on = [google_project_service.default]
 }
 
-# Executes one bounded outbox pass each minute. Five durable database worker
-# slots bound aggregate concurrency; row leases fence each delivery attempt.
+# Executes one bounded outbox pass every 5 minutes. Five durable database
+# worker slots bound aggregate concurrency; row leases fence each delivery
+# attempt. Invitation delivery is not latency-sensitive, so a 5-min cadence
+# cuts Cloud Run Job invocation cost ~5x (43,200 -> 8,640 runs/mo) versus every
+# minute, at the cost of up to ~5 min worst-case invite latency.
 resource "google_cloud_scheduler_job" "delivery" {
   name      = "${var.prefix}-deliver-scheduled"
   project   = var.project_id
   region    = var.region
-  schedule  = "* * * * *"
+  schedule  = "*/5 * * * *"
   time_zone = "UTC"
   paused    = true
 

@@ -227,6 +227,11 @@ resource "google_cloud_run_v2_job" "scan" {
           value = google_storage_bucket.sboms.name
         }
 
+        env {
+          name  = "DEVRADAR_SCAN_MAX_AGE"
+          value = var.scan_max_age
+        }
+
         resources {
           limits = {
             cpu = "2000m"

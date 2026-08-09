@@ -53,9 +53,15 @@ variable "email_from" {
 }
 
 variable "scan_schedule" {
-  description = "Cron schedule (UTC) for the scan job. Runs frequently; each SBOM is scanned at most as often as DEVRADAR_SCAN_MAX_AGE allows (default 12h), so a frequent schedule bounds submission-to-result latency without over-scanning."
+  description = "Cron schedule (UTC) for the scan job. Runs frequently; each SBOM is scanned at most as often as DEVRADAR_SCAN_MAX_AGE allows, so a frequent schedule bounds submission-to-result latency without over-scanning."
   type        = string
   default     = "*/15 * * * *"
+}
+
+variable "scan_max_age" {
+  description = "Staleness window (Go duration) for scan-job work selection: an SBOM is scanned only if never scanned or last scanned longer ago than this. Overrides the code default (12h) to bound per-SBOM scan compute as the fleet grows."
+  type        = string
+  default     = "24h"
 }
 
 variable "github_oauth_client_id" {
