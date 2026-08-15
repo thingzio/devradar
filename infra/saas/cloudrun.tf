@@ -197,7 +197,14 @@ resource "google_cloud_run_v2_job" "scan" {
 
     template {
       service_account = google_service_account.run.email
-      timeout         = "5400s" # 90 min — headroom over the ~72 min corpus budget
+      # 90 min. A full-corpus pass (every SBOM due at once — cold start, an
+      # outage longer than DEVRADAR_SCAN_MAX_AGE, a scanner DB bump, or a bulk
+      # rescan) measured 16 min for 371 SBOMs on execution devradar-saas-scan-pm6fp
+      # (2026-08-15): ~2.6s per SBOM across both scanners, 18% of this budget.
+      # The timeout is not crossed until ~2,080 SBOMs. An earlier comment here
+      # estimated "~72 min" and was wrong by 4.5x — do not re-derive this from
+      # guesswork; see docs/scalability.md for how to measure it.
+      timeout = "5400s"
       max_retries     = 1
 
       vpc_access {
