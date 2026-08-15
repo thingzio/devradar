@@ -248,8 +248,12 @@ func (r *Runner) scanDue(ctx context.Context, pending []*postgres.SBOM, allNames
 			CanonicalizerVersion: canonVer,
 		}}
 		ready = append(ready, rs)
+		// Not "version": logging.Setup binds that to the app version on every
+		// entry, so a second one here emits a duplicate JSON key and log
+		// backends concatenate the two values — corrupting the scanner version
+		// in exactly the incident where it is the field you need.
 		slog.Info("scanner ready", "scanner", sc.Name(),
-			"version", rs.ver.ScannerVersion, "db_version", rs.ver.DBVersion)
+			"scanner_version", rs.ver.ScannerVersion, "db_version", rs.ver.DBVersion)
 	}
 	if len(ready) == 0 {
 		return fmt.Errorf("no scanners available after db refresh (%d attempted)", len(r.scanners))

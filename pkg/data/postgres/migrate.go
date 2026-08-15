@@ -74,7 +74,9 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return fmt.Errorf("read migration %q: %w", name, err)
 		}
 
-		slog.Info("applying migration", "version", version, "file", name)
+		// "migration_version", not "version": the latter is bound to the app
+		// version by logging.Setup and would collide on every entry.
+		slog.Info("applying migration", "migration_version", version, "file", name)
 		// Apply the migration and record its version in ONE transaction on the
 		// advisory-locked connection. Postgres DDL is transactional, so a crash
 		// between the two statements can no longer leave a migration applied but

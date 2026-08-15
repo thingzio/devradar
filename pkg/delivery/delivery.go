@@ -128,7 +128,9 @@ func runWithDependencies(ctx context.Context, opts Options, deps dependencies) e
 		return err
 	}
 
-	slog.Info("delivery pass starting", "version", opts.Version, "commit", opts.Commit, "date", opts.Date)
+	// Version is omitted deliberately: logging.Setup already binds it to every
+	// entry, matching the cmd/* startup lines which log only commit and date.
+	slog.Info("delivery pass starting", "commit", opts.Commit, "date", opts.Date)
 	r := &runner{
 		store:           store,
 		sender:          sender,
