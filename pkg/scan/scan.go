@@ -275,8 +275,11 @@ func (r *Runner) scanDue(ctx context.Context, pending []*postgres.SBOM, allNames
 			return fmt.Errorf("list scannable sboms: %w", err)
 		}
 	}
+	// .String(): slog serializes a time.Duration as raw int64 nanoseconds, which
+	// the JSON handler then renders in scientific notation ("8.64E13" for 24h) —
+	// technically correct and useless to an operator reading a job log.
 	slog.Info("scan run starting", "sbom_count", len(sboms), "scanners", len(ready),
-		"scan_max_age", r.opts.ScanMaxAge)
+		"scan_max_age", r.opts.ScanMaxAge.String())
 
 	scanned := 0
 	for _, sb := range sboms {
