@@ -237,9 +237,24 @@ resource "google_cloud_run_v2_job" "scan" {
             cpu = "2000m"
             # Both scanners load a full vuln DB into memory: Grype's stays
             # resident while Trivy downloads + decompresses its own (~1GB+),
-            # so peak usage exceeds 2Gi and the job was OOM-killed. 4Gi covers
-            # both DBs plus the working set for a single SBOM scan.
-            memory = "4Gi"
+            # so peak usage exceeds 2Gi and the job was OOM-killed at that size.
+            #
+            # Cloud Run's filesystem is memory-backed tmpfs, and Dockerfile.scan
+            # fetches both DBs into $HOME at job start, so the DBs are charged
+            # against THIS limit — not just the scanners' heap. The DBs grow
+            # monotonically upstream, so this ceiling is consumed over time by
+            # doing nothing.
+            #
+            # 4Gi held until 2026-08-15, when the job began failing on SIGBUS
+            # (signal 7, not the usual SIGKILL) partway through Trivy's DB
+            # download: Trivy mmaps its BoltDB, and an mmap page that tmpfs
+            # cannot back raises SIGBUS instead of inviting the OOM killer.
+            # 8Gi restores headroom. Watch job-execution failures — the next
+            # occurrence means the DBs have outgrown this too, and the fix then
+            # is to move the caches off tmpfs (NFS volume; GCS FUSE is a poor
+            # fit because BoltDB mmap over FUSE is unreliable) rather than to
+            # keep doubling. See docs/scalability.md.
+            memory = "8Gi"
           }
         }
 
