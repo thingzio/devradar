@@ -292,6 +292,11 @@ request rate, errors, latency, resource saturation, and job execution signals.
 Domain failures live in PostgreSQL so scanner gaps and evaluator backlog remain
 queryable. Service-specific alarms and SLOs remain a production prerequisite.
 
+`docs/scalability.md` records where the system stops scaling, measured against a
+production restore: per-SBOM storage economics, which tables are unbounded, the
+scan job's herd-vs-steady-state budget, and the signals that mark a design or
+sizing change. `docs/cost-optimization.md` tracks the cost-side actions.
+
 Local and CI validation use the same pinned versions from `.settings.yaml`:
 
 ```text

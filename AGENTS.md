@@ -13,6 +13,7 @@ DevRadar v1 is implemented and runnable end to end: ingest â†’ recurring scan â†
 - `DEVELOPMENT.md` records implementation architecture, invariants, and engineering guidance.
 - `DEPLOYMENT.md` is the manual first-apply and routine deployment runbook.
 - `.settings.yaml` is the version and quality-threshold source of truth.
+- `docs/scalability.md` records measured scaling limits and the triggers that signal a design or sizing change; `docs/cost-optimization.md` tracks cost actions.
 - `ROADMAP.md` is the stack-ranked unshipped roadmap; it is not an implementation specification.
 
 Browser alerts, the deterministic work queue, digest comparison, fleet/repository trends, admin health, and optional attestation verification are shipped. Production infrastructure hardening, email/webhooks, SBOM quality assessment, and CI assurance gates are next.
