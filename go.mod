@@ -11,7 +11,7 @@ require (
 	github.com/sigstore/sigstore-go v1.3.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.22.0
-	google.golang.org/api v0.292.0
+	google.golang.org/api v0.293.0
 )
 
 require (
