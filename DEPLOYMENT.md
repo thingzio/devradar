@@ -53,11 +53,11 @@ Only the disposable test clone may be dropped and recreated.
 
 ```bash
 export ADMIN_URL='postgres://devradar:devradar@localhost:5432/postgres?sslmode=disable'
-export PRE_DB='devradar_prod_20260714_020645_pre'
-export TEST_DB='devradar_prod_20260714_020645_test'
+export PRE_DB='devradar_prod_20260815_050144_pre'
+export TEST_DB='devradar_prod_20260815_050144_test'
 export PRE_URL="postgres://devradar:devradar@localhost:5432/${PRE_DB}?sslmode=disable"
 export TEST_URL="postgres://devradar:devradar@localhost:5432/${TEST_DB}?sslmode=disable"
-export PROD_BACKUP='/Users/mchmarny/dev/thingz/db/thingz-20260714-020645.sql.gz'
+export PROD_BACKUP='/Users/mchmarny/dev/thingz/db/thingz-20260815-050144.sql.gz'
 
 # Confirm the client endpoint, port, and database are local before any
 # destructive command. inet_server_addr() reports the container's bridge
@@ -79,11 +79,11 @@ gzip -t "$PROD_BACKUP"
 createdb --maintenance-db="$ADMIN_URL" --template=template0 "$PRE_DB"
 gzip -dc "$PROD_BACKUP" | psql "$PRE_URL" -v ON_ERROR_STOP=1
 
-# The 2026-07-14 release baseline must remain exactly at versions 1..29.
+# The 2026-08-15 release baseline must remain exactly at versions 1..32.
 psql "$PRE_URL" -v ON_ERROR_STOP=1 -c \
   "SELECT count(*), min(version), max(version),
           array_agg(version ORDER BY version) =
-            ARRAY(SELECT generate_series(1,29)) AS contiguous
+            ARRAY(SELECT generate_series(1,32)) AS contiguous
    FROM devradar_schema_version"
 ```
 
@@ -101,8 +101,8 @@ for table in $(psql "$PRE_URL" -Atqc \
 done
 ```
 
-Recreate only the migrated clone, then apply migrations 30 through 32 through
-the real advisory-locked Go migration runner. `TestMigrate_Idempotent` opens the
+Recreate only the migrated clone, then apply migration 33 through the real
+advisory-locked Go migration runner. `TestMigrate_Idempotent` opens the
 store (which applies pending migrations) and calls `Migrate` again, proving the
 second pass is a no-op.
 
@@ -121,21 +121,18 @@ DATABASE_URL="$TEST_URL" go test ./pkg/data/postgres \
 ```
 
 Validate the migrated contract and compare every baseline table count. The
-version query must report `32 | 1 | 32 | true`; all count pairs must match.
+version query must report `33 | 1 | 33 | true`; all count pairs must match.
 
 ```bash
 psql "$TEST_URL" -v ON_ERROR_STOP=1 -c \
   "SELECT count(*), min(version), max(version),
           array_agg(version ORDER BY version) =
-            ARRAY(SELECT generate_series(1,32)) AS contiguous
+            ARRAY(SELECT generate_series(1,33)) AS contiguous
    FROM devradar_schema_version"
 
-psql "$TEST_URL" -v ON_ERROR_STOP=1 -c \
-  "SELECT column_name, is_nullable
-   FROM information_schema.columns
-   WHERE table_schema='public'
-     AND table_name='devradar_alert_event_queue'
-     AND column_name='tenant_id'"
+# Every devradar foreign key must have a covering index on the migrated clone.
+DATABASE_URL="$TEST_URL" go test ./pkg/data/postgres \
+  -run '^TestForeignKeysHaveCoveringIndexes$' -count=1 -v
 
 for table in $(psql "$PRE_URL" -Atqc \
   "SELECT tablename FROM pg_tables
@@ -180,7 +177,7 @@ deleted, and keep every query explicitly account-filtered. Do not rename the
 physical `devradar_tenant` table or `tenant_id` columns during this rollout.
 
 **No-release gate:** do not tag, push, deploy, enable a production feature, or
-run production Terraform until all migrations are contiguous through 32, the
+run production Terraform until all migrations are contiguous through 33, the
 idempotent rerun is clean, baseline business-table counts match, query plans are
 reviewed, `make qualify` and `go build ./...` pass, and the owner validates the
 complete local workflow. A failed check returns to the preserved baseline via
