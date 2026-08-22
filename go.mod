@@ -5,13 +5,13 @@ go 1.26.4
 require github.com/Jeffail/gabs/v2 v2.7.0
 
 require (
-	cloud.google.com/go/storage v1.64.0
+	cloud.google.com/go/storage v1.65.0
 	github.com/lib/pq v1.12.3
 	github.com/sigstore/sigstore v1.10.9
 	github.com/sigstore/sigstore-go v1.3.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.22.0
-	google.golang.org/api v0.292.0
+	google.golang.org/api v0.293.0
 )
 
 require (
