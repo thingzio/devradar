@@ -204,8 +204,8 @@ resource "google_cloud_run_v2_job" "scan" {
       # The timeout is not crossed until ~2,080 SBOMs. An earlier comment here
       # estimated "~72 min" and was wrong by 4.5x — do not re-derive this from
       # guesswork; see docs/scalability.md for how to measure it.
-      timeout = "5400s"
-      max_retries     = 1
+      timeout     = "5400s"
+      max_retries = 1
 
       vpc_access {
         network_interfaces {
