@@ -3,7 +3,7 @@
 
 # Language version
 languages:
-  go: '1.26'
+  go: '1.27'
 
 # Build tools
 build_tools:
@@ -12,7 +12,7 @@ build_tools:
 
 # Linting
 linting:
-  golangci_lint: 'v2.12.1'
+  golangci_lint: 'v2.13.1'
 
 # Pinned scanner binaries (baked into the scan-job image; the vuln DB is
 # refreshed lazily at job start, not pinned here). Recorded per scan run.
