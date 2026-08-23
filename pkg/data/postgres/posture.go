@@ -4,13 +4,22 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"fmt"
+	"log/slog"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 const (
 	maxPostureTrendDays          = 365
 	postureSnapshotUnlockTimeout = 5 * time.Second
+	// postureSnapshotAttempts bounds the projection's serialization retries.
+	// Each attempt costs a full fleet scan, and losing the race twice in a row
+	// means the deletion rate is the problem, not the timing — so fail and let
+	// the caller's next tick pick it up rather than retrying indefinitely.
+	postureSnapshotAttempts = 3
 )
 
 // TenantPosturePoint is one exact daily snapshot of a tenant's active fleet.
@@ -102,8 +111,47 @@ func (s *Store) SnapshotTenantPosture(ctx context.Context) (retErr error) {
 }
 
 // snapshotTenantPostureLocked performs the projection on a connection that
-// already holds the posture-snapshot advisory lock.
+// already holds the posture-snapshot advisory lock, retrying a bounded number
+// of times when the repeatable-read transaction loses a serialization race.
+//
+// The advisory lock excludes a second projection, but NOT the rest of the
+// system: the tenant insert writes one row per active tenant, and each row's
+// foreign key re-reads its parent with FOR KEY SHARE. An account hard-deleted
+// by a concurrent transaction after this transaction's snapshot was established
+// aborts the whole projection with 40001 — a tenant this run still sees but can
+// no longer reference. Plain attribute updates on a tenant do not conflict.
+//
+// The work is a self-contained DELETE-then-INSERT of today's rows, so a retry
+// is idempotent, and it converges: the next attempt takes a fresh snapshot in
+// which the deleted account is simply gone.
 func (s *Store) snapshotTenantPostureLocked(ctx context.Context, conn *sql.Conn) error {
+	var err error
+	for attempt := 1; attempt <= postureSnapshotAttempts; attempt++ {
+		if err = s.snapshotTenantPostureOnce(ctx, conn); err == nil || !isSerializationFailure(err) {
+			return err
+		}
+		slog.Warn("retrying posture snapshot",
+			"attempt", attempt, "max_attempts", postureSnapshotAttempts, "error", err)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("retry tenant posture snapshot: %w", ctxErr)
+		}
+	}
+	return fmt.Errorf("tenant posture snapshot after %d attempts: %w", postureSnapshotAttempts, err)
+}
+
+// isSerializationFailure reports whether err is a Postgres transaction-rollback
+// failure that a fresh attempt can win: a serialization failure (40001) or a
+// deadlock (40P01). Both are class 40 and carry no partial commit.
+func isSerializationFailure(err error) bool {
+	var pqErr *pq.Error
+	if !errors.As(err, &pqErr) {
+		return false
+	}
+	return pqErr.Code == "40001" || pqErr.Code == "40P01"
+}
+
+// snapshotTenantPostureOnce runs one attempt of the projection transaction.
+func (s *Store) snapshotTenantPostureOnce(ctx context.Context, conn *sql.Conn) error {
 	tx, err := conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
 	if err != nil {
 		return fmt.Errorf("begin tenant posture snapshot: %w", err)

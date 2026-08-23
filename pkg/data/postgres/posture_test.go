@@ -677,6 +677,85 @@ func TestSnapshotTenantPosture_ConcurrentRetries(t *testing.T) {
 	}
 }
 
+func TestSnapshotTenantPosture_SurvivesConcurrentAccountDeletion(t *testing.T) {
+	// The projection inserts one row per active tenant under repeatable read,
+	// and each row's foreign key re-reads its parent FOR KEY SHARE. An account
+	// hard-deleted after the transaction's snapshot was established aborts the
+	// whole projection with 40001; the bounded retry must absorb that and
+	// commit a projection that simply omits the deleted account. A private
+	// schema keeps the deletion from disturbing concurrent package tests.
+	st := isolatedAdminProductHealthStore(t)
+	ctx := context.Background()
+	survivorID, sb := seedTenantAndSBOM(t, st)
+	repository := "registry.test/survivor-" + randID(t)[:8]
+	if _, err := st.DB().ExecContext(ctx,
+		`UPDATE devradar_sbom SET repository=$2 WHERE id=$1`, sb.ID, repository); err != nil {
+		t.Fatal(err)
+	}
+	// The doomed account owns no SBOM, so it appears only in the tenant-level
+	// insert. Were it to own one, the earlier repository insert would already
+	// hold FOR KEY SHARE on its row and the DELETE below would block on the
+	// projection instead of racing it.
+	var doomedID string
+	if err := st.DB().QueryRowContext(ctx,
+		`INSERT INTO devradar_tenant (email) VALUES ($1) RETURNING id`,
+		"doomed-"+randID(t)[:8]+"@example.com").Scan(&doomedID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Hold the projection open inside its transaction, after its snapshot is
+	// established and before the tenant insert reaches the doomed account's
+	// foreign key, so the DELETE lands in the window that produces 40001.
+	suffix := randID(t)
+	functionName := "delay_survivor_snapshot_" + suffix
+	triggerName := "delay_survivor_snapshot_" + suffix
+	if _, err := st.DB().ExecContext(ctx, fmt.Sprintf(`
+		CREATE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF NEW.tenant_id = '%s'::uuid THEN
+				PERFORM pg_sleep(0.5);
+			END IF;
+			RETURN NEW;
+		END $$;
+		CREATE TRIGGER %s BEFORE INSERT ON devradar_repository_posture_snapshot
+		FOR EACH ROW EXECUTE FUNCTION %s()`, functionName, survivorID, triggerName, functionName)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = st.DB().ExecContext(context.Background(), fmt.Sprintf(
+			`DROP TRIGGER IF EXISTS %s ON devradar_repository_posture_snapshot; DROP FUNCTION IF EXISTS %s()`,
+			triggerName, functionName))
+	})
+
+	deleted := make(chan error, 1)
+	go func() {
+		time.Sleep(250 * time.Millisecond)
+		_, err := st.DB().ExecContext(ctx, `DELETE FROM devradar_tenant WHERE id=$1`, doomedID)
+		deleted <- err
+	}()
+
+	if err := st.SnapshotTenantPosture(ctx); err != nil {
+		t.Fatalf("posture snapshot lost to concurrent account deletion: %v", err)
+	}
+	if err := <-deleted; err != nil {
+		t.Fatalf("delete racing account: %v", err)
+	}
+
+	fleet, err := st.TenantPostureTrend(ctx, survivorID, 30)
+	if err != nil || len(fleet) != 1 {
+		t.Fatalf("surviving tenant snapshot = %+v error=%v, want one point", fleet, err)
+	}
+	var doomedRows int
+	if err := st.DB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM devradar_tenant_posture_snapshot WHERE tenant_id=$1`,
+		doomedID).Scan(&doomedRows); err != nil {
+		t.Fatal(err)
+	}
+	if doomedRows != 0 {
+		t.Fatalf("deleted account retained %d snapshot rows", doomedRows)
+	}
+}
+
 func TestSnapshotTenantPosture_UsesOneSourceSnapshotAcrossProjections(t *testing.T) {
 	// SnapshotTenantPosture rewrites every active tenant's snapshot for today
 	// (a global DELETE + INSERT). A private schema keeps a concurrent package
