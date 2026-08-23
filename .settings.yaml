@@ -7,8 +7,8 @@ languages:
 
 # Build tools
 build_tools:
-  goreleaser: 'v2.15.4'
-  ko: 'v0.18.1'
+  goreleaser: 'v2.17.1'
+  ko: 'v0.19.1'
 
 # Linting
 linting:
