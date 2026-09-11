@@ -82,7 +82,9 @@ Useful gates:
 - `make tf-validate` — Terraform validation without backend credentials.
 - `go build ./...` — direct compile check.
 
-Use test-driven development for behavior changes. Never skip or disable tests. Preserve unrelated work in a dirty tree. Commit focused changes directly to `main`, signed with `git commit -S`; never add sign-offs, co-author trailers, or generated-by text.
+Use test-driven development for behavior changes. Never skip or disable tests. Preserve unrelated work in a dirty tree. Commit focused changes directly to `main`, signed and signed off with `git commit -S -s`; never add co-author trailers or generated-by text.
+
+`-s` and `-S` are different and both are wanted. `-s` adds the `Signed-off-by` trailer certifying the Developer Certificate of Origin, which this repository enforces — the DCO bot rejects pull requests whose commits lack it. `-S` cryptographically signs the commit. See [CONTRIBUTING.md](CONTRIBUTING.md#developer-certificate-of-origin).
 
 ## Migration and Release Safety
 

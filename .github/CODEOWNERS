@@ -1,0 +1,10 @@
+# Every change is reviewed by the sole maintainer; see MAINTAINERS.md.
+# Listing the whole tree makes that explicit rather than implied, and keeps
+# review assignment working if a second maintainer is added later.
+* @mchmarny
+
+# Called out separately because these carry the most blast radius: workflow
+# changes can alter what runs with repository credentials, and infra changes
+# alter the deployed instance.
+/.github/ @mchmarny
+/infra/ @mchmarny

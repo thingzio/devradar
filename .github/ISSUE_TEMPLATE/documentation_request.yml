@@ -1,0 +1,31 @@
+name: Documentation
+description: Something is missing, wrong, or hard to follow in the docs
+labels: ["documentation"]
+body:
+  - type: input
+    id: location
+    attributes:
+      label: Where
+      description: File path, URL, or section heading.
+      placeholder: docs/DEVELOPMENT.md, "Running locally"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong or missing
+      description: >
+        If you got stuck following a set of instructions, say where you stopped
+        and what you expected to happen next. That is the most useful kind of
+        documentation bug.
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested wording
+      description: Optional. If you already know what it should say, write it here.
+    validations:
+      required: false

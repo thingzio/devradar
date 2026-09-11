@@ -1,0 +1,9 @@
+# Configuration for the DCO bot
+# https://github.com/probot/dco
+#
+# Every commit must carry a Signed-off-by line certifying the Developer
+# Certificate of Origin (https://developercertificate.org). Add one with
+# `git commit -s`. See CONTRIBUTING.md for the full explanation.
+
+require:
+  members: false

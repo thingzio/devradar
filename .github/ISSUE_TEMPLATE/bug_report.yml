@@ -1,0 +1,66 @@
+name: Bug report
+description: Something behaves differently than documented or expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file this. If you think you have found a
+        security vulnerability, please **stop** and follow
+        [SECURITY.md](../../blob/main/SECURITY.md) instead — do not file it here.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you observe?
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: >
+        The smallest set of steps that triggers it. A failing test, a command
+        with its output, or a minimal config is far more useful than a
+        description.
+      placeholder: |
+        1. Run `...`
+        2. Observe `...`
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Output of the binary's version flag, a release tag, or a commit SHA.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS and architecture, Go version if building from source, how you are running it.
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: >
+        Paste logs or errors. They are automatically formatted as code, so no
+        backticks needed. **Please redact tokens, keys, and connection strings.**
+      render: shell
+    validations:
+      required: false

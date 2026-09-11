@@ -1,0 +1,49 @@
+name: Feature request
+description: Suggest a capability or change in behavior
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, please read the "Project governance" section of
+        [CONTRIBUTING.md](../../blob/main/CONTRIBUTING.md#project-governance).
+        This is a best-effort, single-maintainer project — a request may sit for
+        a while, or be declined as out of scope. That is not a judgment on the
+        idea.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >
+        What are you trying to do that is hard or impossible today? Describe the
+        situation, not the solution — it is the part most likely to change the
+        design.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: Optional. If you have a specific shape in mind, sketch it.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried or considered
+      description: >
+        Workarounds you are using now, or other approaches you rejected and why.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: willing
+    attributes:
+      label: Would you be willing to work on this?
+      description: Entirely optional, and not a condition of the request being considered.
+      options:
+        - label: I would be willing to open a pull request for this
+          required: false
