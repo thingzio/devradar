@@ -23,7 +23,10 @@ scanners:
 
 # Quality thresholds
 quality:
-  coverage_threshold: '45'
+  # Set from measured coverage (68.8% on 2026-09-11) with ~2 points of slack.
+  # Raise it when coverage rises; a gate that fails on a clean checkout is worse
+  # than an honest lower number.
+  coverage_threshold: '66'
   lint_timeout: '5m'
   test_timeout: '10m'
   build_timeout: '10m0s'
