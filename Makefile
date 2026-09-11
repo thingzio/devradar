@@ -37,6 +37,11 @@ tidy: ## Formats code, tidies deps, and refreshes the vendor tree
 	go fmt ./...
 	go mod tidy
 	go mod vendor
+	$(MAKE) notices
+
+.PHONY: notices
+notices: ## Regenerates THIRD_PARTY_NOTICES.md from the vendor tree
+	python3 tools/gen-third-party-notices
 
 .PHONY: upgrade
 upgrade: ## Upgrades all dependencies to latest and refreshes vendor
