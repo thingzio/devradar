@@ -77,7 +77,23 @@ func (s *Store) ApplyScan(ctx context.Context, sb *SBOM, scanner string, ver Ver
 		incoming[v.GetID()] = v // dedup within a scan by identity
 	}
 
-	now := time.Now().UTC()
+	// Read the run's timestamp from the database, not from this process. It is
+	// compared against devradar_alert_policy.updated_at (stamped by the server's
+	// clock) in alert.Match, and comparing two machines' clocks means any skew
+	// silently suppresses alerts: an event that happened after a policy change
+	// can carry an earlier timestamp and be treated as retroactive.
+	//
+	// clock_timestamp() rather than now(): now() is transaction-start time, and
+	// this transaction blocks on the advisory lock above, so under contention
+	// now() would backdate the run by the whole lock wait and reintroduce the
+	// same suppression. Read once here and shared by every event in the run, so
+	// the log stays as reproducible as it was with time.Now().
+	var now time.Time
+	if err := tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		return fmt.Errorf("read scan clock: %w", err)
+	}
+	now = now.UTC()
+
 	runID, err := insertScanRun(ctx, tx, sb.ID, scanner, ver, now, vulns)
 	if err != nil {
 		return err
