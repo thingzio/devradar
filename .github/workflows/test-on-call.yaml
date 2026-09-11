@@ -101,12 +101,12 @@ jobs:
           terraform_wrapper: false
 
       - name: Terraform fmt
-        run: terraform -chdir=infra/saas fmt -check -recursive
+        run: terraform -chdir=infra/run fmt -check -recursive
 
       - name: Terraform validate
         run: |
-          terraform -chdir=infra/saas init -backend=false >/dev/null
-          terraform -chdir=infra/saas validate
+          terraform -chdir=infra/run init -backend=false >/dev/null
+          terraform -chdir=infra/run validate
 
       - name: OpenAPI validate
         run: npx --yes @redocly/cli@1.34.2 lint pkg/server/static/openapi.yaml

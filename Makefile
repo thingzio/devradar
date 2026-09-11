@@ -162,13 +162,13 @@ bump-patch: ## Tags + pushes the next patch version (v1.2.3 -> v1.2.4), triggeri
 	tools/bump patch
 
 # =============================================================================
-# Infrastructure (Terraform) — see infra/saas
+# Infrastructure (Terraform) — see infra/run
 # =============================================================================
 
-TF_DIR := infra/saas
+TF_DIR := infra/run
 
 .PHONY: tf-init
-tf-init: ## Initializes Terraform (infra/saas)
+tf-init: ## Initializes Terraform (infra/run)
 	terraform -chdir=$(TF_DIR) init
 
 .PHONY: tf-plan

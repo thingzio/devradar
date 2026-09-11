@@ -9,14 +9,14 @@ set -euo pipefail
 #
 # Prerequisites:
 #   - gh CLI authenticated (gh auth status)
-#   - terraform apply completed in infra/saas/
+#   - terraform apply completed in infra/run/
 #
 # The four variables (WIF_PROVIDER, DEPLOYER_SA, REGION, PROJECT_ID) are what
 # .github/workflows/{release,deploy}.yaml consume for keyless (WIF) deploys.
 
 REPO="thingzio/devradar"
 ENV_NAME="saas"
-TF_DIR="infra/saas"
+TF_DIR="infra/run"
 
 command -v gh >/dev/null 2>&1 || { echo "error: gh CLI not found" >&2; exit 1; }
 command -v terraform >/dev/null 2>&1 || { echo "error: terraform not found" >&2; exit 1; }

@@ -11,7 +11,7 @@ figures are from production execution `devradar-saas-scan-pm6fp` (2026-08-15).
 See "Refreshing this analysis" to rerun both._
 
 **Every number here is measured.** An earlier revision of this document carried
-a "~72 min corpus budget" inherited from a comment in `infra/saas/cloudrun.tf`
+a "~72 min corpus budget" inherited from a comment in `infra/run/cloudrun.tf`
 and built the 2x scenario on it; the first real measurement came in at 16 min
 and moved the conclusion by 3x. Do not reintroduce an estimate here without
 labelling it as one.

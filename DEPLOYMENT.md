@@ -31,10 +31,10 @@ SBOM bytes, secrets, service accounts, and the three Cloud Run resources.
 - A **Resend** API key for magic-link sign-in.
 - Optionally an **Anthropic** API key for admin metrics analysis.
 
-All shared identifiers are baked as variable defaults in `infra/saas/variables.tf`
+All shared identifiers are baked as variable defaults in `infra/run/variables.tf`
 (`project_id=thingzio`, `region=us-west1`, `db_instance_name=thingzio-pg`,
 `db_name=thingz`, `git_repo=thingzio/devradar`). Override via an untracked
-`infra/saas/terraform.tfvars` only if a default is wrong — **do not commit
+`infra/run/terraform.tfvars` only if a default is wrong — **do not commit
 secrets to tfvars.**
 
 ---
@@ -209,7 +209,7 @@ separate token-flash and invitation-delivery keys and stores their first secret
 versions. Capture the outputs:
 
 ```bash
-terraform -chdir=infra/saas output
+terraform -chdir=infra/run output
 ```
 
 ### 2. Populate secret values
@@ -235,11 +235,11 @@ printf '%s' 'YOUR_RESEND_KEY' | \
 **`devradar-saas-anthropic-api-key` (optional admin metrics analysis) and
 `devradar-saas-oauth-client-secret` (optional GitHub sign-in) — tfvars-driven.**
 These have **no** `ignore_changes`; tfvars is the source of truth. Set them in the
-gitignored `infra/saas/terraform.tfvars` and re-apply — do **not** add versions with
+gitignored `infra/run/terraform.tfvars` and re-apply — do **not** add versions with
 `gcloud`, as the next apply would overwrite them:
 
 ```hcl
-# infra/saas/terraform.tfvars (gitignored — never committed)
+# infra/run/terraform.tfvars (gitignored — never committed)
 anthropic_api_key         = "YOUR_ANTHROPIC_KEY"
 github_oauth_client_id    = "YOUR_OAUTH_CLIENT_ID"      # public identifier (plain env var)
 github_oauth_client_secret = "YOUR_OAUTH_CLIENT_SECRET"
@@ -337,7 +337,7 @@ curl -s https://devradar.thingz.io/v1/images -H "Authorization: Bearer $DR_TOKEN
 ### 6. Harden
 
 Once the deploy is confirmed, set `deletion_protection = true` on the service
-and both jobs in `infra/saas/cloudrun.tf`, then `make tf-apply`.
+and both jobs in `infra/run/cloudrun.tf`, then `make tf-apply`.
 
 ---
 
@@ -382,7 +382,7 @@ the owner validate:
 
 Only an explicit owner decision after that evidence authorizes setting
 `account_sharing_enabled = true` in the gitignored
-`infra/saas/terraform.tfvars`, reviewing `make tf-plan`, and running
+`infra/run/terraform.tfvars`, reviewing `make tf-plan`, and running
 `make tf-apply`. Do not mark the ROADMAP outcome shipped merely because the code
 and migrations are present.
 
@@ -434,7 +434,7 @@ mutable tag or manually resume after a partial image mutation.
 
 ### Change infrastructure
 
-Edit `infra/saas/*.tf`, then:
+Edit `infra/run/*.tf`, then:
 
 ```bash
 make tf-plan && make tf-apply
@@ -461,7 +461,7 @@ gcloud run services update devradar-saas-serve --region us-west1   # pick up "la
 ```
 
 The **Anthropic key** and **GitHub OAuth client secret** are tfvars-driven — edit
-their values in `infra/saas/terraform.tfvars` and `make tf-apply`. Do not rotate
+their values in `infra/run/terraform.tfvars` and `make tf-apply`. Do not rotate
 these with `gcloud`; the next apply would overwrite the hand-added version.
 
 (The DB password is managed by Terraform via `random_password`; rotate it with a
@@ -472,7 +472,7 @@ The **token-flash key** is Terraform-generated and does not rotate during routin
 applies. Rotate it only with explicit owner approval:
 
 ```bash
-terraform -chdir=infra/saas apply -replace=random_id.token_flash_key
+terraform -chdir=infra/run apply -replace=random_id.token_flash_key
 ```
 
 Replacement creates a new pinned secret version and rolls the serve service to
@@ -486,7 +486,7 @@ pending or leased outbox row retains ciphertext; the worker intentionally has
 no old-key fallback:
 
 ```bash
-terraform -chdir=infra/saas apply -replace=random_id.delivery_key
+terraform -chdir=infra/run apply -replace=random_id.delivery_key
 ```
 
 ---
