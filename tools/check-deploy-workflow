@@ -19,13 +19,13 @@ release_section=$(awk '
 release_timeout_minutes=$(printf '%s\n' "$release_section" | sed -nE 's/^    timeout-minutes: ([0-9]+)$/\1/p')
 [[ "$release_timeout_minutes" == 60 ]] || fail "release job timeout must be 60 minutes"
 
-rg -q '^  group: deploy-saas$' "$workflow" || fail "deployment concurrency is not environment-wide"
-rg -q '^  cancel-in-progress: false$' "$workflow" || fail "in-progress deployment cancellation is enabled"
-rg -q 'Validate immutable image bundle' "$workflow" || fail "immutable-image validation is missing"
-if rg -qi 'image_tag|:latest|artifacts docker images describe' "$workflow"; then
+grep -qE '^  group: deploy-saas$' "$workflow" || fail "deployment concurrency is not environment-wide"
+grep -qE '^  cancel-in-progress: false$' "$workflow" || fail "in-progress deployment cancellation is enabled"
+grep -qE 'Validate immutable image bundle' "$workflow" || fail "immutable-image validation is missing"
+if grep -qiE 'image_tag|:latest|artifacts docker images describe' "$workflow"; then
   fail "deploy must accept immutable images without resolving tags"
 fi
-if rg -q '^        default:' "$workflow"; then
+if grep -qE '^        default:' "$workflow"; then
   fail "manual immutable image inputs must not have defaults"
 fi
 for image in delivery scan serve; do
@@ -34,48 +34,48 @@ for image in delivery scan serve; do
     scan) variable='SCAN_IMAGE'; repository='devradar-scan' ;;
     serve) variable='SERVE_IMAGE'; repository='devradar-serve' ;;
   esac
-  test "$(rg -c "^      ${image}_image:\$" "$workflow" || true)" -eq 2 ||
+  test "$(grep -cE "^      ${image}_image:\$" "$workflow" || true)" -eq 2 ||
     fail "${image} image must be required by reusable and manual triggers"
-  test "$(rg -F -c "${image}_image: \${{ needs.release.outputs.${image}_image }}" "$release_workflow" || true)" -eq 1 ||
+  test "$(grep -cF "${image}_image: \${{ needs.release.outputs.${image}_image }}" "$release_workflow" || true)" -eq 1 ||
     fail "release must pass the resolved ${image} image"
-  test "$(rg -F -c "validate_image \"\$${variable}\" ${repository}" "$workflow" || true)" -eq 1 ||
+  test "$(grep -cF "validate_image \"\$${variable}\" ${repository}" "$workflow" || true)" -eq 1 ||
     fail "deploy must validate the ${image} input against its repository"
-  test "$(rg -F -c "echo \"${image}_image=\${${variable}}\"" "$workflow" || true)" -eq 1 ||
+  test "$(grep -cF "echo \"${image}_image=\${${variable}}\"" "$workflow" || true)" -eq 1 ||
     fail "deploy must preserve the validated ${image} input exactly"
-  test "$(rg -F -c "echo \"${image}_image=\${REGISTRY}/${repository}@\${${image}_digest}\"" "$release_workflow" || true)" -eq 1 ||
+  test "$(grep -cF "echo \"${image}_image=\${REGISTRY}/${repository}@\${${image}_digest}\"" "$release_workflow" || true)" -eq 1 ||
     fail "release must map the ${image} digest to its repository"
 done
-test "$(rg -c '^        required: true$' "$workflow" || true)" -eq 6 ||
+test "$(grep -cE '^        required: true$' "$workflow" || true)" -eq 6 ||
   fail "all reusable and manual image inputs must be required"
-test "$(rg -c 'image_summary.digest' "$release_workflow" || true)" -eq 3 ||
+test "$(grep -cE 'image_summary.digest' "$release_workflow" || true)" -eq 3 ||
   fail "release must resolve all three pushed images"
-test "$(rg -c 'timeout 60s gcloud artifacts docker images describe' "$release_workflow" || true)" -eq 3 ||
+test "$(grep -cE 'timeout 60s gcloud artifacts docker images describe' "$release_workflow" || true)" -eq 3 ||
   fail "release image resolution must be bounded"
-rg -F -q '[[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]' "$release_workflow" ||
+grep -qF '[[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]' "$release_workflow" ||
   fail "release must validate lowercase SHA-256 digests"
-rg -F -q '[[ "$image" == "$expected"* ]]' "$workflow" ||
+grep -qF '[[ "$image" == "$expected"* ]]' "$workflow" ||
   fail "deploy must validate repository prefixes literally"
-rg -F -q '[[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]' "$workflow" ||
+grep -qF '[[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]' "$workflow" ||
   fail "deploy must validate lowercase SHA-256 digests"
-if rg -qi 'rollback|recover|upload-artifact|download-artifact|workflow_run|--async' "$workflow"; then
+if grep -qiE 'rollback|recover|upload-artifact|download-artifact|workflow_run|--async' "$workflow"; then
   fail "workflow must be forward-only with no rollback/recovery path"
 fi
 if test -e "$root/.github/workflows/deploy-recover.yaml"; then
   fail "abandoned recovery workflow still exists"
 fi
-rg -q 'Once pause succeeds' "$runbook" || fail "runbook does not scope fail-closed behavior after pause"
-rg -q 'leaves delivery paused' "$runbook" || fail "runbook does not document fail-closed paused state"
-rg -q 'workflow_dispatch' "$runbook" || fail "runbook does not document idempotent operator rerun"
-rg -q 'inspect both the Scheduler state' "$runbook" || fail "runbook does not require Scheduler inspection"
-rg -q 'exact image references' "$runbook" || fail "runbook does not require image inspection"
-rg -q 'pause failure performs no image mutation' "$runbook" || fail "runbook misstates pre-pause failure behavior"
-rg -U -q 'Never manually resume the[[:space:]]+Scheduler after a partial image' "$runbook" ||
+grep -qE 'Once pause succeeds' "$runbook" || fail "runbook does not scope fail-closed behavior after pause"
+grep -qE 'leaves delivery paused' "$runbook" || fail "runbook does not document fail-closed paused state"
+grep -qE 'workflow_dispatch' "$runbook" || fail "runbook does not document idempotent operator rerun"
+grep -qE 'inspect both the Scheduler state' "$runbook" || fail "runbook does not require Scheduler inspection"
+grep -qE 'exact image references' "$runbook" || fail "runbook does not require image inspection"
+grep -qE 'pause failure performs no image mutation' "$runbook" || fail "runbook misstates pre-pause failure behavior"
+tr '\n' ' ' < "$runbook" | grep -qE 'Never manually resume the[[:space:]]+Scheduler after a partial image' ||
   fail "runbook permits manual resume after partial mutation"
-if rg -qi 'to that tag|Manual redeploy of an existing tag|re-point to.*latest' "$runbook"; then
+if grep -qiE 'to that tag|Manual redeploy of an existing tag|re-point to.*latest' "$runbook"; then
   fail "runbook still documents mutable-tag deployment"
 fi
 for input in delivery_image scan_image serve_image; do
-  rg -F -q "\`${input}\`" "$runbook" || fail "runbook omits manual ${input} input"
+  grep -qF "\`${input}\`" "$runbook" || fail "runbook omits manual ${input} input"
 done
 
 deploy_section=$(awk '/^  deploy:/{emit=1} emit' "$workflow")
@@ -83,7 +83,7 @@ deploy_section=$(awk '/^  deploy:/{emit=1} emit' "$workflow")
 count_fixed() {
   local text="$1" pattern="$2"
   local count
-  count=$(printf '%s\n' "$text" | rg -F -c "$pattern" || true)
+  count=$(printf '%s\n' "$text" | grep -cF "$pattern" || true)
   printf '%s\n' "${count:-0}"
 }
 
@@ -130,7 +130,7 @@ done
 
 line_in() {
   local section="$1" pattern="$2"
-  printf '%s\n' "$section" | rg -n "$pattern" | head -1 | cut -d: -f1
+  printf '%s\n' "$section" | grep -nE "$pattern" | head -1 | cut -d: -f1
 }
 
 state_line=$(line_in "$deploy_section" 'scheduler jobs describe')
@@ -142,21 +142,21 @@ resume_line=$(line_in "$deploy_section" 'scheduler jobs resume')
 (( state_line < pause_line && pause_line < delivery_line && delivery_line < scan_line && scan_line < serve_line && serve_line < resume_line )) ||
   fail "safe prefix order must be state, pause, delivery, scan, serve, resume"
 
-first_gcloud=$(printf '%s\n' "$deploy_section" | rg 'gcloud ' | head -1)
-second_gcloud=$(printf '%s\n' "$deploy_section" | rg 'gcloud ' | sed -n '2p')
-last_gcloud=$(printf '%s\n' "$deploy_section" | rg 'gcloud ' | tail -1)
+first_gcloud=$(printf '%s\n' "$deploy_section" | grep 'gcloud ' | head -1)
+second_gcloud=$(printf '%s\n' "$deploy_section" | grep 'gcloud ' | sed -n '2p')
+last_gcloud=$(printf '%s\n' "$deploy_section" | grep 'gcloud ' | tail -1)
 [[ "$first_gcloud" == *'scheduler jobs describe devradar-saas-deliver-scheduled'* ]] ||
   fail "Scheduler state read must be the first gcloud command"
 [[ "$second_gcloud" == *'scheduler jobs pause devradar-saas-deliver-scheduled'* ]] ||
   fail "Scheduler pause must immediately follow its state read"
 [[ "$last_gcloud" == *'scheduler jobs resume devradar-saas-deliver-scheduled'* ]] ||
   fail "Scheduler resume must be the final gcloud command"
-[[ "$(rg '^      - name:' "$workflow" | tail -1)" == '      - name: Resume delivery schedule' ]] ||
+[[ "$(grep -E '^      - name:' "$workflow" | tail -1)" == '      - name: Resume delivery schedule' ]] ||
   fail "Scheduler resume must be the final named step"
 test "$(count_fixed "$deploy_section" 'gcloud ')" -eq 6 ||
   fail "deploy must contain only state read, pause, three updates, and resume"
 
-if rg 'gcloud ' "$workflow" | rg -v 'timeout [0-9]+s gcloud ' >/dev/null; then
+if grep 'gcloud ' "$workflow" | grep -vE 'timeout [0-9]+s gcloud ' >/dev/null; then
   fail "every gcloud mutation/read must have a command timeout"
 fi
 
