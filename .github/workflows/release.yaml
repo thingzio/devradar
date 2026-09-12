@@ -107,3 +107,27 @@ jobs:
       scan_image: ${{ needs.release.outputs.scan_image }}
       serve_image: ${{ needs.release.outputs.serve_image }}
     secrets: inherit
+
+  # goreleaser creates the release as a draft (`draft: true` in
+  # .goreleaser.yaml) so a failed deploy never leaves a published release
+  # pointing at images that were never rolled out. Publishing is therefore a
+  # separate job gated on deploy succeeding -- without it the release stays a
+  # draft forever, which is invisible to everyone but repository collaborators
+  # and makes a repo with 55 releases look like it has none.
+  #
+  # devpulse and devtrace have had this step all along; devradar did not.
+  publish:
+    needs:
+      - release
+      - deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: gh release edit "$TAG" --draft=false
