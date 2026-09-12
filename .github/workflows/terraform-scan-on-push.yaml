@@ -1,0 +1,37 @@
+---
+name: terraform-scan
+
+# Terraform misconfiguration scanning runs from the shared thingzio/actions
+# workflow. It scans with Trivy rather than tfsec, which is end of life -- its
+# last release was v1.28.14 in May 2025 and its ruleset is frozen.
+#
+# https://github.com/thingzio/actions/blob/main/.github/workflows/terraform-scan.md
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'infra/**'
+      - '.github/workflows/terraform-scan-on-push.yaml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'infra/**'
+      - '.github/workflows/terraform-scan-on-push.yaml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    permissions:
+      contents: read
+    uses: thingzio/actions/.github/workflows/terraform-scan.yaml@623948154423b5f51206631c39f99aaac03f04f5  # v1.2.0
+    with:
+      working_directory: infra/run
