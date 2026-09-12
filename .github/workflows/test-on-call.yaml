@@ -47,9 +47,6 @@ jobs:
           curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
           curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
 
-      - name: Vet
-        run: go vet ./...
-
       - name: Test (unit + integration)
         env:
           DATABASE_URL: postgres://devradar:devradar@localhost:5432/devradar?sslmode=disable
@@ -58,34 +55,11 @@ jobs:
       - name: Coverage
         run: go tool cover -func=cover.out | grep total
 
+  # gofmt, go vet and golangci-lint, at the org-pinned linter version. go vet
+  # moved here from the test job below, which used to run it alongside the
+  # Postgres-backed suite for no reason -- it needs no database.
   lint:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Read versions
-        id: v
-        run: |
-          echo "go=$(yq -r '.languages.go' .settings.yaml)" >> "$GITHUB_OUTPUT"
-          echo "golangci=$(yq -r '.linting.golangci_lint' .settings.yaml)" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: "${{ steps.v.outputs.go }}"
-
-      - name: Formatting (gofmt)
-        run: |
-          unformatted="$(git ls-files -z -- '*.go' ':(exclude)vendor/**' | xargs -0 gofmt -l)"
-          if [ -n "$unformatted" ]; then
-            echo "::error::These files are not gofmt-clean:"; echo "$unformatted"
-            exit 1
-          fi
-
-      - name: Lint
-        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with:
-          version: "${{ steps.v.outputs.golangci }}"
+    uses: thingzio/actions/.github/workflows/lint-go.yaml@ff1417093cf175d18c6b78266245a7f35fbe995a  # v1.3.0
 
   # Infra + API-contract checks: Terraform formatting/validation and OpenAPI
   # spec validation. Kept separate from the Go lint job so a Terraform-only or
