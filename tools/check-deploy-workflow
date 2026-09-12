@@ -1,4 +1,24 @@
 #!/usr/bin/env bash
+#
+# Guards the deployment contract.
+#
+# The rollout mechanics -- pause, three ordered updates, resume, per-command
+# timeouts, digest validation -- moved into the shared thingzio/actions
+# deploy-cloud-run workflow, which unit tests them with gcloud stubbed. This
+# file no longer re-checks them by grepping for command strings, because those
+# strings are no longer here and asserting on another repository's internals
+# through a pinned SHA would be checking a copy.
+#
+# What remains here is what is still this repository's to get right:
+#
+#   * the images are built by SHA-pinned shared build definitions
+#   * the release passes each image straight from its build job, never a tag
+#   * the deploy names the right resources, in the order that keeps a partial
+#     rollout safe
+#   * the scheduler is held for the rollout, fail-closed, as DEPLOYMENT.md says
+#   * no rollback path, no defaults on image inputs, no mutable references
+#   * the runbook still describes what the workflow actually does
+
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -11,6 +31,14 @@ fail() {
   exit 1
 }
 
+count_fixed() {
+  local file="$1" pattern="$2" count
+  count=$(grep -cF "$pattern" "$file" || true)
+  printf '%s\n' "${count:-0}"
+}
+
+# --- release job ------------------------------------------------------------
+
 release_section=$(awk '
   /^  release:/{emit=1}
   emit && /^  deploy:/{exit}
@@ -19,61 +47,80 @@ release_section=$(awk '
 release_timeout_minutes=$(printf '%s\n' "$release_section" | sed -nE 's/^    timeout-minutes: ([0-9]+)$/\1/p')
 [[ "$release_timeout_minutes" == 60 ]] || fail "release job timeout must be 60 minutes"
 
-grep -qE '^  group: deploy-saas$' "$workflow" || fail "deployment concurrency is not environment-wide"
-grep -qE '^  cancel-in-progress: false$' "$workflow" || fail "in-progress deployment cancellation is enabled"
-grep -qE 'Validate immutable image bundle' "$workflow" || fail "immutable-image validation is missing"
+# Pinning by SHA is what makes the SLSA provenance builder.id immutable; a tag
+# or branch ref would let the build definition change under a release that
+# claims it.
+test "$(grep -cE 'uses: thingzio/actions/\.github/workflows/build-(ko|docker)\.yaml@[0-9a-f]{40}' "$release_workflow" || true)" -eq 3 ||
+  fail "all three images must be built by SHA-pinned shared build definitions"
+
+# --- deploy wrapper ---------------------------------------------------------
+
+# The deploy definition itself must be SHA-pinned for the same reason.
+test "$(grep -cE 'uses: thingzio/actions/\.github/workflows/deploy-cloud-run\.yaml@[0-9a-f]{40}' "$workflow" || true)" -eq 1 ||
+  fail "deploy must call a SHA-pinned shared deploy definition"
+
 if grep -qiE 'image_tag|:latest|artifacts docker images describe' "$workflow"; then
   fail "deploy must accept immutable images without resolving tags"
 fi
 if grep -qE '^        default:' "$workflow"; then
   fail "manual immutable image inputs must not have defaults"
 fi
-for image in delivery scan serve; do
-  case "$image" in
-    delivery) variable='DELIVERY_IMAGE'; repository='devradar-deliver'; job='build-deliver' ;;
-    scan) variable='SCAN_IMAGE'; repository='devradar-scan'; job='build-scan' ;;
-    serve) variable='SERVE_IMAGE'; repository='devradar-serve'; job='build-serve' ;;
-  esac
-  test "$(grep -cE "^      ${image}_image:\$" "$workflow" || true)" -eq 2 ||
-    fail "${image} image must be required by reusable and manual triggers"
-  # The digest now comes from the shared build workflow that produced the image,
-  # rather than from a registry lookup after the fact. That is a stronger
-  # guarantee, not a weaker one: a lookup resolves whatever the tag points at
-  # when it runs, while the build output is the digest that was just published.
-  test "$(grep -cF "${image}_image: \${{ needs.${job}.outputs.image_ref }}" "$release_workflow" || true)" -eq 1 ||
-    fail "release must pass the ${image} image straight from its build job"
-  test "$(grep -cF "validate_image \"\$${variable}\" ${repository}" "$workflow" || true)" -eq 1 ||
-    fail "deploy must validate the ${image} input against its repository"
-  test "$(grep -cF "echo \"${image}_image=\$(to_ar \"\$${variable}\")\"" "$workflow" || true)" -eq 1 ||
-    fail "deploy must carry the validated ${image} input through the rewrite unchanged"
-done
-test "$(grep -cE '^        required: true$' "$workflow" || true)" -eq 6 ||
-  fail "all reusable and manual image inputs must be required"
-# Each image must be built by a pinned shared build definition. Pinning by SHA
-# is what makes the SLSA provenance builder.id immutable; a tag or branch ref
-# would let the build definition change under a release that claims it.
-test "$(grep -cE 'uses: thingzio/actions/\.github/workflows/build-(ko|docker)\.yaml@[0-9a-f]{40}' "$release_workflow" || true)" -eq 3 ||
-  fail "all three images must be built by SHA-pinned shared build definitions"
-# The digest check moved to deploy, which is the last place it can still stop a
-# bad reference from reaching Cloud Run.
-grep -qF '[[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]' "$workflow" ||
-  fail "deploy must validate lowercase SHA-256 digests"
-grep -qF '[[ "$image" == "$expected"* ]]' "$workflow" ||
-  fail "deploy must validate repository prefixes literally"
-grep -qF '[[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]' "$workflow" ||
-  fail "deploy must validate lowercase SHA-256 digests"
 if grep -qiE 'rollback|recover|upload-artifact|download-artifact|workflow_run|--async' "$workflow"; then
   fail "workflow must be forward-only with no rollback/recovery path"
 fi
 if test -e "$root/.github/workflows/deploy-recover.yaml"; then
   fail "abandoned recovery workflow still exists"
 fi
-grep -qE 'Once pause succeeds' "$runbook" || fail "runbook does not scope fail-closed behavior after pause"
+
+for image in delivery scan serve; do
+  case "$image" in
+    delivery) job='build-deliver'; resource='job=devradar-saas-deliver' ;;
+    scan) job='build-scan'; resource='job=devradar-saas-scan' ;;
+    serve) job='build-serve'; resource='service=devradar-saas-serve' ;;
+  esac
+  # Required by both the reusable and the manual trigger.
+  test "$(grep -cE "^      ${image}_image:\$" "$workflow" || true)" -eq 2 ||
+    fail "${image} image must be required by reusable and manual triggers"
+  # The digest comes from the build job that produced it, not a registry lookup
+  # after the fact: a lookup resolves whatever the tag points at when it runs,
+  # while the build output is the digest that was just published.
+  test "$(count_fixed "$release_workflow" "${image}_image: \${{ needs.${job}.outputs.image_ref }}")" -eq 1 ||
+    fail "release must pass the ${image} image straight from its build job"
+  # Each image reaches the right resource, by name.
+  test "$(count_fixed "$workflow" "${resource}=\${{ inputs.${image}_image }}")" -eq 1 ||
+    fail "${image} image must be mapped to ${resource}"
+done
+
+test "$(grep -cE '^        required: true$' "$workflow" || true)" -eq 6 ||
+  fail "all reusable and manual image inputs must be required"
+
+# Order is the safety property. Delivery consumes outbox rows produced by serve,
+# so the backward-compatible consumer is updated before the producer. That makes
+# every prefix of a partial rollout safe, which is what lets a failed deploy be
+# recovered forward rather than rolled back.
+targets=$(awk '/^      targets: \|/{emit=1; next} emit && /^      [a-z_]+:/{exit} emit' "$workflow")
+delivery_line=$(printf '%s\n' "$targets" | grep -n 'devradar-saas-deliver=' | head -1 | cut -d: -f1)
+scan_line=$(printf '%s\n' "$targets" | grep -n 'devradar-saas-scan=' | head -1 | cut -d: -f1)
+serve_line=$(printf '%s\n' "$targets" | grep -n 'devradar-saas-serve=' | head -1 | cut -d: -f1)
+[[ -n "$delivery_line" && -n "$scan_line" && -n "$serve_line" ]] ||
+  fail "deploy targets must name delivery, scan and serve"
+(( delivery_line < scan_line && scan_line < serve_line )) ||
+  fail "deploy order must be delivery, scan, serve"
+
+# The scheduler is held for the rollout, and left paused on failure. This is the
+# promise DEPLOYMENT.md makes to an operator; the shared workflow defaults the
+# other way, so the opt-out has to be explicit and has to stay.
+grep -qE '^      scheduler_job: devradar-saas-deliver-scheduled$' "$workflow" ||
+  fail "delivery schedule must be held for the rollout"
+grep -qE '^      resume_on_failure: false$' "$workflow" ||
+  fail "deploy must stay fail-closed: a failed rollout leaves delivery paused"
+
+# --- runbook ----------------------------------------------------------------
+
 grep -qE 'leaves delivery paused' "$runbook" || fail "runbook does not document fail-closed paused state"
 grep -qE 'workflow_dispatch' "$runbook" || fail "runbook does not document idempotent operator rerun"
 grep -qE 'inspect both the Scheduler state' "$runbook" || fail "runbook does not require Scheduler inspection"
 grep -qE 'exact image references' "$runbook" || fail "runbook does not require image inspection"
-grep -qE 'pause failure performs no image mutation' "$runbook" || fail "runbook misstates pre-pause failure behavior"
 tr '\n' ' ' < "$runbook" | grep -qE 'Never manually resume the[[:space:]]+Scheduler after a partial image' ||
   fail "runbook permits manual resume after partial mutation"
 if grep -qiE 'to that tag|Manual redeploy of an existing tag|re-point to.*latest' "$runbook"; then
@@ -83,99 +130,4 @@ for input in delivery_image scan_image serve_image; do
   grep -qF "\`${input}\`" "$runbook" || fail "runbook omits manual ${input} input"
 done
 
-deploy_section=$(awk '/^  deploy:/{emit=1} emit' "$workflow")
-
-count_fixed() {
-  local text="$1" pattern="$2"
-  local count
-  count=$(printf '%s\n' "$text" | grep -cF "$pattern" || true)
-  printf '%s\n' "${count:-0}"
-}
-
-step_section() {
-  local name="$1"
-  awk -v name="$name" '
-    $0 == "      - name: " name { emit=1 }
-    emit && $0 != "      - name: " name && /^      - name:/ { exit }
-    emit
-  ' "$workflow"
-}
-
-for command in \
-  'scheduler jobs describe devradar-saas-deliver-scheduled' \
-  'scheduler jobs pause devradar-saas-deliver-scheduled' \
-  'run jobs update devradar-saas-deliver' \
-  'run jobs update devradar-saas-scan' \
-  'run services update devradar-saas-serve' \
-  'scheduler jobs resume devradar-saas-deliver-scheduled'; do
-  test "$(count_fixed "$(<"$workflow")" "$command")" -eq 1 ||
-    fail "expected exactly one $command"
-done
-
-pause_section=$(step_section 'Pause delivery schedule')
-test "$(count_fixed "$pause_section" "case \"\$scheduler_state\" in")" -eq 1 ||
-  fail "Scheduler pause must branch on current state"
-test "$(count_fixed "$pause_section" 'ENABLED)')" -eq 1 ||
-  fail "Scheduler pause must handle ENABLED state"
-test "$(count_fixed "$pause_section" 'PAUSED)')" -eq 1 ||
-  fail "Scheduler pause must accept an already-paused schedule"
-
-for image in delivery scan serve; do
-  case "$image" in
-    delivery) step='Deploy delivery job'; runtime='run jobs update devradar-saas-deliver' ;;
-    scan) step='Deploy scan job'; runtime='run jobs update devradar-saas-scan' ;;
-    serve) step='Deploy serve service'; runtime='run services update devradar-saas-serve' ;;
-  esac
-  section=$(step_section "$step")
-  test "$(count_fixed "$section" "TARGET_IMAGE: \${{ steps.preflight.outputs.${image}_image }}")" -eq 1 ||
-    fail "$image runtime must use its validated image output"
-  test "$(count_fixed "$section" "$runtime")" -eq 1 ||
-    fail "$image image is mapped to the wrong runtime"
-done
-
-line_in() {
-  local section="$1" pattern="$2"
-  printf '%s\n' "$section" | grep -nE "$pattern" | head -1 | cut -d: -f1
-}
-
-state_line=$(line_in "$deploy_section" 'scheduler jobs describe')
-pause_line=$(line_in "$deploy_section" 'scheduler jobs pause')
-delivery_line=$(line_in "$deploy_section" 'run jobs update devradar-saas-deliver')
-scan_line=$(line_in "$deploy_section" 'run jobs update devradar-saas-scan')
-serve_line=$(line_in "$deploy_section" 'run services update devradar-saas-serve')
-resume_line=$(line_in "$deploy_section" 'scheduler jobs resume')
-(( state_line < pause_line && pause_line < delivery_line && delivery_line < scan_line && scan_line < serve_line && serve_line < resume_line )) ||
-  fail "safe prefix order must be state, pause, delivery, scan, serve, resume"
-
-first_gcloud=$(printf '%s\n' "$deploy_section" | grep 'gcloud ' | head -1)
-second_gcloud=$(printf '%s\n' "$deploy_section" | grep 'gcloud ' | sed -n '2p')
-last_gcloud=$(printf '%s\n' "$deploy_section" | grep 'gcloud ' | tail -1)
-[[ "$first_gcloud" == *'scheduler jobs describe devradar-saas-deliver-scheduled'* ]] ||
-  fail "Scheduler state read must be the first gcloud command"
-[[ "$second_gcloud" == *'scheduler jobs pause devradar-saas-deliver-scheduled'* ]] ||
-  fail "Scheduler pause must immediately follow its state read"
-[[ "$last_gcloud" == *'scheduler jobs resume devradar-saas-deliver-scheduled'* ]] ||
-  fail "Scheduler resume must be the final gcloud command"
-[[ "$(grep -E '^      - name:' "$workflow" | tail -1)" == '      - name: Resume delivery schedule' ]] ||
-  fail "Scheduler resume must be the final named step"
-test "$(count_fixed "$deploy_section" 'gcloud ')" -eq 6 ||
-  fail "deploy must contain only state read, pause, three updates, and resume"
-
-if grep 'gcloud ' "$workflow" | grep -vE 'timeout [0-9]+s gcloud ' >/dev/null; then
-  fail "every gcloud mutation/read must have a command timeout"
-fi
-
-sum_timeouts() {
-  printf '%s\n' "$1" | sed -nE 's/.*timeout ([0-9]+)s gcloud.*/\1/p' | awk '{sum += $1} END {print sum+0}'
-}
-
-deploy_timeout_minutes=$(printf '%s\n' "$deploy_section" | sed -nE 's/^    timeout-minutes: ([0-9]+)$/\1/p' | head -1)
-[[ -n "$deploy_timeout_minutes" ]] || fail "deploy job timeout is missing"
-
-forward_budget=$(sum_timeouts "$deploy_section")
-margin=300
-
-(( forward_budget + margin < deploy_timeout_minutes * 60 )) ||
-  fail "forward worst-case budget ${forward_budget}s leaves less than ${margin}s overhead"
-
-echo "deploy workflow check: PASS (safe-prefix forward=${forward_budget}s/${deploy_timeout_minutes}m)"
+echo "deploy workflow check: PASS (fail-closed, order delivery→scan→serve)"

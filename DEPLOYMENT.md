@@ -313,11 +313,23 @@ gcloud run jobs describe devradar-saas-deliver --region us-west1 --format 'value
 curl -s "$(…)/health"     # -> ok
 ```
 
-The release workflow resolves the three pushed images to full digest-pinned
-references and passes that immutable bundle to deploy. Deploy validates each
-literal registry/repository prefix and digest before it pauses delivery, then
-updates delivery, scan, and serve in order and resumes the schedule as its final
-operation. This is deliberately forward-only: it never rolls images back. Every
+The release workflow passes each image straight from the build job that
+published it, as a full digest-pinned reference. Deploy is a thin wrapper over
+the shared `thingzio/actions` deploy workflow: this repository contributes only
+which resource gets which image, in which order, and which schedule to hold.
+
+That shared workflow validates every reference before it authenticates — so a
+bad bundle fails without having minted a production credential — then pauses
+delivery, updates delivery, scan, and serve in order, and resumes the schedule
+as its final operation. It rewrites each `ghcr.io` reference onto the Artifact
+Registry remote repository Cloud Run pulls through, which is a path change and
+not a copy: the digest is identical on the far side.
+
+Fail-closed is an explicit choice here, not a default. The shared workflow
+resumes the schedule even on failure unless told otherwise, because a schedule
+left paused is a stop nobody is paged for; `resume_on_failure: false` in
+`deploy.yaml` opts this service out, and `tools/check-deploy-workflow` fails if
+that line is ever removed. This is deliberately forward-only: it never rolls images back. Every
 mutation prefix is compatible—old producer/new consumer or new producer/new
 consumer; the workflow can never install a new producer over an old consumer.
 

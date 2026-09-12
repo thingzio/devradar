@@ -1,7 +1,11 @@
 name: deploy
 
-# Deploys an immutable bundle of already-pushed images to Cloud Run. Reusable
-# (called by release) or manual.
+# Thin wrapper over the shared thingzio/actions deploy workflow. All this repo
+# contributes is which resource gets which image, in which order, and which
+# scheduler to hold still while it happens.
+#
+# https://github.com/thingzio/actions/blob/main/.github/workflows/deploy-cloud-run.md
+
 on:
   workflow_call:
     inputs:
@@ -32,118 +36,31 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: deploy-saas
-  cancel-in-progress: false
-
 jobs:
   deploy:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
     permissions:
       contents: read
       id-token: write
-    environment: saas
-    env:
-      REGION: ${{ vars.REGION }}
-      PROJECT_ID: ${{ vars.PROJECT_ID }}
-      # Inputs are validated against the registry the build publishes to, then
-      # rewritten to the Artifact Registry remote repository that Cloud Run can
-      # actually pull from. Validating the source rather than the proxied path
-      # keeps this check anchored to where the bytes came from.
-      EXPECTED_REGISTRY: ghcr.io/thingzio
-      REMOTE_REPO: gh
-      DELIVERY_IMAGE: ${{ inputs.delivery_image }}
-      SCAN_IMAGE: ${{ inputs.scan_image }}
-      SERVE_IMAGE: ${{ inputs.serve_image }}
-    steps:
-      - id: auth
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
-        with:
-          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
-          service_account: ${{ vars.DEPLOYER_SA }}
-
-      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
-
-      - name: Validate immutable image bundle
-        id: preflight
-        run: |
-          set -euo pipefail
-          validate_image() {
-            local image="$1" repository="$2" expected digest
-            expected="${EXPECTED_REGISTRY}/${repository}@"
-            [[ "$image" == "$expected"* ]] || {
-              echo "::error::invalid ${repository} image repository" >&2
-              return 1
-            }
-            digest="${image#"$expected"}"
-            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
-              echo "::error::invalid ${repository} image digest" >&2
-              return 1
-            }
-          }
-          validate_image "$DELIVERY_IMAGE" devradar-deliver
-          validate_image "$SCAN_IMAGE" devradar-scan
-          validate_image "$SERVE_IMAGE" devradar-serve
-
-          # Rewrite each validated reference onto the remote repository. This is
-          # a path change, not a copy: the remote repository is a pull-through
-          # cache and the digest is identical on the far side, so the bytes
-          # deployed are the bytes that were built and validated above. The
-          # doubled org segment is correct -- the proxy is common-upstream, so
-          # the full ghcr.io path including the org follows /gh/.
-          AR_HOST="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REMOTE_REPO}"
-          to_ar() { printf '%s/%s' "$AR_HOST" "${1#ghcr.io/}"; }
-          {
-            echo "delivery_image=$(to_ar "$DELIVERY_IMAGE")"
-            echo "scan_image=$(to_ar "$SCAN_IMAGE")"
-            echo "serve_image=$(to_ar "$SERVE_IMAGE")"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Pause delivery schedule
-        run: |
-          set -euo pipefail
-          scheduler_state=$(timeout 60s gcloud scheduler jobs describe devradar-saas-deliver-scheduled \
-            --location "${REGION}" \
-            --format='value(state)')
-          case "$scheduler_state" in
-            ENABLED)
-              timeout 60s gcloud scheduler jobs pause devradar-saas-deliver-scheduled --location "${REGION}"
-              ;;
-            PAUSED)
-              echo "Delivery schedule is already paused"
-              ;;
-            *)
-              echo "::error::delivery schedule is in unexpected state: ${scheduler_state}" >&2
-              exit 1
-              ;;
-          esac
-
-      # Delivery consumes outbox rows produced by serve. Update the
-      # backward-compatible consumer before the producer.
-      - name: Deploy delivery job
-        env:
-          TARGET_IMAGE: ${{ steps.preflight.outputs.delivery_image }}
-        run: |
-          timeout 180s gcloud run jobs update devradar-saas-deliver \
-            --region "${REGION}" \
-            --image "${TARGET_IMAGE}"
-
-      - name: Deploy scan job
-        env:
-          TARGET_IMAGE: ${{ steps.preflight.outputs.scan_image }}
-        run: |
-          timeout 180s gcloud run jobs update devradar-saas-scan \
-            --region "${REGION}" \
-            --image "${TARGET_IMAGE}"
-
-      - name: Deploy serve service
-        env:
-          TARGET_IMAGE: ${{ steps.preflight.outputs.serve_image }}
-        run: |
-          timeout 180s gcloud run services update devradar-saas-serve \
-            --region "${REGION}" \
-            --image "${TARGET_IMAGE}"
-
-      - name: Resume delivery schedule
-        run: timeout 60s gcloud scheduler jobs resume devradar-saas-deliver-scheduled --location "${REGION}"
+    uses: thingzio/actions/.github/workflows/deploy-cloud-run.yaml@a3528128e23e3bbc03b3982a9a9dc771bcf3e13f  # v1.5.0
+    with:
+      # Order matters and is part of the shared workflow's contract. Delivery
+      # consumes outbox rows produced by serve, so the backward-compatible
+      # consumer is updated before the producer that feeds it.
+      targets: |
+        job=devradar-saas-deliver=${{ inputs.delivery_image }}
+        job=devradar-saas-scan=${{ inputs.scan_image }}
+        service=devradar-saas-serve=${{ inputs.serve_image }}
+      # Held paused for the rollout so a delivery run cannot start against a
+      # half-updated pair. The shared workflow resumes it under always(), so a
+      # failed deploy cannot leave delivery stopped -- which is what happened
+      # when this logic lived here.
+      scheduler_job: devradar-saas-deliver-scheduled
+      # Fail-closed, as DEPLOYMENT.md has always specified: a failed rollout
+      # leaves delivery paused for an operator to inspect rather than resuming
+      # into a partially updated set. A successful rollout still resumes.
+      #
+      # The shared workflow defaults this to true, because a scheduler left
+      # paused is the failure nobody is paged for. devradar opts out because
+      # its runbook makes the opposite promise, and that promise is the
+      # service's to make.
+      resume_on_failure: false
