@@ -1,57 +1,94 @@
-# DevRadar — Product Brief
+# DevRadar
 
-## Info
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-| Field | Value |
-|-------|-------|
-| **Name** | DevRadar |
-| **URL** | https://devradar.thingz.io |
-| **Parent** | Thingz (https://thingz.io) |
-| **Category** | Container Security / Vulnerability Intelligence |
-| **Status** | v0.13.5 — continuous posture, alerts, comparison, licenses, VEX, and attestation verification implemented; first production apply remains manual |
-| **Updated** | 2026-07-14 |
+Track how the vulnerabilities in your container images change over time.
 
-> Engineering decisions: [DEVELOPMENT.md](DEVELOPMENT.md) · Roadmap: [ROADMAP.md](ROADMAP.md)
-> Deployment: initial setup and updates in [DEPLOYMENT.md](DEPLOYMENT.md)
-> Jump to: [Run It Locally](#run-it-locally)
+You submit an SBOM; DevRadar repeatedly matches that frozen package inventory
+against current vulnerability data and records every change as an event. It
+answers the question a scanner cannot — not "what vulnerabilities exist right
+now" but **"what changed, when, and is it getting better or worse."**
 
-This is the product brief and local-use guide. DevRadar provides authenticated
-SBOM submission, recurring Grype + Trivy matching, causal event history,
-browser alerts, remediation work, comparison, trends, VEX, license policy, and
-optional attestation verification. Email/webhook delivery remains on the roadmap.
-Account sharing is implemented behind a disabled rollout flag but remains
-unshipped until the owner validates the complete workflow and explicitly
-approves production exposure.
+> **This is a reference implementation, not a product.** Apache-2.0,
+> self-hostable, maintained on a best-effort basis. There are no plans, no
+> pricing, and no SLA. See
+> [CONTRIBUTING.md](CONTRIBUTING.md#project-governance) for what that means in
+> practice.
+
+A demo instance runs at [devradar.thingz.io](https://devradar.thingz.io) — this
+code with the maintainer's data in it, useful for seeing the output before
+running your own.
+
+## Quick start
+
+```shell
+git clone https://github.com/thingzio/devradar && cd devradar
+make db-up     # local Postgres via docker compose
+make seed      # seed a test account
+make serve     # run the server
+```
+
+Full walkthrough, including submitting your first SBOM: [Run It Locally](#run-it-locally).
+[`devradarctl`](https://github.com/thingzio/devradarctl) is the CLI.
+
+> The local Postgres binds port **5432**. DevPulse and DevTrace do the same, so
+> only run one of the three stacks at a time.
+
+## What it does
+
+DevRadar is a container vulnerability *tracking* service built around a single
+input: the SBOM. An account submits a Software Bill of Materials for a specific
+image digest; DevRadar repeatedly matches that inventory with multiple scanners
+and records every change as an event.
+
+Instead of pulling and scanning images itself, DevRadar consumes SBOMs submitted
+through an authenticated API. Each SBOM is pinned to an image digest,
+content-addressed, and stored once. A scheduled job matches due SBOMs with Grype
+and Trivy, normalizes results into a scanner-agnostic schema, and appends a
+change event whenever a finding is added, fixed, re-rated, or resolved. Because
+the SBOM is a frozen inventory, result changes can be attributed to image,
+database, or tooling inputs.
+
+The architecture needs no image pulls, registry access, or VM fleet, so DevRadar
+can track images from **private registries it could never access** — the SBOM
+crosses the trust boundary, not credentials.
+
+**Licenses, too.** The same SBOM already names a license for every package, so
+DevRadar also captures an **open-source license inventory** at submission, with
+no extra scan. It classifies each package into an obligation category
+(permissive / weak- & strong-copyleft / proprietary / unknown), visualizes the
+fleet's license landscape, and supports an opt-in **compliance policy** that
+flags packages carrying a denied license. See `GET /v1/licenses`,
+`GET /v1/sboms/{id}/licenses`, and the `/licenses` UI page.
+
+## Related projects
+
+DevRadar is one of three independent tools that answer different supply-chain
+questions. Each stands alone; none depends on the others.
+
+| | |
+|---|---|
+| **DevRadar** (this repo) | Are the container images I depend on accumulating unpatched vulnerabilities? |
+| [DevPulse](https://github.com/thingzio/devpulse) | Is this project healthy — who maintains it, and is activity growing or thinning? |
+| [DevTrace](https://github.com/thingzio/devtrace) | What do we know about the people contributing to it? |
 
 ---
 
-## What
+## Who it is for
 
-**1 sentence:**
-DevRadar tracks how the vulnerabilities in your container images change over time — you submit an SBOM, and DevRadar repeatedly matches it against current vulnerability data, so you can see exactly what changed, when, and whether it's getting better or worse.
+- **Anyone shipping or depending on container images** who wants the time
+  dimension a scanner does not give: is this getting better or worse?
+- **Platform engineers** whose CI already produces SBOMs with Syft,
+  `docker sbom`, or BuildKit — submission is one more step in a pipeline that
+  already has the artifact.
+- **Teams under NIST SSDF or EU CRA expectations**, where continuous monitoring
+  of shipped artifacts with a timestamped audit trail is becoming required
+  rather than optional. DevRadar produces that evidence as a side effect of its
+  scan cycle.
 
-**3 sentences:**
-DevRadar is a container vulnerability *tracking* service built around a single input: the SBOM. An account submits a Software Bill of Materials for a specific image digest; DevRadar repeatedly matches that frozen package inventory with multiple scanners and records every change as an event. It answers not "what vulnerabilities exist right now" — any scanner does that — but "what changed, when, and is it getting better or worse."
-
-**Paragraph:**
-DevRadar is the vulnerability layer of the Thingz open source intelligence platform. Where DevPulse tracks whether a project is healthy and DevTrace evaluates whether a contributor is trustworthy, DevRadar answers the third question: are the container images you depend on accumulating unpatched vulnerabilities over time? Instead of pulling and scanning images itself, DevRadar consumes SBOMs that accounts submit through an authenticated API. Each SBOM is pinned to an image digest, content-addressed, and stored once. A scheduled job matches due SBOMs with Grype and Trivy, normalizes the results into a scanner-agnostic schema, and appends a change event whenever a finding is added, fixed, re-rated, or resolved. Because the SBOM is a frozen inventory, result changes can be attributed to image, database, or tooling inputs. The architecture needs no image pulls, registry access, or VM fleet, so DevRadar can track images from **private registries it could never access** — the SBOM crosses the trust boundary, not credentials.
-
-**Licenses, too.** The same SBOM already names a license for every package, so DevRadar also captures an **open-source license inventory** at submission — with no extra scan. It classifies each package into an obligation category (permissive / weak- & strong-copyleft / proprietary / unknown), visualizes the fleet's license landscape (a category donut + a license-family treemap), and lets you set an opt-in **compliance policy** that flags packages carrying a denied license. See `GET /v1/licenses`, `GET /v1/sboms/{id}/licenses`, and the `/licenses` UI page.
-
----
-
-## Who
-
-### Primary Personas
-
-**Security / Supply Chain Risk Analyst**
-Monitors the vulnerability posture of container images the organization ships or depends on. Uses DevRadar to track CVE deltas over time — a new critical CVE appearing in a base image triggers investigation, not a full re-audit. Combines DevRadar vulnerability data with DevTrace contributor trust scores and DevPulse project health metrics for a complete supply chain risk picture.
-
-**Platform / Infrastructure Engineer**
-Owns the CI pipeline that already produces SBOMs (via Syft, `docker sbom`, BuildKit, etc.). Wires SBOM submission into the build so every published image is tracked automatically. Cares about the distinction between "a new CVE was disclosed against a package I already ship" (DB-driven) and "my new image introduced a vulnerable package" (image-driven).
-
-**OSPO Lead / Open Source Program Manager**
-Oversees the organization's open source dependency strategy. Uses DevRadar alongside DevPulse to monitor both project health and artifact security. A project that's healthy (active contributors, fast reviews) but shipping images with unpatched criticals is a different risk profile than a declining project with clean images.
+The distinction that matters most in practice: *"a new CVE was disclosed against
+a package I already ship"* is a different problem from *"my new image introduced
+a vulnerable package,"* and DevRadar separates them.
 
 ---
 
@@ -163,7 +200,7 @@ The honest summary: for an all-layers SBOM, DevRadar's accuracy is a *generator-
 └──────────────────────────────────────────────────────────────┘
 ```
 
-The scan job is triggered frequently by Cloud Scheduler (default every ~15 min, `var.scan_schedule`) rather than once nightly, but each SBOM is only *due* when it has never been scanned or its last scan is older than the staleness window (`DEVRADAR_SCAN_MAX_AGE`, code default 12h; the SaaS deployment sets it to 24h via `var.scan_max_age`). So a freshly-submitted SBOM is picked up on the next tick (low latency) while any given SBOM is rescanned at most once or twice a day depending on the configured window (bounded load): cron frequency controls latency, the staleness window controls load, independently. Freshness is tracked per scanner, so an SBOM stays due until *every* scanner (grype + trivy) has a recent run. An idle tick skips scanner DB refresh entirely. With work present, each scanner refreshes a missing or older-than-24-hour DB once and freezes it for the run. No fleet is required.
+The scan job is triggered frequently by Cloud Scheduler (default every ~15 min, `var.scan_schedule`) rather than once nightly, but each SBOM is only *due* when it has never been scanned or its last scan is older than the staleness window (`DEVRADAR_SCAN_MAX_AGE`, code default 12h; the reference deployment sets it to 24h via `var.scan_max_age`). So a freshly-submitted SBOM is picked up on the next tick (low latency) while any given SBOM is rescanned at most once or twice a day depending on the configured window (bounded load): cron frequency controls latency, the staleness window controls load, independently. Freshness is tracked per scanner, so an SBOM stays due until *every* scanner (grype + trivy) has a recent run. An idle tick skips scanner DB refresh entirely. With work present, each scanner refreshes a missing or older-than-24-hour DB once and freezes it for the run. No fleet is required.
 
 ---
 
@@ -553,38 +590,40 @@ make db-down       # stop Postgres
 
 ---
 
-## Thingz.io Service Family
+## How it fits with the other deployments
 
-DevRadar is the third service in the Thingz open source intelligence platform. Each service covers a distinct dimension of supply chain risk:
+The three tools are independent, but the maintainer's reference deployment runs
+all of them in one Google Cloud project, which is worth knowing if you are
+reading `infra/run/` and wondering why some resources are referenced rather than
+created:
 
-| Service | Question It Answers | Scope |
-|---------|-------------------|-------|
-| **[DevPulse](https://devpulse.thingz.io)** | Is this project healthy? | Project-level health analytics — contributor retention, bus factor, velocity, review culture, release cadence |
-| **[DevTrace](https://devtrace.thingz.io)** | Can we trust this contributor? | Per-contributor trust scoring — 23 signals across identity, engagement, community, and behavioral patterns |
-| **[DevRadar](https://devradar.thingz.io)** | Are these container images accumulating vulnerabilities? | Container vulnerability tracking — CVE time-series, causal deltas, recurring SBOM matching |
+- **Cloud SQL** — one shared PostgreSQL instance and database. Each service
+  connects as its own user and prefixes its tables (`devradar_*`). DevRadar
+  isolates accounts at the application layer through a `tenant_id` predicate;
+  DevPulse uses PostgreSQL row-level security for the same job.
+- **Cloud Run** — each service owns its own service and jobs, built with
+  `ko`/GoReleaser and deployed keylessly through Workload Identity Federation.
+- **Secret Manager** — application credentials. DevRadar never stores registry
+  credentials, because it never pulls an image.
+- **Shared VPC, Artifact Registry, monitoring** — attached rather than created.
+- **AI** — optional Claude analysis is confined to the admin metrics view. It is
+  never part of deterministic scanning, alert evaluation, policy, or attestation
+  verification.
 
-### How They Complement Each Other
+None of this is required to run DevRadar. A self-hoster supplies their own
+values for all of it — see
+[`infra/run/terraform.tfvars.example`](infra/run/terraform.tfvars.example) and
+[DEPLOYMENT.md](DEPLOYMENT.md).
 
-**DevPulse + DevRadar:** A project with strong health metrics but images accumulating unpatched criticals indicates a packaging or release pipeline problem — the project is alive but its artifacts aren't keeping up. Conversely, a declining project with clean images today is a *future* risk — when the maintainer leaves, vulnerability response time will spike.
+## Contributing
 
-**DevTrace + DevRadar:** DevTrace flags contributors with suspicious behavioral patterns *before* code is merged. DevRadar detects the downstream effect — if a compromised contributor introduces a vulnerable dependency, DevRadar catches the CVE delta in the next scan cycle. Together they cover both the contributor trust vector (pre-merge) and the artifact integrity vector (post-publish).
+See [CONTRIBUTING.md](CONTRIBUTING.md). Documentation fixes are especially
+welcome and are the easiest first contribution.
 
-**All three together:** An OSPO or security team can build a complete risk profile for any open source dependency:
-1. **DevPulse** — Is the project well-maintained? Will vulnerabilities get patched?
-2. **DevTrace** — Are the people contributing to it trustworthy? Could this be another xz-utils?
-3. **DevRadar** — Are the published container images actually getting safer over time?
+Security reports go through
+[GitHub Security Advisories](https://github.com/thingzio/devradar/security/advisories/new),
+not public issues — see [SECURITY.md](SECURITY.md).
 
-### Shared Infrastructure
+## License
 
-All three services run on GCP in the `thingzio` project (`us-west1`) and follow one platform contract — DevRadar references shared resources and creates only its own (details in [DEVELOPMENT.md](DEVELOPMENT.md)):
-- **Cloud SQL PostgreSQL** — one shared instance (`thingzio-pg`) and database (`thingz`); each service connects as its own DB user and prefixes its tables (`devradar_*`). DevRadar isolates accounts at the application layer through the compatibility `tenant_id` column (`WHERE tenant_id = $1`), like DevTrace; DevPulse uses Row-Level Security.
-- **Cloud Run** — each service owns its service/job; DevRadar runs a serve service (`devradar-saas-serve`) and a scheduled scan job (`devradar-saas-scan`), built with `ko`/GoReleaser and deployed via Workload Identity Federation.
-- **Secret Manager** — centralized application credentials; DevRadar never stores registry credentials.
-- **Shared VPC, Artifact Registry, monitoring** — DevRadar attaches to the shared VPC, pushes to its own `devradar-saas-images` repo, and reuses the shared DB alert policies.
-- **AI** — optional Claude analysis is confined to the admin metrics view. It is never part of deterministic scanning, alert evaluation, policy, or attestation verification.
-
-### Key Talking Points
-
-- "We scan packages. We scan containers. We scan infrastructure. Almost nothing tracks whether the *projects* are healthy, the *contributors* are trustworthy, and the *images* are getting safer over time. Thingz covers all three."
-- "DevPulse tells you a project is declining. DevTrace flags a suspicious contributor. DevRadar shows the images are accumulating criticals. Each signal alone is a data point — together they're an actionable risk picture."
-- "You give us the SBOM, we give you the trend line — even for images we could never pull ourselves."
+[Apache 2.0](LICENSE). See [NOTICE](NOTICE) for attribution.

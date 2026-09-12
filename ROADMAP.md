@@ -71,7 +71,7 @@ Add the smallest API surface needed for deterministic CI and CLI workflows:
 
 Batch submission is deferred until measured CI workflows regularly submit many
 images together; independent requests already provide clearer retry semantics.
-Exact totals on keyset-paginated lists are also deferred until a UI or billing
+Exact totals on keyset-paginated lists are also deferred until a UI
 requirement justifies the query cost.
 
 - **User benefit:** removes polling heuristics and N+1 discovery from
@@ -255,8 +255,8 @@ selections fall back to the personal account rather than exposing stale data.
 
 Recommended roles:
 
-- `owner`: all access, including membership, account deletion, and future
-  billing/ownership operations.
+- `owner`: all access, including membership, account deletion, and any future
+  account-ownership operations.
 - `admin`: the requested same operational access to data, policies, API tokens,
   VEX, alerts, and archive actions, but cannot delete the account or change
   owners.

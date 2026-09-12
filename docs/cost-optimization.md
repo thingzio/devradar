@@ -1,14 +1,18 @@
 # DevRadar Cost Optimization
 
-Findings and actions from the 2026-07-25 thingz.io billing review. DevRadar had
-not had a cost pass since going live (`serve`/`scan` 2026-07-05, `deliver`/
-sharing 2026-07-15) and was already ~40% of GCP spend (~$77-78/mo of ~$187/mo
-projected).
+Findings and actions from a 2026-07-25 cost review of the maintainer's
+reference deployment. DevRadar had not had a cost pass since going live
+(`serve`/`scan` 2026-07-05, `deliver`/sharing 2026-07-15) and had grown to
+roughly 40% of that project's GCP spend (~$77-78/mo).
 
-Full billing context and cross-service (DevPulse/DevTrace/Cloud SQL) numbers
-live in the shared `tco.md` (source of truth for account/billing detail, not
-committed to this repo). This doc tracks only DevRadar-specific options and
-their status.
+Published because "what does it cost to run this" is a fair question to ask of
+a reference implementation, and the answer is more useful as measured numbers
+than as an estimate. The figures are specific to one deployment's shape and
+traffic; treat them as an order of magnitude, not a quote.
+
+Cross-service totals live in the maintainer's private cost records and are not
+reproduced here. This document tracks DevRadar-specific options and their
+status.
 
 ## Applied
 
@@ -24,8 +28,8 @@ scan job silently ran on the 12h code default. `deliver`'s lease durations
 (5 min row lease, 6 min slot lease) already tolerate the slower cadence with no
 code change.
 
-**Verify against actuals before declaring done:** re-run the billing review
-(`reviewing-thingz-billing` skill) after a few days of `*/5` deliver + 24h scan
+**Verify against actuals before declaring done:** re-run the cost review
+after a few days of `*/5` deliver + 24h scan
 data and confirm the daily net drops roughly as projected. If it doesn't land
 close to projection, re-open this doc rather than assuming the fix worked.
 
@@ -54,4 +58,4 @@ sign-off on latency expectations.
 
 Out of scope for this repo: Cloud SQL 1yr CUD (`thingzio-pg` is shared infra,
 not DevRadar-owned) and `devtrace-saas-serve` min-instance change (separate
-service/repo) — tracked in `tco.md` instead.
+service/repo) — tracked in the maintainer's private cost records instead.
