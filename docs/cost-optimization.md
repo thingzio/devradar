@@ -18,7 +18,7 @@ status.
 
 | # | Action | Change | Est. impact/mo | Status |
 |---|--------|--------|----------------:|--------|
-| 1 | Stretch `devradar-deliver` cron `* * * * *` → `*/5 * * * *` | `infra/run/scheduler.tf` | ~-$41 | Applied 2026-07-25 (`terraform apply`) |
+| 1 | Stretch `devradar-deliver` cron `* * * * *` → `*/5 * * * *` | `run/devradar/scheduler.tf` in the private `thingzio/infra` repository | ~-$41 | Applied 2026-07-25 (`terraform apply`) |
 | 2 | Raise scan staleness window 12h → 24h | New `var.scan_max_age` (default `24h`) sets `DEVRADAR_SCAN_MAX_AGE` on the `devradar-scan` Cloud Run Job; code default (12h) untouched — infra-only, no image rebuild | ~-$10 to ~-$15 (more as fleet grows) | Applied 2026-07-25 (`terraform apply`) |
 
 Both are pure Terraform changes — no application code changed, no new release

@@ -79,7 +79,6 @@ Useful gates:
 - `make test-unit` — race-enabled tests without requiring Postgres.
 - `make test` — race-enabled unit and integration tests; requires local Postgres.
 - `make qualify` — coverage, vet, lint, and tests; must pass before completion.
-- `make tf-validate` — Terraform validation without backend credentials.
 - `go build ./...` — direct compile check.
 
 Use test-driven development for behavior changes. Never skip or disable tests. Preserve unrelated work in a dirty tree. Commit focused changes directly to `main`, signed and signed off with `git commit -S -s`; never add co-author trailers or generated-by text.

@@ -35,7 +35,7 @@ SBOM bytes, secrets, service accounts, and the three Cloud Run resources.
 `project_id`, `domain`, `git_repo`, `notification_email`, `email_from`, the five
 shared-infrastructure identifiers, both OAuth values, `admin_users`, and
 `anthropic_api_key` all have to be set in an untracked
-`infra/run/terraform.tfvars`. Terraform refuses to plan until they are.
+`run/devradar/terraform.tfvars` in the private `thingzio/infra` repository. Terraform refuses to plan until they are.
 
 That is deliberate. Defaults pointing at someone else's project are a bad first
 experience, and for the two secrets it was worse than that: `secrets.tf` turns
@@ -43,7 +43,7 @@ an empty value into a placeholder, so an absent tfvars used to be read as "the
 source of truth says empty" and would overwrite the live secret. An explicit
 empty string still opts out; the difference is that it now has to be chosen.
 
-Start from [`infra/run/terraform.tfvars.example`](infra/run/terraform.tfvars.example),
+Start from [`run/devradar/terraform.tfvars.example`](https://github.com/thingzio/infra/blob/main/run/devradar/terraform.tfvars.example),
 or run `tools/write-tfvars` to generate the file from `TF_VAR_*` environment
 variables. It refuses to write a partial one.
 
@@ -202,98 +202,6 @@ reclone. Production rollout still requires explicit owner approval.
 ---
 
 ## Initial setup (once)
-
-### 1. Provision infrastructure
-
-```bash
-make tf-init          # terraform init (GCS backend, state prefix "devradar")
-make tf-plan          # review — expect ~1 SQL user, 1 bucket, 6 secrets, SAs,
-                      #          WIF, AR repo, 1 service, 2 jobs, 2 schedulers
-make tf-apply         # run by hand with an operator identity
-```
-
-The Cloud Run service and jobs are created with an **immutable digest-pinned
-public bootstrap image** (`var.bootstrap_image`) so this first apply succeeds
-before any DevRadar image exists. The delivery Scheduler is created paused, so
-that bootstrap image never runs on the automatic schedule with delivery
-secrets. CI resolves each real release tag to a digest, updates the delivery
-consumer first and serve producer last, then resumes delivery only after every
-update succeeds. Terraform `ignore_changes` preserves the deployed images and
-Scheduler state on later applies. This creates everything except the real
-images and operator-supplied secret **values** (step 2). It also generates
-separate token-flash and invitation-delivery keys and stores their first secret
-versions. Capture the outputs:
-
-```bash
-terraform -chdir=infra/run output
-```
-
-### 2. Populate secret values
-
-Terraform creates six secret *containers*. It assembles
-`devradar-saas-database-url` from the generated DB password and generates
-`devradar-saas-token-flash-key` and `devradar-saas-delivery-key` with separate
-`random_id` resources; none need tfvars or out-of-band population. The other
-three seed a **placeholder** version so the
-serve service can deploy before real values exist. They are populated two
-different ways — match each to its source of truth or the next `terraform apply`
-will revert it:
-
-**`devradar-saas-send-api-key` (Resend, required) — out-of-band.** It carries
-`ignore_changes`, so add the real key by hand and Terraform leaves it alone (with
-the placeholder, magic-link emails are logged, not sent):
-
-```bash
-printf '%s' 'YOUR_RESEND_KEY' | \
-  gcloud secrets versions add devradar-saas-send-api-key --data-file=- --project thingzio
-```
-
-**`devradar-saas-anthropic-api-key` (optional admin metrics analysis) and
-`devradar-saas-oauth-client-secret` (optional GitHub sign-in) — tfvars-driven.**
-These have **no** `ignore_changes`; tfvars is the source of truth. Set them in the
-gitignored `infra/run/terraform.tfvars` and re-apply — do **not** add versions with
-`gcloud`, as the next apply would overwrite them:
-
-```hcl
-# infra/run/terraform.tfvars (gitignored — never committed)
-anthropic_api_key         = "YOUR_ANTHROPIC_KEY"
-github_oauth_client_id    = "YOUR_OAUTH_CLIENT_ID"      # public identifier (plain env var)
-github_oauth_client_secret = "YOUR_OAUTH_CLIENT_SECRET"
-```
-
-```bash
-make tf-apply          # rotates the tfvars-driven secrets to their real values
-```
-
-Leaving either var empty keeps the placeholder, which the app treats as unset (the
-AI summary stays off; the UI stays email-only).
-
-### 3. Configure GitHub Actions (keyless deploy via WIF)
-
-Run the helper — it reads the Terraform outputs and writes the `saas`
-environment variables via the `gh` CLI (creating the environment if needed):
-
-```bash
-gh auth status          # must be authenticated
-tools/setup-gh-env
-```
-
-This sets `WIF_PROVIDER`, `DEPLOYER_SA`, `REGION`, `PROJECT_ID` — everything the
-`release`/`deploy` workflows need. No JSON key is stored; GitHub Actions
-authenticates to GCP via Workload Identity Federation, scoped to this repo.
-Cloud Scheduler does not expose job resource attributes to IAM Conditions, so
-the deployer's Scheduler custom role is project-scoped but contains only
-`cloudscheduler.jobs.get`, `cloudscheduler.jobs.pause`, and
-`cloudscheduler.jobs.enable`. It cannot create, delete, run, or change jobs.
-
-<details><summary>Setting them by hand instead</summary>
-
-Create an **environment named `saas`** and set each variable from the outputs:
-`WIF_PROVIDER` = `terraform output -raw wif_provider`, `DEPLOYER_SA` =
-`terraform output -raw deployer_sa`, `REGION` = `us-west1`, `PROJECT_ID` =
-`thingzio`.
-</details>
-
 ### 4. First release
 
 Tag a release; CI (`.github/workflows/release.yaml`) builds and pushes all three
@@ -365,7 +273,7 @@ curl -s https://devradar.thingz.io/v1/images -H "Authorization: Bearer $DR_TOKEN
 ### 6. Harden
 
 Once the deploy is confirmed, set `deletion_protection = true` on the service
-and both jobs in `infra/run/cloudrun.tf`, then `make tf-apply`.
+and both jobs in `run/devradar/cloudrun.tf` in the private `thingzio/infra` repository, then `make tf-apply STACK=run/devradar`.
 
 ---
 
@@ -410,8 +318,8 @@ the owner validate:
 
 Only an explicit owner decision after that evidence authorizes setting
 `account_sharing_enabled = true` in the gitignored
-`infra/run/terraform.tfvars`, reviewing `make tf-plan`, and running
-`make tf-apply`. Do not mark the ROADMAP outcome shipped merely because the code
+`run/devradar/terraform.tfvars` in the private `thingzio/infra` repository, reviewing `make tf-plan STACK=run/devradar`, and running
+`make tf-apply STACK=run/devradar`. Do not mark the ROADMAP outcome shipped merely because the code
 and migrations are present.
 
 ### Ship new application code
@@ -420,8 +328,8 @@ Apply infrastructure changes before releasing an image that depends on them.
 In particular, Terraform **must** be applied before deploying any image that
 requires `DEVRADAR_TOKEN_FLASH_KEY` or `DEVRADAR_DELIVERY_KEY`; otherwise the
 serve or delivery process fails startup validation. This rollout remains
-owner-gated: review `make tf-plan`, obtain explicit owner approval, then run
-`make tf-apply` before tagging the release.
+owner-gated: review `make tf-plan STACK=run/devradar`, obtain explicit owner approval, then run
+`make tf-apply STACK=run/devradar` before tagging the release.
 
 Bump the semver tag — that's the whole flow (the tag triggers the release
 workflow):
@@ -462,10 +370,10 @@ mutable tag or manually resume after a partial image mutation.
 
 ### Change infrastructure
 
-Edit `infra/run/*.tf`, then:
+Edit `run/devradar/*.tf` in the private `thingzio/infra` repository, then:
 
 ```bash
-make tf-plan && make tf-apply
+make tf-plan STACK=run/devradar && make tf-apply STACK=run/devradar
 ```
 
 ### Bump scanner versions
@@ -489,7 +397,7 @@ gcloud run services update devradar-saas-serve --region us-west1   # pick up "la
 ```
 
 The **Anthropic key** and **GitHub OAuth client secret** are tfvars-driven — edit
-their values in `infra/run/terraform.tfvars` and `make tf-apply`. Do not rotate
+their values in `run/devradar/terraform.tfvars` in the private `thingzio/infra` repository and `make tf-apply STACK=run/devradar`. Do not rotate
 these with `gcloud`; the next apply would overwrite the hand-added version.
 
 (The DB password is managed by Terraform via `random_password`; rotate it with a
@@ -500,7 +408,7 @@ The **token-flash key** is Terraform-generated and does not rotate during routin
 applies. Rotate it only with explicit owner approval:
 
 ```bash
-terraform -chdir=infra/run apply -replace=random_id.token_flash_key
+terraform -chdir=run/devradar apply -replace=random_id.token_flash_key
 ```
 
 Replacement creates a new pinned secret version and rolls the serve service to
@@ -514,7 +422,7 @@ pending or leased outbox row retains ciphertext; the worker intentionally has
 no old-key fallback:
 
 ```bash
-terraform -chdir=infra/run apply -replace=random_id.delivery_key
+terraform -chdir=run/devradar apply -replace=random_id.delivery_key
 ```
 
 ---

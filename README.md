@@ -594,7 +594,7 @@ make db-down       # stop Postgres
 
 The three tools are independent, but the maintainer's reference deployment runs
 all of them in one Google Cloud project, which is worth knowing if you are
-reading `infra/run/` and wondering why some resources are referenced rather than
+reading the private `thingzio/infra` repository under `run/devradar` and wondering why some resources are referenced rather than
 created:
 
 - **Cloud SQL** — one shared PostgreSQL instance and database. Each service
@@ -612,7 +612,7 @@ created:
 
 None of this is required to run DevRadar. A self-hoster supplies their own
 values for all of it — see
-[`infra/run/terraform.tfvars.example`](infra/run/terraform.tfvars.example) and
+[`run/devradar/terraform.tfvars.example`](https://github.com/thingzio/infra/blob/main/run/devradar/terraform.tfvars.example) and
 [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## Contributing

@@ -168,32 +168,6 @@ bump-patch: ## Tags + pushes the next patch version (v1.2.3 -> v1.2.4), triggeri
 	tools/bump patch
 
 # =============================================================================
-# Infrastructure (Terraform) — see infra/run
-# =============================================================================
-
-TF_DIR := infra/run
-
-.PHONY: tf-init
-tf-init: ## Initializes Terraform (infra/run)
-	terraform -chdir=$(TF_DIR) init -backend-config=backend.hcl
-
-.PHONY: tf-plan
-tf-plan: ## Plans infra changes
-	terraform -chdir=$(TF_DIR) plan
-
-.PHONY: tf-apply
-tf-apply: ## Applies infra changes (run by hand for the first deploy)
-	terraform -chdir=$(TF_DIR) apply
-
-.PHONY: tf-fmt
-tf-fmt: ## Formats Terraform
-	terraform -chdir=$(TF_DIR) fmt -recursive
-
-.PHONY: tf-validate
-tf-validate: ## Validates Terraform without backend/creds
-	terraform -chdir=$(TF_DIR) init -backend=false >/dev/null && terraform -chdir=$(TF_DIR) validate
-
-# =============================================================================
 # Cleanup
 # =============================================================================
 

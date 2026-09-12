@@ -1,9 +1,0 @@
-# Copy to backend.hcl and fill in, then `make tf-init`.
-# backend.hcl is gitignored -- the bucket is specific to your deployment.
-#
-# The bucket must already exist and be versioned. State is keyed by `prefix`
-# within it, so sibling services can share one bucket without colliding, and
-# renaming this directory does not move or re-key anything.
-
-bucket = ""        # GCS bucket holding Terraform state
-prefix = "devradar"  # state object prefix within that bucket

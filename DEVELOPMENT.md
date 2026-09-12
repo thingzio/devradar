@@ -303,7 +303,6 @@ Local and CI validation use the same pinned versions from `.settings.yaml`:
 make test-unit   # race-enabled tests without PostgreSQL
 make test        # race-enabled unit and integration tests
 make qualify     # coverage, vet, lint, and tests
-make tf-validate # Terraform validation without backend credentials
 go build ./...   # direct compilation check
 ```
 
