@@ -107,14 +107,6 @@ resource "google_service_account_iam_member" "deployer_wif" {
   member             = "principal://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/subject/repo:${var.git_repo}:environment:saas"
 }
 
-resource "google_artifact_registry_repository_iam_member" "deployer_images" {
-  project    = var.project_id
-  location   = google_artifact_registry_repository.images.location
-  repository = google_artifact_registry_repository.images.repository_id
-  role       = "roles/artifactregistry.writer"
-  member     = "serviceAccount:${google_service_account.deployer.email}"
-}
-
 # The deployer updates Cloud Run with a digest in the remote repository that
 # fronts ghcr.io, and Cloud Run validates the deploying identity can read it.
 # Reader, not writer: nothing here ever pushes to this repository -- images are

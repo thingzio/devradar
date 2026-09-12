@@ -34,16 +34,6 @@ output "sbom_bucket" {
   value       = google_storage_bucket.sboms.name
 }
 
-output "image_repo" {
-  description = "Artifact Registry repository path"
-  value       = local.image_base
-}
-
-output "ar_repo" {
-  description = "Artifact Registry repository ID"
-  value       = google_artifact_registry_repository.images.repository_id
-}
-
 output "deployer_sa" {
   description = "GitHub Actions deployer service account email"
   value       = google_service_account.deployer.email

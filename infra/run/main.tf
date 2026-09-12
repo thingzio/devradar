@@ -20,7 +20,6 @@ locals {
   subnet_id     = var.subnet_id
   db_connection = var.db_connection_name
 
-  image_base = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.images.repository_id}"
 
   # Service-specific APIs. The shared infra (thingzio/infra) already enables
   # compute, sqladmin, servicenetworking, monitoring, iam, etc.
