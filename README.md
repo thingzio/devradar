@@ -1,5 +1,7 @@
 # DevRadar
 
+[![Build Status](https://github.com/thingzio/devradar/actions/workflows/test.yaml/badge.svg)](https://github.com/thingzio/devradar/actions/workflows/test.yaml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/thingzio/devradar)](https://goreportcard.com/report/github.com/thingzio/devradar)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 Track how the vulnerabilities in your container images change over time.
