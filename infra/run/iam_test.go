@@ -68,6 +68,9 @@ func TestDeployerOperationPollingIAMIsLeastPrivilege(t *testing.T) {
 		role         string
 	}{
 		{"google_artifact_registry_repository_iam_member", "deployer_images", "roles/artifactregistry.writer"},
+		// Reader, not writer: images are built and published on GitHub, and
+		// this side only pulls them through the remote repository.
+		{"google_artifact_registry_repository_iam_member", "deployer_remote_images", "roles/artifactregistry.reader"},
 		{"google_cloud_run_v2_service_iam_member", "deployer_serve", "roles/run.admin"},
 		{"google_cloud_run_v2_job_iam_member", "deployer_scan", "roles/run.admin"},
 		{"google_cloud_run_v2_job_iam_member", "deployer_delivery", "roles/run.admin"},

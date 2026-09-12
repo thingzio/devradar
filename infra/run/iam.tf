@@ -115,6 +115,23 @@ resource "google_artifact_registry_repository_iam_member" "deployer_images" {
   member     = "serviceAccount:${google_service_account.deployer.email}"
 }
 
+# The deployer updates Cloud Run with a digest in the remote repository that
+# fronts ghcr.io, and Cloud Run validates the deploying identity can read it.
+# Reader, not writer: nothing here ever pushes to this repository -- images are
+# built and published on GitHub, and this side only pulls.
+#
+# Scoped to the one repository rather than granted project-wide. devpulse and
+# devtrace reach the same repository through a project-level
+# artifactregistry.writer binding, which is both broader than they need and
+# broader than this.
+resource "google_artifact_registry_repository_iam_member" "deployer_remote_images" {
+  project    = var.project_id
+  location   = var.region
+  repository = var.remote_image_repository
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${google_service_account.deployer.email}"
+}
+
 resource "google_cloud_run_v2_service_iam_member" "deployer_serve" {
   project  = var.project_id
   location = google_cloud_run_v2_service.serve.location

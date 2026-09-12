@@ -135,3 +135,17 @@ variable "db_user" {
   type        = string
   default     = "devradar"
 }
+
+variable "remote_image_repository" {
+  description = <<-EOT
+    Artifact Registry remote repository that fronts ghcr.io. Images are built
+    and signed on GitHub and published to GHCR; Cloud Run will only pull from
+    Artifact Registry, so it pulls through this repository. It is a
+    pull-through cache, not a copy, so the digest is unchanged on the far side.
+
+    Shared across the thingzio services and created outside this module, so it
+    is named rather than managed here.
+  EOT
+  type        = string
+  default     = "gh"
+}
