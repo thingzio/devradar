@@ -67,6 +67,10 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Sourced from .settings.yaml so the scan image's build stage cannot
+          # drift from go.mod. Consumed by Dockerfile.scan via --build-arg.
+          GO_VERSION: "${{ steps.gover.outputs.go }}"
+
 
       - name: Resolve immutable deployment bundle
         id: bundle
