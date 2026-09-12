@@ -174,7 +174,7 @@ TF_DIR := infra/run
 
 .PHONY: tf-init
 tf-init: ## Initializes Terraform (infra/run)
-	terraform -chdir=$(TF_DIR) init
+	terraform -chdir=$(TF_DIR) init -backend-config=backend.hcl
 
 .PHONY: tf-plan
 tf-plan: ## Plans infra changes

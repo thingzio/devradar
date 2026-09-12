@@ -57,3 +57,5 @@ terraform.rc
 
 # Per-developer Claude Code overrides (local only)
 .claude/settings.local.json
+# Terraform partial backend config (deployment-specific)
+backend.hcl

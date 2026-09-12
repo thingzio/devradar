@@ -31,11 +31,27 @@ SBOM bytes, secrets, service accounts, and the three Cloud Run resources.
 - A **Resend** API key for magic-link sign-in.
 - Optionally an **Anthropic** API key for admin metrics analysis.
 
-All shared identifiers are baked as variable defaults in `infra/run/variables.tf`
-(`project_id=thingzio`, `region=us-west1`, `db_instance_name=thingzio-pg`,
-`db_name=thingz`, `git_repo=thingzio/devradar`). Override via an untracked
-`infra/run/terraform.tfvars` only if a default is wrong — **do not commit
-secrets to tfvars.**
+**Every value that identifies a deployment is required and has no default.**
+`project_id`, `domain`, `git_repo`, `notification_email`, `email_from`, the five
+shared-infrastructure identifiers, both OAuth values, `admin_users`, and
+`anthropic_api_key` all have to be set in an untracked
+`infra/run/terraform.tfvars`. Terraform refuses to plan until they are.
+
+That is deliberate. Defaults pointing at someone else's project are a bad first
+experience, and for the two secrets it was worse than that: `secrets.tf` turns
+an empty value into a placeholder, so an absent tfvars used to be read as "the
+source of truth says empty" and would overwrite the live secret. An explicit
+empty string still opts out; the difference is that it now has to be chosen.
+
+Start from [`infra/run/terraform.tfvars.example`](infra/run/terraform.tfvars.example),
+or run `tools/write-tfvars` to generate the file from `TF_VAR_*` environment
+variables. It refuses to write a partial one.
+
+Variables that keep generic defaults, because none of them identifies a
+deployment: `region`, `prefix`, `bootstrap_image`, `scan_schedule`,
+`scan_max_age`, `account_sharing_enabled`, `db_user`.
+
+**Never commit `terraform.tfvars`** — it is gitignored by the `*.tfvars` rule.
 
 ---
 
