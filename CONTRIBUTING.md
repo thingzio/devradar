@@ -102,6 +102,11 @@ make serve        # run the dev server
 `make qualify` is the same gate CI runs. If it passes locally it should pass in
 CI; if it does not, that is worth an issue.
 
+> **Port 5432.** DevRadar, DevPulse, and DevTrace all bind 5432 in their own
+> compose files, so only one of the three can run at a time. If `make db-up`
+> fails to bind, run `docker compose down` in whichever sibling is up — the bind
+> error does not say which project is holding the port.
+
 See [DEVELOPMENT.md](DEVELOPMENT.md) for the longer tour: architecture, layout,
 and day-to-day workflow.
 
