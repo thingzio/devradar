@@ -94,7 +94,7 @@ directory. Their licenses and attributions are reproduced here as required.
 | `go.opentelemetry.io/otel/sdk/metric` | v1.45.0 | Apache-2.0 |
 | `go.opentelemetry.io/otel/trace` | v1.45.0 | Apache-2.0 |
 | `go.yaml.in/yaml/v3` | v3.0.5 | MIT |
-| `golang.org/x/crypto` | v0.55.0 | BSD-3-Clause |
+| `golang.org/x/crypto` | v0.56.0 | BSD-3-Clause |
 | `golang.org/x/mod` | v0.40.0 | BSD-3-Clause |
 | `golang.org/x/net` | v0.58.0 | BSD-3-Clause |
 | `golang.org/x/oauth2` | v0.36.0 | BSD-3-Clause |
