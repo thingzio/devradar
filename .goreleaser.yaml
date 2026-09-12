@@ -1,5 +1,9 @@
 version: 2
 
+# Image building lives in .github/workflows/release.yaml, which calls the shared
+# thingzio/actions build-ko and build-docker workflows. goreleaser here builds
+# binaries, archives, and checksums only -- it no longer pushes containers.
+
 project_name: devradar
 
 builds:
@@ -62,53 +66,10 @@ release:
   draft: true
 
 # serve is pure Go → ko distroless image (no Dockerfile), like the siblings.
-kos:
-  - id: devradar-serve
-    build: devradar-serve
-    repositories:
-      - us-west1-docker.pkg.dev/thingzio/devradar-saas-images/devradar-serve
-    platforms:
-      - linux/amd64
-    tags:
-      - latest
-      - "{{.Tag}}"
-    preserve_import_paths: false
-    bare: true
-
-  - id: devradar-deliver
-    build: devradar-deliver
-    repositories:
-      - us-west1-docker.pkg.dev/thingzio/devradar-saas-images/devradar-deliver
-    platforms:
-      - linux/amd64
-    tags:
-      - latest
-      - "{{.Tag}}"
-    preserve_import_paths: false
-    bare: true
-
 # scan shells out to grype/trivy/syft at runtime, so its image is built from a
 # multi-stage Dockerfile (scanners baked in) rather than ko. goreleaser passes
 # the compiled binary's dir via build context; the Dockerfile rebuilds the Go
 # binary in-stage for a self-contained image.
-dockers:
-  - id: devradar-scan
-    dockerfile: Dockerfile.scan
-    image_templates:
-      - us-west1-docker.pkg.dev/thingzio/devradar-saas-images/devradar-scan:latest
-      - us-west1-docker.pkg.dev/thingzio/devradar-saas-images/devradar-scan:{{ .Tag }}
-    build_flag_templates:
-      - "--build-arg=GO_VERSION={{ .Env.GO_VERSION }}"
-      - "--build-arg=VERSION={{ .Version }}"
-      - "--build-arg=COMMIT={{ .ShortCommit }}"
-      - "--build-arg=DATE={{ .CommitDate }}"
-      - "--platform=linux/amd64"
-    extra_files:
-      - cmd
-      - pkg
-      - go.mod
-      - go.sum
-
 report_sizes: true
 
 snapshot:

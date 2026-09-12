@@ -30,29 +30,34 @@ if grep -qE '^        default:' "$workflow"; then
 fi
 for image in delivery scan serve; do
   case "$image" in
-    delivery) variable='DELIVERY_IMAGE'; repository='devradar-deliver' ;;
-    scan) variable='SCAN_IMAGE'; repository='devradar-scan' ;;
-    serve) variable='SERVE_IMAGE'; repository='devradar-serve' ;;
+    delivery) variable='DELIVERY_IMAGE'; repository='devradar-deliver'; job='build-deliver' ;;
+    scan) variable='SCAN_IMAGE'; repository='devradar-scan'; job='build-scan' ;;
+    serve) variable='SERVE_IMAGE'; repository='devradar-serve'; job='build-serve' ;;
   esac
   test "$(grep -cE "^      ${image}_image:\$" "$workflow" || true)" -eq 2 ||
     fail "${image} image must be required by reusable and manual triggers"
-  test "$(grep -cF "${image}_image: \${{ needs.release.outputs.${image}_image }}" "$release_workflow" || true)" -eq 1 ||
-    fail "release must pass the resolved ${image} image"
+  # The digest now comes from the shared build workflow that produced the image,
+  # rather than from a registry lookup after the fact. That is a stronger
+  # guarantee, not a weaker one: a lookup resolves whatever the tag points at
+  # when it runs, while the build output is the digest that was just published.
+  test "$(grep -cF "${image}_image: \${{ needs.${job}.outputs.image_ref }}" "$release_workflow" || true)" -eq 1 ||
+    fail "release must pass the ${image} image straight from its build job"
   test "$(grep -cF "validate_image \"\$${variable}\" ${repository}" "$workflow" || true)" -eq 1 ||
     fail "deploy must validate the ${image} input against its repository"
-  test "$(grep -cF "echo \"${image}_image=\${${variable}}\"" "$workflow" || true)" -eq 1 ||
-    fail "deploy must preserve the validated ${image} input exactly"
-  test "$(grep -cF "echo \"${image}_image=\${REGISTRY}/${repository}@\${${image}_digest}\"" "$release_workflow" || true)" -eq 1 ||
-    fail "release must map the ${image} digest to its repository"
+  test "$(grep -cF "echo \"${image}_image=\$(to_ar \"\$${variable}\")\"" "$workflow" || true)" -eq 1 ||
+    fail "deploy must carry the validated ${image} input through the rewrite unchanged"
 done
 test "$(grep -cE '^        required: true$' "$workflow" || true)" -eq 6 ||
   fail "all reusable and manual image inputs must be required"
-test "$(grep -cE 'image_summary.digest' "$release_workflow" || true)" -eq 3 ||
-  fail "release must resolve all three pushed images"
-test "$(grep -cE 'timeout 60s gcloud artifacts docker images describe' "$release_workflow" || true)" -eq 3 ||
-  fail "release image resolution must be bounded"
-grep -qF '[[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]' "$release_workflow" ||
-  fail "release must validate lowercase SHA-256 digests"
+# Each image must be built by a pinned shared build definition. Pinning by SHA
+# is what makes the SLSA provenance builder.id immutable; a tag or branch ref
+# would let the build definition change under a release that claims it.
+test "$(grep -cE 'uses: thingzio/actions/\.github/workflows/build-(ko|docker)\.yaml@[0-9a-f]{40}' "$release_workflow" || true)" -eq 3 ||
+  fail "all three images must be built by SHA-pinned shared build definitions"
+# The digest check moved to deploy, which is the last place it can still stop a
+# bad reference from reaching Cloud Run.
+grep -qF '[[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]' "$workflow" ||
+  fail "deploy must validate lowercase SHA-256 digests"
 grep -qF '[[ "$image" == "$expected"* ]]' "$workflow" ||
   fail "deploy must validate repository prefixes literally"
 grep -qF '[[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]' "$workflow" ||

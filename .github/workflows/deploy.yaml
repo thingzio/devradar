@@ -46,7 +46,13 @@ jobs:
     environment: saas
     env:
       REGION: ${{ vars.REGION }}
-      EXPECTED_REGISTRY: ${{ vars.REGION }}-docker.pkg.dev/${{ vars.PROJECT_ID }}/devradar-saas-images
+      PROJECT_ID: ${{ vars.PROJECT_ID }}
+      # Inputs are validated against the registry the build publishes to, then
+      # rewritten to the Artifact Registry remote repository that Cloud Run can
+      # actually pull from. Validating the source rather than the proxied path
+      # keeps this check anchored to where the bytes came from.
+      EXPECTED_REGISTRY: ghcr.io/thingzio
+      REMOTE_REPO: gh
       DELIVERY_IMAGE: ${{ inputs.delivery_image }}
       SCAN_IMAGE: ${{ inputs.scan_image }}
       SERVE_IMAGE: ${{ inputs.serve_image }}
@@ -79,10 +85,19 @@ jobs:
           validate_image "$DELIVERY_IMAGE" devradar-deliver
           validate_image "$SCAN_IMAGE" devradar-scan
           validate_image "$SERVE_IMAGE" devradar-serve
+
+          # Rewrite each validated reference onto the remote repository. This is
+          # a path change, not a copy: the remote repository is a pull-through
+          # cache and the digest is identical on the far side, so the bytes
+          # deployed are the bytes that were built and validated above. The
+          # doubled org segment is correct -- the proxy is common-upstream, so
+          # the full ghcr.io path including the org follows /gh/.
+          AR_HOST="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REMOTE_REPO}"
+          to_ar() { printf '%s/%s' "$AR_HOST" "${1#ghcr.io/}"; }
           {
-            echo "delivery_image=${DELIVERY_IMAGE}"
-            echo "scan_image=${SCAN_IMAGE}"
-            echo "serve_image=${SERVE_IMAGE}"
+            echo "delivery_image=$(to_ar "$DELIVERY_IMAGE")"
+            echo "scan_image=$(to_ar "$SCAN_IMAGE")"
+            echo "serve_image=$(to_ar "$SERVE_IMAGE")"
           } >> "$GITHUB_OUTPUT"
 
       - name: Pause delivery schedule

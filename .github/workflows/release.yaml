@@ -17,15 +17,62 @@ jobs:
     permissions:
       contents: read
 
+  # Container images are built and published by the shared build definitions in
+  # thingzio/actions, pinned by SHA. Pinning by SHA rather than tag makes the
+  # SLSA provenance builder.id an immutable reference to the exact build
+  # definition; verification is unaffected because --signer-workflow carries no
+  # ref. See https://github.com/thingzio/actions/blob/main/docs/verification.md
+  #
+  # serve and deliver are pure Go, so ko builds them. scan carries grype, trivy,
+  # and syft binaries at runtime and therefore needs a Dockerfile. Each call
+  # builds one image; the three are independent and run in parallel.
+  build-serve:
+    needs: test
+    uses: thingzio/actions/.github/workflows/build-ko.yaml@8cae31c35ffb538690dfd5ff1b9e4a00b3a265f8  # v1.0.1
+    permissions:
+      contents: read
+      packages: write      # push to ghcr.io
+      id-token: write      # keyless signing
+      attestations: write  # SLSA provenance + SBOM
+    with:
+      image: thingzio/devradar-serve
+      main: ./cmd/devradar-serve
+      platforms: linux/amd64,linux/arm64
+
+  build-deliver:
+    needs: test
+    uses: thingzio/actions/.github/workflows/build-ko.yaml@8cae31c35ffb538690dfd5ff1b9e4a00b3a265f8  # v1.0.1
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    with:
+      image: thingzio/devradar-deliver
+      main: ./cmd/devradar-deliver
+      platforms: linux/amd64,linux/arm64
+
+  # arm64 is safe here despite the scanner binaries: the shared workflow maps
+  # linux/arm64 to a native ubuntu-24.04-arm runner rather than emulating, and
+  # the syft/grype/trivy install scripts detect the host architecture.
+  build-scan:
+    needs: test
+    uses: thingzio/actions/.github/workflows/build-docker.yaml@8cae31c35ffb538690dfd5ff1b9e4a00b3a265f8  # v1.0.1
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    with:
+      image: thingzio/devradar-scan
+      dockerfile: Dockerfile.scan
+      platforms: linux/amd64,linux/arm64
+
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     needs: test
     environment: saas
-    outputs:
-      delivery_image: ${{ steps.bundle.outputs.delivery_image }}
-      scan_image: ${{ steps.bundle.outputs.scan_image }}
-      serve_image: ${{ steps.bundle.outputs.serve_image }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -39,77 +86,28 @@ jobs:
         with:
           go-version: "${{ steps.gover.outputs.go }}"
 
-      # Keyless auth to GCP for pushing images (Artifact Registry). Mint a real
-      # OAuth2 access token up front (token_format) so both the ko and docker
-      # pushes authenticate from one token — rather than the docker credential
-      # helper re-deriving a WIF token at push time, which fails on long builds
-      # when the late STS token exchange is throttled (the v0.7.1 release error).
-      - id: auth
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
-        with:
-          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
-          service_account: ${{ vars.DEPLOYER_SA }}
-          token_format: access_token
-
-      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
-
-      - name: Log in to Artifact Registry
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ${{ vars.REGION }}-docker.pkg.dev
-          username: oauth2accesstoken
-          password: ${{ steps.auth.outputs.access_token }}
-
-      - name: Release (build + push serve[ko] and scan[docker] images)
+      - name: Build release artifacts (binaries, archives, checksums)
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: "~> 2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Sourced from .settings.yaml so the scan image's build stage cannot
-          # drift from go.mod. Consumed by Dockerfile.scan via --build-arg.
-          GO_VERSION: "${{ steps.gover.outputs.go }}"
-
-
-      - name: Resolve immutable deployment bundle
-        id: bundle
-        env:
-          REGISTRY: ${{ vars.REGION }}-docker.pkg.dev/${{ vars.PROJECT_ID }}/devradar-saas-images
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          delivery_digest=$(timeout 60s gcloud artifacts docker images describe \
-            "${REGISTRY}/devradar-deliver:${TAG}" \
-            --format='value(image_summary.digest)')
-          scan_digest=$(timeout 60s gcloud artifacts docker images describe \
-            "${REGISTRY}/devradar-scan:${TAG}" \
-            --format='value(image_summary.digest)')
-          serve_digest=$(timeout 60s gcloud artifacts docker images describe \
-            "${REGISTRY}/devradar-serve:${TAG}" \
-            --format='value(image_summary.digest)')
-          for digest in "$delivery_digest" "$scan_digest" "$serve_digest"; do
-            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
-              echo "::error::invalid image digest" >&2
-              exit 1
-            }
-          done
-          {
-            echo "delivery_image=${REGISTRY}/devradar-deliver@${delivery_digest}"
-            echo "scan_image=${REGISTRY}/devradar-scan@${scan_digest}"
-            echo "serve_image=${REGISTRY}/devradar-serve@${serve_digest}"
-          } >> "$GITHUB_OUTPUT"
 
   deploy:
-    needs: release
+    needs:
+      - build-serve
+      - build-deliver
+      - build-scan
+      - release
     uses: ./.github/workflows/deploy.yaml
     permissions:
       contents: read
       id-token: write
     with:
-      delivery_image: ${{ needs.release.outputs.delivery_image }}
-      scan_image: ${{ needs.release.outputs.scan_image }}
-      serve_image: ${{ needs.release.outputs.serve_image }}
+      delivery_image: ${{ needs.build-deliver.outputs.image_ref }}
+      scan_image: ${{ needs.build-scan.outputs.image_ref }}
+      serve_image: ${{ needs.build-serve.outputs.image_ref }}
     secrets: inherit
 
   # goreleaser creates the release as a draft (`draft: true` in
