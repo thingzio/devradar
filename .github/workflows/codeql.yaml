@@ -1,11 +1,9 @@
 ---
 name: codeql
 
-# CodeQL is free on public repositories and billed as GitHub Advanced Security
-# on private ones. This repository is private until the open-sourcing flip, so
-# the job is gated on visibility: it is a no-op now and starts running by itself
-# the moment the repository becomes public. Without the guard this would quietly
-# start billing, which is the failure mode tco.md section 2.3 warns about.
+# CodeQL runs from the shared thingzio/actions workflow. The visibility gate,
+# the explicit build, and the vendoring handling all live there now -- see
+# https://github.com/thingzio/actions/blob/main/.github/workflows/codeql-go.md
 
 on:
   schedule:
@@ -17,35 +15,8 @@ permissions:
 
 jobs:
   analyze:
-    if: github.event.repository.visibility == 'public'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
     permissions:
       actions: read
       contents: read
       security-events: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Read Go version
-        id: versions
-        run: echo "go=$(yq -r '.languages.go' .settings.yaml)" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
-        with:
-          go-version: ${{ steps.versions.outputs.go }}
-          cache: true
-
-      - uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63  # v4.38.0
-        with:
-          languages: go
-
-      # Explicit build rather than autobuild: this repository vendors its
-      # dependencies, and autobuild does not reliably pick up -mod=vendor.
-      - run: go build ./...
-        env:
-          GOFLAGS: -mod=vendor
-
-      - uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63  # v4.38.0
+    uses: thingzio/actions/.github/workflows/codeql-go.yaml@ec59857cacd694fc64ce83178eb3b444a170900d  # v1.1.0
