@@ -28,7 +28,7 @@ jobs:
   # builds one image; the three are independent and run in parallel.
   build-serve:
     needs: test
-    uses: thingzio/actions/.github/workflows/build-ko.yaml@8cae31c35ffb538690dfd5ff1b9e4a00b3a265f8  # v1.0.1
+    uses: thingzio/actions/.github/workflows/build-ko.yaml@bb66805bb85b2d5cdf8cbae68b67ebe9bf059892  # v1.7.0
     permissions:
       contents: read
       packages: write      # push to ghcr.io
@@ -41,7 +41,7 @@ jobs:
 
   build-deliver:
     needs: test
-    uses: thingzio/actions/.github/workflows/build-ko.yaml@8cae31c35ffb538690dfd5ff1b9e4a00b3a265f8  # v1.0.1
+    uses: thingzio/actions/.github/workflows/build-ko.yaml@bb66805bb85b2d5cdf8cbae68b67ebe9bf059892  # v1.7.0
     permissions:
       contents: read
       packages: write
@@ -57,7 +57,7 @@ jobs:
   # the syft/grype/trivy install scripts detect the host architecture.
   build-scan:
     needs: test
-    uses: thingzio/actions/.github/workflows/build-docker.yaml@8cae31c35ffb538690dfd5ff1b9e4a00b3a265f8  # v1.0.1
+    uses: thingzio/actions/.github/workflows/build-docker.yaml@bb66805bb85b2d5cdf8cbae68b67ebe9bf059892  # v1.7.0
     permissions:
       contents: read
       packages: write
@@ -68,31 +68,24 @@ jobs:
       dockerfile: Dockerfile.scan
       platforms: linux/amd64,linux/arm64
 
+  # Binaries, archives and a Sigstore-signed checksum file come from the shared
+  # release definition, pinned by SHA for the same reason the image builds are.
+  # It runs goreleaser in a job holding no OIDC token and signs the result in a
+  # job that runs none of this repository's configuration, which is what makes
+  # the provenance Build Level 3 rather than Level 2.
+  #
+  # publish: false because the draft flip is gated on a successful deploy, in
+  # the publish job below. Everything is signed, verified and attested by the
+  # time this returns; only visibility is deferred.
   release:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
     needs: test
-    environment: saas
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Read Go version
-        id: gover
-        run: echo "go=$(yq -r '.languages.go' .settings.yaml)" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: "${{ steps.gover.outputs.go }}"
-
-      - name: Build release artifacts (binaries, archives, checksums)
-        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
-        with:
-          version: "~> 2"
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    uses: thingzio/actions/.github/workflows/release-go.yaml@bb66805bb85b2d5cdf8cbae68b67ebe9bf059892  # v1.7.0
+    permissions:
+      contents: write      # create the draft release, upload artifacts
+      id-token: write      # keyless signing
+      attestations: write  # SLSA provenance
+    with:
+      publish: false
 
   deploy:
     needs:
@@ -110,10 +103,12 @@ jobs:
       serve_image: ${{ needs.build-serve.outputs.image_ref }}
     secrets: inherit
 
-  # goreleaser creates the release as a draft (`draft: true` in
-  # .goreleaser.yaml) so a failed deploy never leaves a published release
-  # pointing at images that were never rolled out. Publishing is therefore a
-  # separate job gated on deploy succeeding -- without it the release stays a
+  # The release is created as a draft (`draft: true` in .goreleaser.yaml) and
+  # the shared workflow leaves it that way (`publish: false` above), so a failed
+  # deploy never leaves a published release pointing at images that were never
+  # rolled out. Publishing is therefore a separate job gated on deploy
+  # succeeding -- and it is now the only thing that will ever publish it, since
+  # release-go does not come back later. Without this job the release stays a
   # draft forever, which is invisible to everyone but repository collaborators
   # and makes a repo with 55 releases look like it has none.
   #

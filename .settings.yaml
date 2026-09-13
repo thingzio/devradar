@@ -6,8 +6,12 @@ languages:
   go: '1.27'
 
 # Build tools
+#
+# goreleaser is no longer pinned here. It is installed by the shared release-go
+# workflow at the version pinned in thingzio/actions .versions.yaml, and a
+# second number here that nothing reads is a number that goes stale -- this one
+# said v2.17.1 while CI ran "~> 2".
 build_tools:
-  goreleaser: 'v2.17.1'
   ko: 'v0.19.1'
 
 # Linting

@@ -44,8 +44,29 @@ release_section=$(awk '
   emit && /^  deploy:/{exit}
   emit
 ' "$release_workflow")
-release_timeout_minutes=$(printf '%s\n' "$release_section" | sed -nE 's/^    timeout-minutes: ([0-9]+)$/\1/p')
-[[ "$release_timeout_minutes" == 60 ]] || fail "release job timeout must be 60 minutes"
+
+# Binaries come from the shared release definition, SHA-pinned like the images.
+# The Sigstore identity a consumer verifies against names that workflow and its
+# ref, so a tag would let the definition change under a release claiming it.
+#
+# This replaces a timeout-minutes assertion. A job that calls a reusable
+# workflow cannot carry one, and release-go sets its own per-job timeouts --
+# 45 minutes on the job that runs goreleaser, which is the one that used to
+# need the 60 asserted here.
+printf '%s\n' "$release_section" |
+  grep -qE 'uses: thingzio/actions/\.github/workflows/release-go\.yaml@[0-9a-f]{40}' ||
+  fail "binaries must be released by the SHA-pinned shared release definition"
+
+# publish: false is the entire reason the publish job exists. Without it
+# release-go publishes as soon as it has signed, and a failed deploy leaves a
+# visible release naming images nobody is serving -- the property this file is
+# here to protect.
+printf '%s\n' "$release_section" | grep -qE '^      publish: false$' ||
+  fail "release must leave the draft for the publish job to flip after deploy"
+
+# And the flip has to actually be gated on the deploy.
+awk '/^  publish:/{emit=1} emit' "$release_workflow" | grep -qE '^      - deploy$' ||
+  fail "publish must be gated on deploy"
 
 # Pinning by SHA is what makes the SLSA provenance builder.id immutable; a tag
 # or branch ref would let the build definition change under a release that

@@ -3,6 +3,12 @@ version: 2
 # Image building lives in .github/workflows/release.yaml, which calls the shared
 # thingzio/actions build-ko and build-docker workflows. goreleaser here builds
 # binaries, archives, and checksums only -- it no longer pushes containers.
+#
+# goreleaser is invoked by the shared release-go workflow, not by this
+# repository, and its version is pinned there in .versions.yaml. Signing is
+# deliberately absent: release-go signs the checksum file in a separate job
+# that runs none of this configuration, and passes --skip=sign here. A signs
+# block would be a signature nobody produces.
 
 project_name: devradar
 
@@ -63,7 +69,18 @@ release:
     owner: thingzio
     name: devradar
   prerelease: auto
+  # Created as a draft and published only after deploy succeeds, so a failed
+  # rollout never leaves a visible release naming images nobody is serving.
   draft: true
+  # GitHub does not return drafts when looking a release up by tag, so without
+  # this a re-run after a partial failure opens a second draft for the same tag
+  # and the signing job can no longer tell which release it is attesting.
+  use_existing_draft: true
+
+# release-go installs syft but goreleaser only produces SBOMs when asked.
+sboms:
+  - id: archives
+    artifacts: archive
 
 # serve is pure Go → ko distroless image (no Dockerfile), like the siblings.
 # scan shells out to grype/trivy/syft at runtime, so its image is built from a
