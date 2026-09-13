@@ -1,6 +1,6 @@
 module github.com/thingzio/devradar
 
-go 1.27.0
+go 1.27.1
 
 require (
 	cloud.google.com/go/storage v1.67.1
