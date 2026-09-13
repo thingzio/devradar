@@ -41,7 +41,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: thingzio/actions/.github/workflows/deploy-cloud-run.yaml@bb66805bb85b2d5cdf8cbae68b67ebe9bf059892  # v1.7.0
+    uses: thingzio/actions/.github/workflows/deploy-cloud-run.yaml@368b3e12df4c41d9079b26e41a03efcd90461d56  # v1.7.1
     with:
       # Order matters and is part of the shared workflow's contract. Delivery
       # consumes outbox rows produced by serve, so the backward-compatible

@@ -28,7 +28,7 @@ jobs:
   # builds one image; the three are independent and run in parallel.
   build-serve:
     needs: test
-    uses: thingzio/actions/.github/workflows/build-ko.yaml@bb66805bb85b2d5cdf8cbae68b67ebe9bf059892  # v1.7.0
+    uses: thingzio/actions/.github/workflows/build-ko.yaml@368b3e12df4c41d9079b26e41a03efcd90461d56  # v1.7.1
     permissions:
       contents: read
       packages: write      # push to ghcr.io
@@ -41,7 +41,7 @@ jobs:
 
   build-deliver:
     needs: test
-    uses: thingzio/actions/.github/workflows/build-ko.yaml@bb66805bb85b2d5cdf8cbae68b67ebe9bf059892  # v1.7.0
+    uses: thingzio/actions/.github/workflows/build-ko.yaml@368b3e12df4c41d9079b26e41a03efcd90461d56  # v1.7.1
     permissions:
       contents: read
       packages: write
@@ -57,7 +57,7 @@ jobs:
   # the syft/grype/trivy install scripts detect the host architecture.
   build-scan:
     needs: test
-    uses: thingzio/actions/.github/workflows/build-docker.yaml@bb66805bb85b2d5cdf8cbae68b67ebe9bf059892  # v1.7.0
+    uses: thingzio/actions/.github/workflows/build-docker.yaml@368b3e12df4c41d9079b26e41a03efcd90461d56  # v1.7.1
     permissions:
       contents: read
       packages: write
@@ -79,7 +79,7 @@ jobs:
   # time this returns; only visibility is deferred.
   release:
     needs: test
-    uses: thingzio/actions/.github/workflows/release-go.yaml@bb66805bb85b2d5cdf8cbae68b67ebe9bf059892  # v1.7.0
+    uses: thingzio/actions/.github/workflows/release-go.yaml@368b3e12df4c41d9079b26e41a03efcd90461d56  # v1.7.1
     permissions:
       contents: write      # create the draft release, upload artifacts
       id-token: write      # keyless signing

@@ -35,7 +35,7 @@ jobs:
       # step this replaces read "1.27" out of .settings.yaml, which resolves to
       # whatever the latest 1.27.x happens to be on the day the job runs -- so
       # two runs of the same commit could use different toolchains.
-      - uses: thingzio/actions/.github/actions/setup-go@bb66805bb85b2d5cdf8cbae68b67ebe9bf059892  # v1.7.0
+      - uses: thingzio/actions/.github/actions/setup-go@368b3e12df4c41d9079b26e41a03efcd90461d56  # v1.7.1
 
       # syft/grype/trivy so the scanner, converter, and canonicalizer live tests
       # actually run in CI (they skip when the binaries are absent).
@@ -57,7 +57,7 @@ jobs:
   # moved here from the test job below, which used to run it alongside the
   # Postgres-backed suite for no reason -- it needs no database.
   lint:
-    uses: thingzio/actions/.github/workflows/lint-go.yaml@bb66805bb85b2d5cdf8cbae68b67ebe9bf059892  # v1.7.0
+    uses: thingzio/actions/.github/workflows/lint-go.yaml@368b3e12df4c41d9079b26e41a03efcd90461d56  # v1.7.1
 
   # API-contract check. Kept separate from the Go lint job so a spec-only change
   # is still gated without pulling in the Go toolchain.
