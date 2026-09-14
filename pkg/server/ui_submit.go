@@ -20,15 +20,15 @@ import (
 	"net/http"
 
 	"github.com/thingzio/devradar/pkg/config"
-	"github.com/thingzio/devradar/pkg/middleware"
 )
 
 // handleSubmitGuide renders the Docs page: how DevRadar works (concepts) plus
 // the SBOM submission guide — create a token, install syft, generate an SBOM by
 // digest, and POST it — all with copy-paste examples targeting this deployment's
-// own base URL so a user can paste them verbatim.
+// own base URL so a user can paste them verbatim. Public: the page carries no
+// account data, so it's open the same way /api is (see registerUI).
 func (s *Server) handleSubmitGuide(w http.ResponseWriter, r *http.Request) {
-	access := middleware.AccessFromContext(r.Context())
+	access := s.currentAccess(r)
 	render(w, "submit.html", struct {
 		chromeView
 		BaseURL string

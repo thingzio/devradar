@@ -123,9 +123,11 @@ func (s *Server) registerUI(mux *http.ServeMux) {
 
 	// Public API docs: a human-readable reference and the machine-readable spec.
 	// The endpoints they document require a token, but the docs themselves are
-	// open so DevRadar can be evaluated before signing up.
+	// open so DevRadar can be evaluated before signing up. The submit guide is
+	// open for the same reason, and the footer links it from the landing page.
 	mux.HandleFunc("GET /api", s.handleAPIDocs)
 	mux.HandleFunc("GET /openapi.yaml", s.handleOpenAPISpec)
+	mux.HandleFunc("GET /docs", s.handleSubmitGuide)
 
 	csrf := middleware.ValidateCSRF
 	// Logout is CSRF-protected (double-submit) so a cross-site page can't force a

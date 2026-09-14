@@ -54,7 +54,6 @@ var browserRoutePolicy = []browserRoute{
 	{"GET /alerts/{id}", account.ReadAccount, false, (*Server).handleAlertDetail},
 	{"POST /alerts/{id}/read", account.WritePersonal, true, (*Server).handleMarkAlertRead},
 	{"POST /settings/license-policy", account.ManageSettings, true, (*Server).handleSetLicensePolicy},
-	{"GET /docs", account.ReadAccount, false, (*Server).handleSubmitGuide},
 	{"GET /submit", account.ReadAccount, false, (*Server).handleSubmitRedirect},
 	// Multipart VEX validates CSRF inside the handler after its bounded parse.
 	{"POST /vex/upload", account.WriteEvidence, false, (*Server).handleUploadVEX},

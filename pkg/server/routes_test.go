@@ -50,7 +50,6 @@ func TestAuthenticatedRouteInventory(t *testing.T) {
 		"GET /alerts/{id}":                  {account.ReadAccount, false, (*Server).handleAlertDetail},
 		"POST /alerts/{id}/read":            {account.WritePersonal, true, (*Server).handleMarkAlertRead},
 		"POST /settings/license-policy":     {account.ManageSettings, true, (*Server).handleSetLicensePolicy},
-		"GET /docs":                         {account.ReadAccount, false, (*Server).handleSubmitGuide},
 		"GET /submit":                       {account.ReadAccount, false, (*Server).handleSubmitRedirect},
 		"POST /vex/upload":                  {account.WriteEvidence, false, (*Server).handleUploadVEX},
 		"GET /tokens":                       {account.ManageCredentials, false, (*Server).handleTokensPage},
