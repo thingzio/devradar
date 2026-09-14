@@ -36,6 +36,7 @@ import (
 type accountInvitationView struct {
 	Title         string
 	Version       string
+	Commit        string
 	Invitation    *postgres.Invitation
 	RoleLabel     string
 	SignedInEmail string
@@ -60,12 +61,12 @@ func (s *Server) handleInvitation(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(status)
 		render(w, "account_invitation.html", accountInvitationView{
-			Title: "Account invitation", Version: s.opts.Version, Error: message,
+			Title: "Account invitation", Version: s.opts.Version, Commit: s.opts.Commit, Error: message,
 		})
 		return
 	}
 	view := accountInvitationView{
-		Title: "Account invitation", Version: s.opts.Version, Invitation: invitation,
+		Title: "Account invitation", Version: s.opts.Version, Commit: s.opts.Commit, Invitation: invitation,
 		RoleLabel: invitationRoleLabel(invitation.Role), CSRFToken: issueCSRF(w),
 	}
 	if user := s.optionalInvitationUser(r); user != nil {
