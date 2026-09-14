@@ -29,22 +29,17 @@ import (
 	"github.com/thingzio/devradar/pkg/config"
 	"github.com/thingzio/devradar/pkg/logging"
 	"github.com/thingzio/devradar/pkg/scan"
-)
-
-// Injected via -ldflags at build time.
-var (
-	version = "dev"
-	commit  = "none"
-	date    = "unknown"
+	"github.com/thingzio/devradar/pkg/version"
 )
 
 func main() {
-	logging.Setup(version, "scan")
-	slog.Info("devradar-scan starting", "commit", commit, "date", date)
-	os.Exit(run())
+	v := version.Get()
+	logging.Setup(v.Version, "scan")
+	slog.Info("devradar-scan starting", "version", v.Version, "commit", v.Commit, "date", v.Date)
+	os.Exit(run(v))
 }
 
-func run() int {
+func run(v version.Info) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

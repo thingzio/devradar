@@ -28,26 +28,21 @@ import (
 
 	"github.com/thingzio/devradar/pkg/logging"
 	"github.com/thingzio/devradar/pkg/server"
-)
-
-// Injected via -ldflags at build time.
-var (
-	version = "dev"
-	commit  = "none"
-	date    = "unknown"
+	"github.com/thingzio/devradar/pkg/version"
 )
 
 func main() {
-	logging.Setup(version, "serve")
-	slog.Info("devradar-serve starting", "commit", commit, "date", date)
-	os.Exit(run())
+	v := version.Get()
+	logging.Setup(v.Version, "serve")
+	slog.Info("devradar-serve starting", "version", v.Version, "commit", v.Commit, "date", v.Date)
+	os.Exit(run(v))
 }
 
-func run() int {
+func run(v version.Info) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := server.Run(ctx, server.Options{Version: version, Commit: commit, Date: date}); err != nil {
+	if err := server.Run(ctx, server.Options{Version: v.Version, Commit: v.Commit, Date: v.Date}); err != nil {
 		slog.Error("serve failed", "error", err)
 		return 1
 	}

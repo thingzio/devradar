@@ -27,26 +27,21 @@ import (
 
 	"github.com/thingzio/devradar/pkg/delivery"
 	"github.com/thingzio/devradar/pkg/logging"
-)
-
-// Injected via -ldflags at build time.
-var (
-	version = "dev"
-	commit  = "none"
-	date    = "unknown"
+	"github.com/thingzio/devradar/pkg/version"
 )
 
 func main() {
-	logging.Setup(version, "deliver")
-	slog.Info("devradar-deliver starting", "commit", commit, "date", date)
-	os.Exit(run())
+	v := version.Get()
+	logging.Setup(v.Version, "deliver")
+	slog.Info("devradar-deliver starting", "version", v.Version, "commit", v.Commit, "date", v.Date)
+	os.Exit(run(v))
 }
 
-func run() int {
+func run(v version.Info) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := delivery.Run(ctx, delivery.Options{Version: version, Commit: commit, Date: date}); err != nil {
+	if err := delivery.Run(ctx, delivery.Options{Version: v.Version, Commit: v.Commit, Date: v.Date}); err != nil {
 		slog.Error("delivery job failed", "error", err)
 		return 1
 	}

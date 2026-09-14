@@ -16,13 +16,17 @@
 
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/thingzio/devradar/pkg/version"
+)
 
 func TestRunFailsClosedWithoutDeliveryKey(t *testing.T) {
 	t.Setenv("DEVRADAR_DELIVERY_KEY", "")
 	t.Setenv("SEND_API_KEY", "")
 	t.Setenv("DEVRADAR_DEV_MODE", "true")
-	if got := run(); got != 1 {
+	if got := run(version.Info{}); got != 1 {
 		t.Fatalf("run exit code = %d, want 1", got)
 	}
 }
