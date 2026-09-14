@@ -1,0 +1,64 @@
+{{template "head" .}}
+{{template "nav" .}}
+<main class="page-content narrow">
+  <h1 class="page-title">Terms of Service</h1>
+  <p class="sub">Last updated 14 September 2026.</p>
+
+  <div class="card">
+    <h2>1. What this is</h2>
+    <p>DevRadar is a hosted service that stores SBOMs for container images and reports how their vulnerabilities change over time. Using it means accepting these terms.</p>
+  </div>
+
+  <div class="card">
+    <h2>2. Accounts</h2>
+    <ul>
+      <li>Sign-in is passwordless. You are responsible for the security of the mailbox and the identity provider you sign in with.</li>
+      <li>API tokens act on behalf of your account. Treat them as credentials and revoke them from <a href="/tokens">API tokens</a> when they are no longer needed.</li>
+      <li>You are responsible for what members of your account do with it.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>3. Your data</h2>
+    <ul>
+      <li>SBOMs, VEX documents, and the findings derived from them belong to you. They are used to operate the service and are not sold.</li>
+      <li>Do not submit secrets. An SBOM describes software inventory; it is not a place for credentials, and the service does not scan submissions for them.</li>
+      <li>Deleting an account removes its stored evidence. Backups age out on their own schedule.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>4. Acceptable use</h2>
+    <ul>
+      <li>Do not submit content you have no right to submit.</li>
+      <li>Do not use the service to attack it, to attack anyone else, or to work around per-account limits.</li>
+      <li>Limits exist to keep the shared instance responsive. Evading them is a reason for suspension.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>5. Vulnerability data</h2>
+    <p>Findings come from third-party scanners and public vulnerability databases. They are reported as received. DevRadar does not warrant that a finding is accurate, complete, or applicable to your usage, and an absence of findings is not evidence that an image is free of vulnerabilities. Decisions about shipping software remain yours.</p>
+  </div>
+
+  <div class="card">
+    <h2>6. Service availability</h2>
+    <ul>
+      <li>DevRadar is operated on a <strong>best-effort basis</strong>. There is no service level agreement, no uptime commitment, and no guaranteed response time for support requests.</li>
+      <li>The service is provided on an <strong>&ldquo;as is&rdquo; and &ldquo;as available&rdquo;</strong> basis.</li>
+      <li>We may <strong>modify, suspend, or discontinue</strong> the service, or any part of it, at any time, with or without notice.</li>
+      <li>There are no plans, no pricing, and no subscriptions &mdash; every feature is available to every account.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>7. Liability</h2>
+    <p>To the maximum extent permitted by law, Thingz LLC is not liable for indirect, incidental, or consequential damages arising from use of the service, including losses resulting from acting or failing to act on a reported finding.</p>
+  </div>
+
+  <div class="card">
+    <h2>8. Changes and contact</h2>
+    <p>These terms may change; the date above records the last revision. The source for this service is on <a href="https://github.com/thingzio/devradar" rel="noopener">GitHub</a> under the Apache License 2.0, and you are welcome to run your own instance. Questions belong in <a href="https://github.com/thingzio/devradar/issues" rel="noopener">GitHub issues</a>.</p>
+  </div>
+</main>
+{{template "foot" .}}

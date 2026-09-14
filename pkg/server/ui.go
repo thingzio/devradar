@@ -129,6 +129,7 @@ func (s *Server) registerUI(mux *http.ServeMux) {
 	mux.HandleFunc("GET /openapi.yaml", s.handleOpenAPISpec)
 	mux.HandleFunc("GET /docs", s.handleSubmitGuide)
 	mux.HandleFunc("GET /help", s.handleHelp)
+	mux.HandleFunc("GET /tos", s.handleTOS)
 
 	csrf := middleware.ValidateCSRF
 	// Logout is CSRF-protected (double-submit) so a cross-site page can't force a

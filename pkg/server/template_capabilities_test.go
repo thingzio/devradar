@@ -163,6 +163,7 @@ func TestAccountTemplateAdminEntryPointInventory(t *testing.T) {
 		"templates/overview.html",
 		"templates/submit.html",
 		"templates/tokens.html",
+		"templates/tos.html",
 	}
 	var got []string
 	err := fs.WalkDir(templateFS, "templates", func(path string, entry fs.DirEntry, err error) error {
