@@ -1,0 +1,40 @@
+{{template "head" .}}
+{{template "nav" .}}
+<main class="page-content narrow">
+  <h1 class="page-title">Help</h1>
+  <p class="sub">What DevRadar does, how to feed it, and where to look when something is missing.</p>
+
+  <div class="card">
+    <h2 id="help-what">What DevRadar tracks</h2>
+    <p>DevRadar stores an SBOM for each container image you submit and re-scans the stored inventory on a schedule. Because the inventory is kept, it can answer questions a one-shot scanner cannot: which CVEs are new since the last digest, which packages introduced them, and whether a finding is getting older rather than getting fixed.</p>
+  </div>
+
+  <div class="card">
+    <h2 id="help-submit">Getting data in</h2>
+    <p>Submit an SBOM with an API token from <a href="/tokens">API tokens</a>. The <a href="/docs">submit guide</a> has copy-pasteable commands, and the <a href="/api">API reference</a> documents every endpoint.</p>
+    <p>CycloneDX and SPDX are both accepted. Images are identified by digest, so the same tag pointing at a new digest is tracked as a new image rather than an update in place.</p>
+  </div>
+
+  <div class="card">
+    <h2 id="help-scans">Why a finding changed</h2>
+    <p>Findings move for two reasons: the image changed, or the vulnerability data changed. <a href="/trends">Trends</a> separates the two. A CVE that appeared without a new digest came from a scanner database update, not from anything you shipped.</p>
+    <p>Scans run daily. A newly submitted SBOM is scanned on ingest, so you do not have to wait for the next cycle.</p>
+  </div>
+
+  <div class="card">
+    <h2 id="help-vex">Suppressing a finding</h2>
+    <p>Upload a VEX document to record that a finding does not apply to your usage. Suppressed findings stay visible and attributed rather than disappearing — the goal is an auditable record, not a smaller number.</p>
+  </div>
+
+  <div class="card">
+    <h2 id="help-limits">Limits</h2>
+    <p>Per-account limits exist only to keep the shared instance responsive. They are not a paid tier and there is nothing to upgrade to.</p>
+  </div>
+
+  <div class="card">
+    <h2 id="help-contact">Getting in touch</h2>
+    <p>Bugs and feature requests belong in <a href="https://github.com/thingzio/devradar/issues" rel="noopener">GitHub issues</a>. Security reports have their own process — see <a href="https://github.com/thingzio/devradar/blob/main/SECURITY.md" rel="noopener">SECURITY.md</a>; please do not open a public issue for those.</p>
+    <p>DevRadar is operated on a best-effort basis: no SLA, no uptime guarantee, and no support commitment. The source is on <a href="https://github.com/thingzio/devradar" rel="noopener">GitHub</a> under the Apache License 2.0, and you are welcome to run your own instance.</p>
+  </div>
+</main>
+{{template "foot" .}}

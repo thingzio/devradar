@@ -28,7 +28,7 @@ import (
 func TestPublicPagesReachableSignedOut(t *testing.T) {
 	srv, _ := testServer(t)
 
-	for _, path := range []string{"/docs", "/api"} {
+	for _, path := range []string{"/docs", "/api", "/help"} {
 		t.Run(path, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, path, nil)
 			rec := httptest.NewRecorder()

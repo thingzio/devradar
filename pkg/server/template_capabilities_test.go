@@ -158,6 +158,7 @@ func TestAccountTemplateAdminEntryPointInventory(t *testing.T) {
 		"templates/account_settings.html",
 		"templates/alerts.html",
 		"templates/api.html",
+		"templates/help.html",
 		"templates/licenses.html",
 		"templates/overview.html",
 		"templates/submit.html",
