@@ -22,6 +22,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/thingzio/devradar/pkg/server"
 )
 
 // TestLanding_RendersMarketing verifies the unauthenticated landing page renders
@@ -97,6 +99,24 @@ func TestLanding_RendersMarketing(t *testing.T) {
 	}
 	if got, want := strings.Join(stages, ","), "Submit,Detect,Prioritize,Compare,Trend"; got != want {
 		t.Errorf("posture loop order = %q, want %q", got, want)
+	}
+}
+
+// TestLanding_FooterShowsVersionAndCommit guards against a regression where
+// handleLanding's template data carried "Version" but not "Commit", leaving
+// the footer's "(<short-sha>)" silently missing on the signed-out landing
+// page — the page the footer contract exists for.
+func TestLanding_FooterShowsVersionAndCommit(t *testing.T) {
+	srv, _ := testServerWithOptions(t, server.Options{Version: "v1.2.3", Commit: "abc1234"})
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "VERSION v1.2.3") || !strings.Contains(body, "(abc1234)") {
+		t.Error("landing footer missing version and/or commit")
 	}
 }
 

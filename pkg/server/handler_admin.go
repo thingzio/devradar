@@ -516,6 +516,7 @@ func (s *Server) adminBase(user *account.User, active string, extra map[string]a
 		"SignedIn": true,
 		"AdminTab": active,
 		"Version":  s.opts.Version,
+		"Commit":   s.opts.Commit,
 	}
 	if user != nil {
 		d["Email"] = user.Email

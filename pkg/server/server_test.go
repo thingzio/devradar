@@ -69,12 +69,20 @@ func seedLegacyUser(t *testing.T, st *postgres.Store, tenantID string) string {
 
 func testServer(t *testing.T) (*server.Server, *postgres.Store) {
 	t.Helper()
+	return testServerWithOptions(t, server.Options{Version: "test"})
+}
+
+// testServerWithOptions is testServer with caller-supplied Options, for tests
+// that need to assert on build metadata (e.g. the footer's commit) beyond the
+// fixed "test" version.
+func testServerWithOptions(t *testing.T, opts server.Options) (*server.Server, *postgres.Store) {
+	t.Helper()
 	if _, configured := os.LookupEnv("DEVRADAR_DEV_MODE"); !configured {
 		t.Setenv("DEVRADAR_DEV_MODE", "true")
 	}
 	st := testPostgresStore(t)
 	// email + OAuth nil → API-only; local blob store under a temp dir.
-	srv := server.New(st, gcs.LocalStore{Dir: t.TempDir()}, nil, nil, nil, server.Options{Version: "test"})
+	srv := server.New(st, gcs.LocalStore{Dir: t.TempDir()}, nil, nil, nil, opts)
 	return srv, st
 }
 

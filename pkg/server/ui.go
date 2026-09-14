@@ -216,6 +216,7 @@ func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 		"Sent":        r.URL.Query().Get("sent") == "1",
 		"GitHubOAuth": s.github != nil,
 		"Version":     s.opts.Version,
+		"Commit":      s.opts.Commit,
 	})
 }
 
@@ -301,6 +302,7 @@ func (s *Server) handleVerifyConfirm(w http.ResponseWriter, r *http.Request) {
 		"Token":     token,
 		"CSRFToken": issueCSRF(w),
 		"Version":   s.opts.Version,
+		"Commit":    s.opts.Commit,
 	})
 }
 
