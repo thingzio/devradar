@@ -838,10 +838,10 @@ table.findings td { vertical-align: middle; }
   max-width: 76rem; margin: 2rem auto 0; padding: 1.5rem 30px;
   border-top: 1px solid var(--border); color: var(--muted); font-size: 0.8rem;
   display: flex; justify-content: space-between; align-items: center;
-  gap: 1rem; flex-wrap: wrap; text-transform: uppercase;
+  gap: 1rem; flex-wrap: wrap; text-transform: uppercase; letter-spacing: 0.03em;
 }
 .page-footer .footer-links { margin-left: auto; }
-.page-footer a { font-weight: 600; }
+.page-footer a { margin: 4px; font-weight: 600; }
 
 /* Account chooser and administration */
 .account-list { display: grid; gap: 0.9rem; }
