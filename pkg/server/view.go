@@ -34,10 +34,11 @@ type chromeView struct {
 	CanManageCredentials bool
 	CanManageMembers     bool
 	Version              string
+	Commit               string
 }
 
 func (s *Server) chrome(access *account.Access, title, tab string) chromeView {
-	view := chromeView{Title: title, Tab: tab, Version: s.opts.Version}
+	view := chromeView{Title: title, Tab: tab, Version: s.opts.Version, Commit: s.opts.Commit}
 	if access == nil {
 		return view
 	}
@@ -57,7 +58,7 @@ func (s *Server) chrome(access *account.Access, title, tab string) chromeView {
 }
 
 func (s *Server) userChrome(user *account.User, title, tab string) chromeView {
-	view := chromeView{Title: title, SignedIn: true, Tab: tab, Version: s.opts.Version}
+	view := chromeView{Title: title, SignedIn: true, Tab: tab, Version: s.opts.Version, Commit: s.opts.Commit}
 	if user != nil {
 		view.Email = user.Email
 		view.AvatarURL = user.AvatarURL

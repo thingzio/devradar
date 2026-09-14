@@ -49,9 +49,8 @@
 
 {{define "foot"}}
 <footer class="page-footer">
-  <span>Container vulnerability tracking</span>
-  <span><a href="https://github.com/thingzio/devradar" rel="noopener">Source</a></span>
-  <span>VERSION {{if .Version}}{{.Version}}{{else}}DEV{{end}}</span>
+  {{if .Version}}<span>VERSION {{.Version}}{{if .Commit}} ({{.Commit}}){{end}}</span>{{end}}
+  <span class="footer-links"><a href="/docs">DOCS</a> &middot; <a href="/api">API</a> &middot; <a href="/help">HELP</a> &middot; <a href="/tos">TERMS</a> &middot; <a href="https://github.com/thingzio/devradar" rel="noopener">SOURCE</a></span>
 </footer>
 </body>
 </html>
