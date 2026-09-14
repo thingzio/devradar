@@ -36,10 +36,10 @@ func main() {
 	v := version.Get()
 	logging.Setup(v.Version, "scan")
 	slog.Info("devradar-scan starting", "version", v.Version, "commit", v.Commit, "date", v.Date)
-	os.Exit(run(v))
+	os.Exit(run())
 }
 
-func run(v version.Info) int {
+func run() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
