@@ -19,4 +19,4 @@ jobs:
       actions: read
       contents: read
       security-events: write
-    uses: thingzio/actions/.github/workflows/codeql-go.yaml@368b3e12df4c41d9079b26e41a03efcd90461d56  # v1.7.1
+    uses: thingzio/actions/.github/workflows/codeql-go.yaml@7276775800dbfef1d9671e60c337f3b4b479a4e8  # v1.8.0
