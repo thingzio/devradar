@@ -7,7 +7,7 @@ on:
 
 permissions:
   contents: write   # create the GitHub release
-  id-token: write   # Workload Identity Federation (keyless GCP auth)
+  id-token: write   # keyless signing
 
 jobs:
   # Re-qualify from scratch on the tagged commit — the release does not assume
@@ -74,9 +74,9 @@ jobs:
   # job that runs none of this repository's configuration, which is what makes
   # the provenance Build Level 3 rather than Level 2.
   #
-  # publish: false because the draft flip is gated on a successful deploy, in
-  # the publish job below. Everything is signed, verified and attested by the
-  # time this returns; only visibility is deferred.
+  # publish: false because the draft flip is gated on the image builds, in the
+  # publish job below. Everything is signed, verified and attested by the time
+  # this returns; only visibility is deferred.
   release:
     needs: test
     uses: thingzio/actions/.github/workflows/release-go.yaml@7276775800dbfef1d9671e60c337f3b4b479a4e8  # v1.8.0
@@ -87,36 +87,23 @@ jobs:
     with:
       publish: false
 
-  deploy:
+  # A tag no longer deploys. The hosted service was decommissioned 2026-11-01;
+  # deploy.yaml keeps its workflow_dispatch trigger for a manual rollout should
+  # it come back.
+
+  # The release is created as a draft (`draft: true` in .goreleaser.yaml) and
+  # the shared workflow leaves it that way (`publish: false` above), so a
+  # failed image build never leaves a published release pointing at images
+  # that do not exist. Publishing is therefore a separate job gated on the
+  # builds -- and it is the only thing that will ever publish it, since
+  # release-go does not come back later. Without this job the release stays a
+  # draft forever, which is invisible to everyone but repository collaborators.
+  publish:
     needs:
       - build-serve
       - build-deliver
       - build-scan
       - release
-    uses: ./.github/workflows/deploy.yaml
-    permissions:
-      contents: read
-      id-token: write
-    with:
-      delivery_image: ${{ needs.build-deliver.outputs.image_ref }}
-      scan_image: ${{ needs.build-scan.outputs.image_ref }}
-      serve_image: ${{ needs.build-serve.outputs.image_ref }}
-    secrets: inherit
-
-  # The release is created as a draft (`draft: true` in .goreleaser.yaml) and
-  # the shared workflow leaves it that way (`publish: false` above), so a failed
-  # deploy never leaves a published release pointing at images that were never
-  # rolled out. Publishing is therefore a separate job gated on deploy
-  # succeeding -- and it is now the only thing that will ever publish it, since
-  # release-go does not come back later. Without this job the release stays a
-  # draft forever, which is invisible to everyone but repository collaborators
-  # and makes a repo with 55 releases look like it has none.
-  #
-  # devpulse and devtrace have had this step all along; devradar did not.
-  publish:
-    needs:
-      - release
-      - deploy
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
